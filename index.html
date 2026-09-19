@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JKFixHub | Worker Hiring Platform</title>
+    <meta name="description" content="JKFixHub connects people with trusted electricians, heater repair experts, washing machine technicians, and skilled local workers." />
+    <style>
+      :root {
+        --bg: #07111f;
+        --bg2: #0d1d2f;
+        --panel: rgba(18, 31, 46, 0.82);
+        --line: rgba(255, 255, 255, 0.12);
+        --text: #eaf4ff;
+        --muted: #a8c0d8;
+        --primary: #6ee7ff;
+        --secondary: #7ef9a9;
+        --accent: #ff8a5b;
+        --pink: #ff5ec4;
+        --shadow: 0 22px 55px rgba(0, 0, 0, 0.4);
+      }
+
+      * { box-sizing: border-box; }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        font-family: Arial, Helvetica, sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(110, 231, 255, 0.14), transparent 25%),
+          radial-gradient(circle at right, rgba(255, 94, 196, 0.12), transparent 22%),
+          linear-gradient(135deg, var(--bg), var(--bg2));
+        color: var(--text);
+        min-height: 100vh;
+      }
+
+      .page {
+        width: min(1200px, 92%);
+        margin: 0 auto;
+      }
+
+      header {
+        position: sticky;
+        top: 0;
+        backdrop-filter: blur(14px);
+        background: rgba(7, 17, 31, 0.55);
+        border-bottom: 1px solid var(--line);
+        z-index: 20;
+      }
+
+      .nav {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        min-height: 76px;
+      }
+
+      .brand {
+        font-size: 1.7rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+      }
+
+      .brand span {
+        color: var(--primary);
+      }
+
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 22px;
+        color: var(--muted);
+      }
+
+      .nav-links a {
+        text-decoration: none;
+        color: var(--muted);
+        transition: 0.25s ease;
+      }
+
+      .nav-links a:hover {
+        color: var(--text);
+      }
+
+      .nav-btn {
+        background: linear-gradient(135deg, var(--primary), var(--secondary));
+        color: #03131b;
+        border: none;
+        border-radius: 999px;
+        padding: 12px 20px;
+        font-weight: 800;
+        cursor: pointer;
+        box-shadow: 0 8px 22px rgba(110, 231, 255, 0.35);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        align-items: center;
+        gap: 34px;
+        padding: 72px 0 28px;
+      }
+
+      .hero-copy h1 {
+        font-size: clamp(2.7rem, 5vw, 5rem);
+        line-height: 1.02;
+        margin: 0 0 18px;
+      }
+
+      .gradient-text {
+        background: linear-gradient(90deg, var(--primary), var(--secondary), var(--pink));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+
+      .hero-copy p {
+        color: var(--muted);
+        font-size: 1.1rem;
+        line-height: 1.8;
+        margin-bottom: 28px;
+      }
+
+      .cta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+      }
+
+      .primary,
+      .secondary {
+        border-radius: 16px;
+        padding: 15px 22px;
+        border: none;
+        font-weight: 800;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      .primary {
+        background: linear-gradient(135deg, var(--primary), var(--secondary));
+        color: #04161f;
+        box-shadow: 0 16px 30px rgba(126, 249, 169, 0.25);
+      }
+
+      .secondary {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--line);
+        color: var(--text);
+      }
+
+      .primary:hover,
+      .secondary:hover,
+      .nav-btn:hover {
+        transform: translateY(-2px);
+      }
+
+      .hero-card {
+        position: relative;
+        min-height: 540px;
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .orb {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(10px);
+        opacity: 0.8;
+        animation: float 8s ease-in-out infinite;
+      }
+
+      .orb.one {
+        width: 180px;
+        height: 180px;
+        background: rgba(110, 231, 255, 0.22);
+        top: 60px;
+        right: 60px;
+      }
+
+      .orb.two {
+        width: 150px;
+        height: 150px;
+        background: rgba(255, 94, 196, 0.22);
+        bottom: 80px;
+        left: 40px;
+        animation-delay: 1.5s;
+      }
+
+      .service-panel {
+        position: absolute;
+        inset: 42px 38px 38px 38px;
+        border-radius: 22px;
+        background: rgba(8, 16, 25, 0.7);
+        border: 1px solid var(--line);
+        padding: 22px;
+      }
+
+      .mini-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 22px;
+        color: var(--muted);
+      }
+
+      .dot-row {
+        display: flex;
+        gap: 8px;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+      }
+
+      .dot.red { background: #ff5e5e; }
+      .dot.amber { background: #ffcb6b; }
+      .dot.green { background: #64f5a8; }
+
+      .service-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 18px;
+      }
+
+      .service-box {
+        background: rgba(255,255,255,0.035);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 18px 16px;
+        animation: pop 1.5s ease-in-out infinite alternate;
+      }
+
+      .service-box:nth-child(2) { animation-delay: 0.15s; }
+      .service-box:nth-child(3) { animation-delay: 0.35s; }
+      .service-box:nth-child(4) { animation-delay: 0.5s; }
+
+      .service-box h4 {
+        margin: 0 0 8px;
+        font-size: 1.1rem;
+      }
+
+      .service-box p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .feature-strip {
+        margin-top: 48px;
+        padding: 24px 0 18px;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+      }
+
+      .feature-item {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.02);
+        border-radius: 18px;
+        padding: 24px 18px;
+        text-align: center;
+      }
+
+      .feature-item strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 1.1rem;
+      }
+
+      .feature-item span {
+        color: var(--muted);
+      }
+
+      .section {
+        padding: 70px 0;
+      }
+
+      .section-head {
+        text-align: center;
+        margin-bottom: 28px;
+      }
+
+      .section-head h2 {
+        font-size: clamp(2rem, 3vw, 3rem);
+        margin: 0 0 12px;
+      }
+
+      .section-head p {
+        color: var(--muted);
+        margin: 0 auto;
+        max-width: 700px;
+        line-height: 1.7;
+      }
+
+      .card-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 22px;
+      }
+
+      .info-card {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        padding: 24px 20px;
+        box-shadow: var(--shadow);
+      }
+
+      .icon {
+        width: 58px;
+        height: 58px;
+        border-radius: 16px;
+        display: grid;
+        place-items: center;
+        font-size: 1.4rem;
+        background: linear-gradient(135deg, rgba(110,231,255,0.2), rgba(158,93,229,0.2));
+        border: 1px solid rgba(110,231,255,0.25);
+        margin-bottom: 16px;
+      }
+
+      .info-card h3 {
+        margin: 0 0 10px;
+      }
+
+      .info-card p {
+        color: var(--muted);
+        margin: 0;
+        line-height: 1.7;
+      }
+
+      .form-wrap {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 24px;
+        align-items: stretch;
+        margin-top: 18px;
+      }
+
+      .form-card {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid var(--line);
+        border-radius: 26px;
+        padding: 26px;
+        box-shadow: var(--shadow);
+      }
+
+      .form-card h3 {
+        margin-top: 0;
+        margin-bottom: 20px;
+        font-size: clamp(1.7rem, 2vw, 2.2rem);
+      }
+
+      .form-grid {
+        display: grid;
+        gap: 18px;
+      }
+
+      .field {
+        display: grid;
+        gap: 8px;
+      }
+
+      .field label {
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      .field input {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.02);
+        color: var(--text);
+        padding: 14px 16px;
+        border-radius: 14px;
+        font-size: 1rem;
+        outline: none;
+      }
+
+      .field input:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(110, 231, 255, 0.14);
+      }
+
+      .side-card {
+        background: linear-gradient(180deg, rgba(110,231,255,0.08), rgba(255,94,196,0.06));
+        border: 1px solid var(--line);
+        border-radius: 26px;
+        padding: 28px 22px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 18px;
+      }
+
+      .mini-stat {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 18px 16px;
+      }
+
+      .mini-stat strong {
+        display: block;
+        font-size: 1.5rem;
+        margin-bottom: 8px;
+      }
+
+      .mini-stat span {
+        color: var(--muted);
+      }
+
+      .cta-box {
+        margin: 40px 0 120px;
+        padding: 34px 26px;
+        border-radius: 28px;
+        background: linear-gradient(135deg, rgba(110,231,255,0.12), rgba(255,94,196,0.1), rgba(126,249,169,0.1));
+        border: 1px solid var(--line);
+        text-align: center;
+      }
+
+      .cta-box h3 {
+        margin: 0 0 14px;
+        font-size: clamp(1.8rem, 2.5vw, 2.8rem);
+      }
+
+      .cta-box p {
+        margin: 0 0 22px;
+        color: var(--muted);
+      }
+
+      footer {
+        text-align: center;
+        color: var(--muted);
+        padding: 20px 0 50px;
+        border-top: 1px solid var(--line);
+      }
+
+      @keyframes float {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-18px); }
+      }
+
+      @keyframes pop {
+        0% { transform: translateY(0); }
+        100% { transform: translateY(-4px); }
+      }
+
+      @media (max-width: 860px) {
+        .hero {
+          grid-template-columns: 1fr;
+        }
+
+        .feature-strip,
+        .card-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .nav-links {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="page nav">
+        <div class="brand">JK<span>Fix</span>Hub</div>
+        <nav class="nav-links">
+          <a href="#about">About</a>
+          <a href="#services">Services</a>
+          <a href="#why-us">Why Us</a>
+          <a href="#contact">Contact</a>
+        </nav>
+        <button class="nav-btn">Hire Now</button>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="hero">
+        <div class="hero-copy">
+          <h1>
+            Trusted local workers for <span class="gradient-text">home repairs</span>
+          </h1>
+          <p>
+            JKFixHub helps customers find verified electricians, heater repair experts,
+            washing machine technicians, and other skilled workers in one simple place.
+            Workers can register themselves and get discovered by people who need support fast.
+          </p>
+          <div class="cta-row">
+            <button class="primary">Find a Worker</button>
+            <button class="secondary">Register as Worker</button>
+          </div>
+        </div>
+
+        <div class="hero-card" aria-label="service preview">
+          <div class="orb one"></div>
+          <div class="orb two"></div>
+          <div class="service-panel">
+            <div class="mini-top">
+              <div class="dot-row">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+              </div>
+              <span>JKFixHub / Live Jobs</span>
+            </div>
+
+            <div class="service-grid">
+              <div class="service-box">
+                <h4>Electrician</h4>
+                <p>Wiring, lights, switches</p>
+              </div>
+              <div class="service-box">
+                <h4>Heater</h4>
+                <p>Repair & installation</p>
+              </div>
+              <div class="service-box">
+                <h4>Washing</h4>
+                <p>Machine service</p>
+              </div>
+              <div class="service-box">
+                <h4>General Fix</h4>
+                <p>Home maintenance jobs</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="feature-strip" id="about">
+        <div class="feature-item">
+          <strong>Fast Hiring</strong>
+          <span>Find workers quickly for urgent home problems.</span>
+        </div>
+        <div class="feature-item">
+          <strong>Local Trust</strong>
+          <span>Connect with workers near your area.</span>
+        </div>
+        <div class="feature-item">
+          <strong>Skill-based</strong>
+          <span>Choose by trade: electricians, heater experts, appliance repair.</span>
+        </div>
+      </div>
+
+      <section class="section" id="services">
+        <div class="section-head">
+          <h2>What JKFixHub offers</h2>
+          <p>
+            A simple marketplace where customers discover skilled workers and workers can register
+            themselves with their service type to get work opportunities.
+          </p>
+        </div>
+
+        <div class="card-grid">
+          <article class="info-card">
+            <div class="icon">⚡</div>
+            <h3>Electricians</h3>
+            <p>Lighting, wiring, fan fitting, switch repair, power issues, and home electrical fixes.</p>
+          </article>
+
+          <article class="info-card">
+            <div class="icon">🔥</div>
+            <h3>Heater Repair</h3>
+            <p>Heating problems, water heater repair, gas or electric heater setup, and maintenance.</p>
+          </article>
+
+          <article class="info-card">
+            <div class="icon">🧺</div>
+            <h3>Washing Machine Repair</h3>
+            <p>Motor issues, drain problems, electric faults, repair jobs, and service support.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="why-us">
+        <div class="section-head">
+          <h2>Why this platform works</h2>
+          <p>
+            The idea is practical, easy to understand, and very easy to present to friends or clients.
+            It removes complexity and keeps the focus on helping people get work and helping customers find help.
+          </p>
+        </div>
+
+        <div class="card-grid">
+          <article class="info-card">
+            <div class="icon">👷</div>
+            <h3>Workers Register</h3>
+            <p>Any worker can list their skills and become visible to people nearby needing that service.</p>
+          </article>
+
+          <article class="info-card">
+            <div class="icon">🧑‍💼</div>
+            <h3>Customers Browse</h3>
+            <p>Customers can explore available service categories and reach out to the right worker.</p>
+          </article>
+
+          <article class="info-card">
+            <div class="icon">📍</div>
+            <h3>Local Matching</h3>
+            <p>Service requests can be matched by category, trust, and proximity without complicated login flow.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="contact">
+        <div class="section-head">
+          <h2>Register as a worker</h2>
+          <p>
+            Join JKFixHub and make your skills visible to people who need reliable workers nearby.
+          </p>
+        </div>
+
+        <div class="form-wrap">
+          <div class="form-card">
+            <h3>Worker Registration</h3>
+            <form class="form-grid">
+              <div class="field">
+                <label for="name">Name</label>
+                <input id="name" type="text" placeholder="Enter your full name" />
+              </div>
+
+              <div class="field">
+                <label for="number">Number</label>
+                <input id="number" type="tel" placeholder="Enter your phone number" />
+              </div>
+
+              <div class="field">
+                <label for="email">Email</label>
+                <input id="email" type="email" placeholder="Enter your email" />
+              </div>
+
+              <button type="submit" class="primary">Register Now</button>
+            </form>
+          </div>
+
+          <div class="side-card">
+            <div class="mini-stat">
+              <strong>1,200+</strong>
+              <span>service requests ready to connect</span>
+            </div>
+            <div class="mini-stat">
+              <strong>24/7</strong>
+              <span>local help opportunities</span>
+            </div>
+            <div class="mini-stat">
+              <strong>Easy</strong>
+              <span>just register and get visible</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="cta-box">
+        <h3>JKFixHub</h3>
+        <p>Built for simple service discovery and local worker visibility.</p>
+        <button class="primary">Start With JKFixHub</button>
+      </div>
+    </main>
+
+    <footer>
+      <p>Developer: uz4ir7</p>
+    </footer>
+  </body>
+</html>
