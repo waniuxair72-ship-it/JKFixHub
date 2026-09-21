@@ -1345,6 +1345,7 @@
         align-items: center;
         justify-content: center;
         padding: 20px;
+        overflow-y: auto;
         opacity: 0;
         visibility: hidden;
         transition: opacity 0.25s ease, visibility 0.25s ease;
@@ -1358,11 +1359,13 @@
 
       .modal-card {
         width: min(560px, 100%);
+        max-height: calc(100vh - 40px);
         background: linear-gradient(180deg, rgba(12, 24, 39, 0.96), rgba(9, 18, 29, 0.96));
         border: 1px solid var(--line);
         border-radius: 26px;
         padding: 26px 22px 20px;
         box-shadow: var(--shadow);
+        overflow-y: auto;
         transform: translateY(10px) scale(0.96);
         transition: transform 0.25s ease;
       }
@@ -1376,6 +1379,11 @@
         justify-content: space-between;
         align-items: flex-start;
         gap: 16px;
+        position: sticky;
+        top: -26px;
+        z-index: 2;
+        padding-bottom: 10px;
+        background: linear-gradient(180deg, rgba(12, 24, 39, 1) 72%, rgba(12, 24, 39, 0));
       }
 
       .modal-icon {
@@ -1450,6 +1458,12 @@
         justify-content: flex-end;
         gap: 12px;
         margin-top: 22px;
+      }
+
+      .profile-actions {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        padding-top: 4px;
       }
 
       .modal-action {
@@ -2547,8 +2561,9 @@
                 </div>
               </div>
 
-              <div class="modal-actions" style="margin-top: 0; justify-content: flex-start;">
-                <button class="modal-action primary" type="button" data-maintenance="true">Request Service</button>
+              <div class="modal-actions profile-actions" style="margin-top: 0;">
+                <button class="modal-action secondary" type="button" data-close-modal="profileModal">Back to Results</button>
+                <button class="modal-action primary" type="button" data-maintenance="true" data-feature="Request Service">Request Service</button>
               </div>
             </div>
           </div>
