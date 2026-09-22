@@ -1,0 +1,59 @@
+/* Product surface refinements */
+:root {
+  --surface-raised: rgba(16, 39, 56, 0.76);
+  --surface-hover: rgba(20, 50, 69, 0.86);
+}
+
+.brand-mark {
+  position: relative;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.28), 0 6px 18px rgba(105,217,239,.14);
+}
+.brand-mark::after { content: ""; position: absolute; width: 16px; height: 1px; background: rgba(8,33,46,.55); transform: rotate(-45deg); }
+.button, .nav-button { position: relative; overflow: hidden; letter-spacing: .01em; }
+.button::after, .nav-button::after { content: ""; position: absolute; inset: 0; background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,.2), transparent 70%); transform: translateX(-120%); transition: transform .45s ease; }
+.button:hover::after, .nav-button:hover::after { transform: translateX(120%); }
+.button:active, .nav-button:active { transform: translateY(0) scale(.98); }
+.search-panel, .worker-card, .trust-item, .worker-cta, .modal { background: linear-gradient(145deg, var(--surface-raised), rgba(8,24,37,.78)); box-shadow: 0 20px 54px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.035); }
+.search-panel { border-color: rgba(105,217,239,.24); }
+.worker-card { transition: transform .25s ease, border-color .25s ease, background .25s ease, box-shadow .25s ease; }
+.worker-card:hover { transform: translateY(-4px); border-color: var(--line-bright); background: var(--surface-hover); box-shadow: 0 22px 50px rgba(0,0,0,.24); }
+.worker-card h3 { letter-spacing: -.015em; }
+.demo-badge { display: inline-flex; margin-top: 5px; color: var(--cyan); font-size: .66rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.worker-meta span { background: rgba(255,255,255,.025); }
+.worker-meta span:last-child { color: var(--mint); border-color: rgba(140,229,194,.2); }
+.worker-meta .availability { display: inline-flex; align-items: center; gap: 5px; }
+.availability i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 4px rgba(140,229,194,.08); }
+.profile-about { padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.02); }
+.profile-about strong { display: block; margin-bottom: 5px; color: var(--text); }
+.profile-about p { margin: 0; font-size: .82rem; line-height: 1.55; }
+.registration-steps { display: flex; gap: 7px; margin: 19px 0 4px; }
+.registration-steps span { padding: 6px 9px; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); font-size: .68rem; font-weight: 800; }
+.registration-steps span.active { border-color: rgba(105,217,239,.35); background: rgba(105,217,239,.08); color: var(--cyan); }
+.service-pill { position: relative; min-height: 54px; padding-left: 15px; }
+.service-pill::after { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 5px rgba(105,217,239,.08); }
+.service-pill span { display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid rgba(105,217,239,.3); border-radius: 8px; color: var(--cyan); font-size: 0; font-weight: 850; }
+.service-pill span::before { font-size: .68rem; }
+.service-pill[data-service="Washing Machine Repair"] span::before { content: "WM"; }
+.service-pill[data-service="Refrigerator Repair"] span::before { content: "RF"; }
+.service-pill[data-service="Heater Repair"] span::before { content: "HT"; }
+.service-pill[data-service="TV / Electronics Repair"] span::before { content: "EL"; }
+.service-pill[data-service="Electrician"] span::before { content: "EL"; }
+.trust-item { min-height: 122px; transition: transform .2s ease, border-color .2s ease; }
+.trust-item:hover { transform: translateY(-3px); border-color: rgba(140,229,194,.3); }
+.trust-item::before { content: ""; display: block; width: 8px; height: 8px; margin-bottom: 15px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 6px rgba(140,229,194,.08); }
+.trust-item strong { font-size: .95rem; }
+.field input::placeholder { color: #718b99; }
+.field input:hover, .field select:hover, .registration-grid input:hover, .registration-grid select:hover, .registration-grid textarea:hover { border-color: rgba(181,215,230,.3); }
+.modal-tag { box-shadow: 0 0 20px rgba(140,229,194,.06); }
+.modal-actions .button { min-height: 45px; }
+.modal-backdrop.open .modal h2, .modal-backdrop.open .modal p, .modal-backdrop.open .modal-actions { animation: modalContentIn .4s ease both; }
+.modal-backdrop.open .modal p { animation-delay: .05s; }
+.modal-backdrop.open .modal-actions { animation-delay: .1s; }
+@keyframes modalContentIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+@media (max-width: 680px) {
+  .service-list { gap: 9px; }
+  .service-pill { flex: 1 1 calc(50% - 9px); justify-content: flex-start; padding: 12px; font-size: .82rem; }
+  .trust-item { min-height: auto; }
+}
