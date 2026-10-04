@@ -4,6 +4,8 @@
   function initWebGLBackground() {
     const canvas = document.getElementById("webgl-background");
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const lowPowerDevice = navigator.hardwareConcurrency > 0 && navigator.hardwareConcurrency <= 4;
+    const mobileViewport = window.innerWidth < 700;
     if (!canvas || !window.THREE || !window.WebGLRenderingContext) return;
 
     let renderer;
@@ -11,7 +13,7 @@
       renderer = new THREE.WebGLRenderer({
         canvas,
         alpha: true,
-        antialias: window.innerWidth > 700,
+        antialias: window.innerWidth > 800 && !lowPowerDevice,
         powerPreference: "low-power"
       });
     } catch (error) {
@@ -20,10 +22,10 @@
     }
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x07131f, 0.035);
+    scene.fog = new THREE.FogExp2(0xeee9dc, 0.035);
     const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 100);
     camera.position.set(0, 0.2, 8.5);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, window.innerWidth < 700 ? 1.15 : 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, mobileViewport || lowPowerDevice ? 1 : 1.3));
     renderer.setSize(window.innerWidth, window.innerHeight, false);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
 
@@ -32,28 +34,37 @@
     const movingObjects = [];
     const travelers = [];
     scene.add(group, network);
-    scene.add(new THREE.HemisphereLight(0x9edbe9, 0x07131f, 0.55));
+    function updateSceneLayout() {
+      const width = window.innerWidth;
+      const scale = width < 700 ? 0.62 : width < 1000 ? 0.78 : 0.88;
+      group.scale.setScalar(scale);
+      network.scale.setScalar(scale);
+      group.position.set(width < 700 ? 0.42 : width < 1000 ? 1.05 : 2.15, width < 700 ? -0.8 : 0.1, -0.45);
+      network.position.copy(group.position);
+    }
+    updateSceneLayout();
+    scene.add(new THREE.HemisphereLight(0xdce2d1, 0x394239, 0.48));
 
-    const keyLight = new THREE.PointLight(0x69d9ef, 2.1, 15);
+    const keyLight = new THREE.PointLight(0x78916a, 1.3, 15);
     keyLight.position.set(1.5, 2.5, 3);
     scene.add(keyLight);
 
-    const fillLight = new THREE.PointLight(0x8ce5c2, 1.05, 12);
+    const fillLight = new THREE.PointLight(0xb79772, 0.7, 12);
     fillLight.position.set(-3, -2, 1);
     scene.add(fillLight);
 
-    const rimLight = new THREE.PointLight(0xffffff, 0.45, 9);
+    const rimLight = new THREE.PointLight(0xf3ebd9, 0.32, 9);
     rimLight.position.set(0, 3, -3);
     scene.add(rimLight);
 
     const center = new THREE.Mesh(
       new THREE.IcosahedronGeometry(1.05, 2),
       new THREE.MeshStandardMaterial({
-        color: 0x123b50,
-        emissive: 0x1b9ab4,
-        emissiveIntensity: 0.85,
-        metalness: 0.55,
-        roughness: 0.28,
+        color: 0x3d5b46,
+        emissive: 0x597c50,
+        emissiveIntensity: 0.34,
+        metalness: 0.16,
+        roughness: 0.5,
         transparent: true,
         opacity: 0.94
       })
@@ -62,19 +73,19 @@
 
     const innerCore = new THREE.Mesh(
       new THREE.SphereGeometry(0.68, 20, 14),
-      new THREE.MeshBasicMaterial({ color: 0x69d9ef, transparent: true, opacity: 0.16 })
+      new THREE.MeshBasicMaterial({ color: 0x94ad7d, transparent: true, opacity: 0.09 })
     );
     group.add(innerCore);
 
     const shell = new THREE.Mesh(
       new THREE.IcosahedronGeometry(1.22, 1),
-      new THREE.MeshBasicMaterial({ color: 0x8ce5c2, wireframe: true, transparent: true, opacity: 0.12 })
+      new THREE.MeshBasicMaterial({ color: 0x839477, wireframe: true, transparent: true, opacity: 0.075 })
     );
     group.add(shell);
 
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(1.42, 0.012, 8, 96),
-      new THREE.MeshBasicMaterial({ color: 0x69d9ef, transparent: true, opacity: 0.52 })
+      new THREE.MeshBasicMaterial({ color: 0x7c906c, transparent: true, opacity: 0.25 })
     );
     ring.rotation.x = Math.PI / 2.5;
     group.add(ring);
@@ -83,8 +94,8 @@
     ringSecond.rotation.x = Math.PI / 1.8;
     ringSecond.rotation.y = Math.PI / 5;
     ringSecond.material = ring.material.clone();
-    ringSecond.material.color.setHex(0x8ce5c2);
-    ringSecond.material.opacity = 0.32;
+    ringSecond.material.color.setHex(0xb39067);
+    ringSecond.material.opacity = 0.17;
     group.add(ringSecond);
 
     const nodePositions = [
@@ -93,17 +104,17 @@
       [-3.15, 0.05, -2.6], [3.1, 0.05, -2.8], [-1.1, -2.45, -3], [1.15, 2.45, -3.2]
     ];
     const serviceKinds = ["bolt", "appliance", "pin", "screen", "gear", "toolbox", "circuit", "worker", "washer", "home"];
-    const nodeMaterials = [0x69d9ef, 0x8ce5c2, 0x69d9ef, 0x8ce5c2, 0xffffff, 0x69d9ef, 0x8ce5c2, 0x69d9ef, 0x8ce5c2, 0xffffff];
-    const lineMaterial = new THREE.LineBasicMaterial({ color: 0x69d9ef, transparent: true, opacity: 0.2 });
+    const nodeMaterials = [0x78916a, 0x9b9f7c, 0x78916a, 0x9b9f7c, 0xd8c8ac, 0x78916a, 0x9b9f7c, 0x78916a, 0x9b9f7c, 0xd8c8ac];
+    const lineMaterial = new THREE.LineBasicMaterial({ color: 0x829071, transparent: true, opacity: 0.14 });
 
     function makeMaterial(color) {
-      return new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.42, roughness: 0.34, metalness: 0.38, transparent: true, opacity: 0.84 });
+      return new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.2, roughness: 0.5, metalness: 0.12, transparent: true, opacity: 0.78 });
     }
 
     function createServiceObject(kind, color) {
       const object = new THREE.Group();
       const material = makeMaterial(color);
-      const detail = makeMaterial(0xffffff);
+      const detail = makeMaterial(0xe6dec9);
       if (kind === "bolt") object.add(new THREE.Mesh(new THREE.OctahedronGeometry(0.32, 0), material));
       if (kind === "appliance") { const box = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.62, 0.4), material); const handle = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.26, 0.03), detail); handle.position.set(0.19, 0.02, 0.22); object.add(box, handle); }
       if (kind === "pin") { const head = new THREE.Mesh(new THREE.SphereGeometry(0.23, 12, 8), material); const stem = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.42, 8), material); stem.position.y = -0.3; object.add(head, stem); }
@@ -131,44 +142,50 @@
       line.userData = { endpoint, curve };
       network.add(line);
       if (index < 6) {
-        const traveler = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), new THREE.MeshBasicMaterial({ color: index % 2 ? 0x8ce5c2 : 0xffffff, transparent: true, opacity: 0.9 }));
+        const traveler = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), new THREE.MeshBasicMaterial({ color: index % 2 ? 0xb39067 : 0xe6dec9, transparent: true, opacity: 0.65 }));
         traveler.userData = { curve, phase: index * 0.9, speed: 0.055 + index * 0.004 };
         network.add(traveler);
         travelers.push(traveler);
       }
     });
 
-    const particleCount = window.innerWidth < 700 ? 42 : 82;
+    const particleCount = mobileViewport || lowPowerDevice ? 28 : 58;
     const particlePositions = new Float32Array(particleCount * 3);
     for (let index = 0; index < particleCount; index += 1) { particlePositions[index * 3] = (Math.random() - 0.5) * 12; particlePositions[index * 3 + 1] = (Math.random() - 0.5) * 8; particlePositions[index * 3 + 2] = (Math.random() - 0.5) * 8 - 1; }
     const particleGeometry = new THREE.BufferGeometry();
     particleGeometry.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
-    const particles = new THREE.Points(particleGeometry, new THREE.PointsMaterial({ color: 0x9de4ef, size: window.innerWidth < 700 ? 0.025 : 0.035, transparent: true, opacity: 0.42, depthWrite: false }));
+    const particles = new THREE.Points(particleGeometry, new THREE.PointsMaterial({ color: 0x829477, size: mobileViewport || lowPowerDevice ? 0.023 : 0.032, transparent: true, opacity: 0.2, depthWrite: false }));
     scene.add(particles);
 
     const pointer = { x: 0, y: 0, targetX: 0, targetY: 0 };
-    let scrollTarget = 0; let scrollValue = 0; let sceneIntensity = 1; let intensityTarget = 1; let running = true; let lastTime = 0;
+    let scrollTarget = 0; let scrollValue = 0; let sceneIntensity = 1; let intensityTarget = 1; let running = true; let lastTime = 0; let lastFrameTime = 0;
     window.addEventListener("pointermove", (event) => { pointer.targetX = (event.clientX / window.innerWidth - 0.5) * 0.35; pointer.targetY = (event.clientY / window.innerHeight - 0.5) * 0.22; }, { passive: true });
     window.addEventListener("scroll", () => { scrollTarget = Math.min(window.scrollY / Math.max(document.body.scrollHeight - window.innerHeight, 1), 1); }, { passive: true });
     const sectionObserver = new IntersectionObserver((entries) => entries.forEach((entry) => { if (entry.isIntersecting) intensityTarget = entry.target.id === "find-worker" ? 1.12 : entry.target.id === "services" || entry.target.id === "how-it-works" ? 1.22 : entry.target.id === "trust" ? 0.7 : entry.target.classList.contains("worker-cta") ? 1.14 : 1; }), { threshold: 0.45 });
     document.querySelectorAll("main > section").forEach((section) => sectionObserver.observe(section));
     document.addEventListener("visibilitychange", () => { running = !document.hidden; if (running) requestAnimationFrame(animate); });
-    window.addEventListener("resize", () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, window.innerWidth < 700 ? 1.15 : 1.5)); renderer.setSize(window.innerWidth, window.innerHeight, false); });
+    window.addEventListener("resize", () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); const mobile = window.innerWidth < 700; renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, mobile || lowPowerDevice ? 1 : 1.3)); renderer.setSize(window.innerWidth, window.innerHeight, false); updateSceneLayout(); if (reducedMotion) renderer.render(scene, camera); });
 
     function animate(time = 0) {
       if (!running) return;
       requestAnimationFrame(animate);
+      if (time - lastFrameTime < 1000 / 30) return;
+      lastFrameTime = time;
       const elapsed = time * 0.001; const delta = Math.min((time - lastTime) * 0.001, 0.05); lastTime = time;
       pointer.x += (pointer.targetX - pointer.x) * 0.035; pointer.y += (pointer.targetY - pointer.y) * 0.035; scrollValue += (scrollTarget - scrollValue) * 0.025;
-      const movement = reducedMotion ? 0.1 : 1; sceneIntensity += (intensityTarget - sceneIntensity) * 0.025;
+      const movement = 1; sceneIntensity += (intensityTarget - sceneIntensity) * 0.025;
       center.rotation.x += delta * 0.08 * movement; center.rotation.y += delta * 0.12 * movement; innerCore.rotation.y -= delta * 0.06 * movement; shell.rotation.y += delta * 0.035 * movement; ring.rotation.z += delta * 0.05 * movement; ringSecond.rotation.z -= delta * 0.035 * movement; center.scale.setScalar(1 + Math.sin(elapsed * 0.9) * 0.035 * movement); innerCore.scale.setScalar(1 + Math.sin(elapsed * 1.1) * 0.06 * movement);
       movingObjects.forEach((object) => { object.rotation.x += delta * 0.12 * movement * object.userData.spin; object.rotation.y += delta * 0.17 * movement * object.userData.spin; object.position.y = object.userData.baseY + Math.sin(elapsed * 0.55 + object.userData.phase) * 0.09 * movement; });
       travelers.forEach((traveler) => { const progress = (elapsed * traveler.userData.speed + traveler.userData.phase) % 1; traveler.position.copy(traveler.userData.curve.getPoint(progress)); traveler.material.opacity = (0.25 + Math.sin(progress * Math.PI) * 0.65) * movement * sceneIntensity; });
       particles.rotation.y += delta * 0.008 * movement; particles.position.y = Math.sin(elapsed * 0.15) * 0.12 * movement;
       group.rotation.y += (pointer.x * 0.22 + Math.sin(elapsed * 0.08) * 0.025 + scrollValue * 0.06 - group.rotation.y) * 0.018; group.rotation.x += (-pointer.y * 0.14 - scrollValue * 0.025 - group.rotation.x) * 0.018; network.rotation.y = group.rotation.y; network.rotation.x = group.rotation.x;
       network.children.forEach((line) => { if (line.material.opacity !== undefined && line.userData.curve) line.material.opacity = (0.14 + sceneIntensity * 0.1) * movement; });
-      keyLight.intensity = 1.9 + Math.sin(elapsed * 0.7) * 0.25 * movement;
+      keyLight.intensity = 1.2 + Math.sin(elapsed * 0.7) * 0.08 * movement;
       renderer.render(scene, camera);
+    }
+    if (reducedMotion) {
+      renderer.render(scene, camera);
+      return;
     }
     animate();
   }
