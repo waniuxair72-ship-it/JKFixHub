@@ -49,7 +49,13 @@ export const SECURITY_EVENT_TYPES = Object.freeze([
   "CHAT_ACCESS_DENIED",
   "CHAT_MESSAGE_REJECTED",
   "CHAT_RATE_LIMITED",
-  "CHAT_DEMO_ACCEPTED"
+  "CHAT_DEMO_ACCEPTED",
+  "REQUEST_COMPLETED",
+  "REVIEW_SUBMITTED",
+  "REVIEW_REPLY_SUBMITTED",
+  "REPORT_SUBMITTED",
+  "ABUSE_SIGNAL_TRIGGERED",
+  "ABUSE_RESTRICTION_APPLIED"
 ]);
 
 const MAX_SECURITY_EVENTS = 50;
@@ -153,7 +159,15 @@ export function getSafeErrorMessage(code) {
     invalidDescription: "Enter a description between 5 and 1,200 characters.",
     invalidLocation: "Enter an area between 2 and 160 characters.",
     invalidService: "Choose a valid service for this worker.",
-    invalidRequest: "We could not prepare this request. Please try again."
+    invalidRequest: "We could not prepare this request. Please try again.",
+    invalidReview: "Enter a review between 5 and 1,200 characters.",
+    invalidRating: "Select a star rating from 1 to 5.",
+    duplicateReview: "A review has already been submitted for this request.",
+    invalidReport: "Enter a report description between 10 and 2,000 characters.",
+    invalidReportReason: "Choose a valid reason for this report.",
+    duplicateReport: "You have already submitted a report for this target.",
+    invalidReply: "Enter a reply between 2 and 600 characters.",
+    actionRestricted: "Action temporarily paused. Please slow down and try again shortly."
   };
   return messages[code] || "Something went wrong. Please try again.";
 }

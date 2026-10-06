@@ -182,7 +182,10 @@ function handleChatActions(event) {
     closeChat();
     return;
   }
-  if (target.closest("#chatReportUser, #chatBlockUser")) {
+  if (target.closest("#chatReportUser")) {
+    return;
+  }
+  if (target.closest("#chatBlockUser")) {
     openMaintenanceNotice("Safety controls");
     return;
   }

@@ -5,6 +5,7 @@
 // Dashboard state and controls are frontend-only demo UX.
 import { closeModal, openModal, openMaintenanceNotice } from "./modals.js";
 import {
+  completeCustomerRequestForDemo,
   getCurrentUser,
   getWorkerById,
   getWorkerCustomerRequests,
@@ -12,6 +13,7 @@ import {
   isWorker,
   setWorkerDemoProfile
 } from "./store.js";
+import { renderWorkerReviews } from "./reviews.js";
 import {
   getSafeErrorMessage,
   hasCapability,
@@ -96,6 +98,34 @@ function installAssignedRequestsSection() {
   requests.className = "worker-dashboard-requests";
   section.append(heading, requests);
   requestsSection.insertAdjacentElement("afterend", section);
+}
+
+function installWorkerReviewsSection() {
+  if (document.getElementById("workerDashboardReviews")) return;
+  const dashboard = document.getElementById("workerDashboardView");
+  const assignedSection = document.getElementById("workerAssignedCustomerRequests")?.closest(".worker-dashboard-section");
+  if (!dashboard || !assignedSection) return;
+
+  const section = document.createElement("section");
+  const heading = document.createElement("div");
+  const titleWrap = document.createElement("div");
+  const label = document.createElement("span");
+  const title = document.createElement("h3");
+  const note = document.createElement("span");
+  const reviews = document.createElement("div");
+  section.className = "worker-dashboard-section";
+  heading.className = "worker-dashboard-section-heading";
+  titleWrap.append(label, title);
+  setTextContent(label, "Customer Feedback");
+  label.className = "section-label";
+  setTextContent(title, "Reviews Received");
+  setTextContent(note, "Session demo reviews");
+  note.className = "dashboard-demo-note";
+  heading.append(titleWrap, note);
+  reviews.id = "workerDashboardReviews";
+  reviews.className = "worker-dashboard-reviews";
+  section.append(heading, reviews);
+  assignedSection.insertAdjacentElement("afterend", section);
 }
 
 function getActiveWorker() {
@@ -209,6 +239,18 @@ function buildAssignedRequestCard(request) {
     chatButton.dataset.openWorkerChat = request.id;
     setTextContent(chatButton, "Open Chat");
     actions.append(chatButton);
+
+    const completeButton = document.createElement("button");
+    completeButton.className = "button subtle";
+    completeButton.type = "button";
+    completeButton.dataset.demoCompleteRequest = request.id;
+    setTextContent(completeButton, "Complete · Demo only");
+    actions.append(completeButton);
+  } else if (request.status === "Completed") {
+    const completedBadge = document.createElement("span");
+    completedBadge.className = "customer-chat-locked";
+    setTextContent(completedBadge, "Completed · Chat closed");
+    actions.append(completedBadge);
   } else {
     const unavailable = document.createElement("span");
     unavailable.className = "customer-chat-locked";
@@ -268,6 +310,12 @@ function renderDashboard(worker) {
     setTextContent(empty, "No customer-created demo requests are assigned to this worker.");
     assignedRequests.replaceChildren(empty);
   }
+
+  const reviewsContainer = document.getElementById("workerDashboardReviews");
+  if (reviewsContainer) {
+    renderWorkerReviews(worker.id, reviewsContainer);
+  }
+
   view.dataset.workerId = String(worker.id);
 }
 
@@ -361,6 +409,7 @@ function handleProfileSave(event) {
 
 export function openWorkerDashboard() {
   installAssignedRequestsSection();
+  installWorkerReviewsSection();
   const worker = getActiveWorker();
   if (!worker) return false;
 
@@ -382,6 +431,7 @@ export function initializeWorkerDashboard() {
   const editModal = document.getElementById("workerProfileEditModal");
   if (!view || !form || !editModal) return;
   installAssignedRequestsSection();
+  installWorkerReviewsSection();
 
   document.getElementById("editWorkerProfileButton").addEventListener("click", openProfileEditor);
   form.addEventListener("submit", handleProfileSave);
@@ -414,9 +464,25 @@ export function initializeWorkerDashboard() {
     const target = event.target;
     if (!(target instanceof Element)) return;
     const actionButton = target.closest("[data-request-action]");
-    if (!actionButton) return;
-    if (!getActiveWorker()) return;
-    closeModal("authModal");
-    openMaintenanceNotice("Request management");
+    if (actionButton) {
+      if (!getActiveWorker()) return;
+      closeModal("authModal");
+      openMaintenanceNotice("Request management");
+      return;
+    }
+
+    const completeButton = target.closest("[data-demo-complete-request]");
+    if (completeButton) {
+      const requestId = completeButton.dataset.demoCompleteRequest;
+      const completed = completeCustomerRequestForDemo(requestId);
+      if (completed) {
+        const worker = getActiveWorker();
+        if (worker) renderDashboard(worker);
+        setTextContent(
+          document.getElementById("workerDashboardFeedback"),
+          "Demo only: this request was marked Completed in memory. Customer is now eligible to leave a review."
+        );
+      }
+    }
   });
 }

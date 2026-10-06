@@ -8,8 +8,14 @@ import {
   validateLocation,
   validatePersonName,
   validatePhone,
-  validateText
+  validateText,
+  validateReview,
+  validateReport
 } from "./security.js";
+import {
+  checkAndTrackAction,
+  resetAbuseSignals
+} from "./abuse.js";
 
 // ==========================================
 // #APPLICATION_STATE
@@ -23,7 +29,9 @@ const state = {
   conversations: [],
   messages: [],
   activeConversationId: null,
-  messageAttempts: {}
+  messageAttempts: {},
+  reviews: [],
+  reports: []
 };
 
 let initialized = false;
@@ -51,7 +59,11 @@ const customerRequestInputFields = Object.freeze([
 ]);
 const customerIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$/;
 const customerRequestIdPattern = /^req-[a-z0-9-]{8,80}$/;
+const reviewIdPattern = /^rev-[a-z0-9-]{8,80}$/;
+const reportIdPattern = /^rep-[a-z0-9-]{8,80}$/;
 const markupPattern = /<\s*\/?\s*[a-z!][^>]*>/i;
+const allowedReportTargetTypes = Object.freeze(["worker", "customer", "review", "message"]);
+const allowedReportReasons = Object.freeze(["spam", "harassment", "scam", "inappropriate", "fake", "abusive", "other"]);
 
 function requireCustomerId() {
   const user = state.currentUser;
@@ -76,6 +88,14 @@ function copyConversation(conversation) {
 
 function copyMessage(message) {
   return { ...message };
+}
+
+function copyReview(review) {
+  return { ...review };
+}
+
+function copyReport(report) {
+  return { ...report };
 }
 
 function isValidStoredCustomerRequest(request) {
@@ -202,6 +222,9 @@ export function setCurrentUser(user) {
 export function clearCurrentUser() {
   state.currentUser = null;
   state.activeConversationId = null;
+  state.reviews = [];
+  state.reports = [];
+  resetAbuseSignals();
 }
 
 export function isAuthenticated() {
@@ -361,6 +384,11 @@ export function getCurrentRequest() {
 
 export function createCustomerRequest(request) {
   const customerId = requireCustomerId();
+  const abuseCheck = checkAndTrackAction(customerId, "request");
+  if (abuseCheck.restricted) {
+    recordSecurityEvent("ABUSE_RESTRICTION_APPLIED", "customer");
+    throw new Error(abuseCheck.reason);
+  }
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     recordSecurityEvent("INVALID_REQUEST", "customer");
     throw new TypeError("A customer request must be an object.");
@@ -447,6 +475,11 @@ export function getCustomerRequestById(id) {
 
 export function cancelCustomerRequest(id) {
   const customerId = requireCustomerId();
+  const abuseCheck = checkAndTrackAction(customerId, "cancel_request");
+  if (abuseCheck.restricted) {
+    recordSecurityEvent("ABUSE_RESTRICTION_APPLIED", "customer");
+    return false;
+  }
   if (!isValidCustomerRequestId(id)) {
     recordSecurityEvent("INVALID_REQUEST", "customer");
     return false;
@@ -511,6 +544,43 @@ export function acceptCustomerRequestForDemo(id) {
   request.status = "Accepted";
   request.demoAccepted = true;
   recordSecurityEvent("CHAT_DEMO_ACCEPTED", user.role);
+  return true;
+}
+
+export function completeCustomerRequestForDemo(id) {
+  const user = state.currentUser;
+  if (!user || user.role !== "worker" || !hasCapability(user.role, "acceptRequest")) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || null);
+    return false;
+  }
+  if (!isValidCustomerRequestId(id)) {
+    recordSecurityEvent("INVALID_REQUEST", user.role);
+    return false;
+  }
+  const worker = getWorkerById(user.workerId);
+  const request = state.customerRequests.find((item) => item.id === id);
+  if (!worker || user.id !== `demo-worker-${worker.id}` ||
+      !request || request.workerId !== worker.id ||
+      !isValidStoredCustomerRequest(request)) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user.role);
+    return false;
+  }
+  if (request.status !== "Accepted") {
+    recordSecurityEvent("INVALID_REQUEST", user.role);
+    return false;
+  }
+  request.status = "Completed";
+
+  // When completed, conversation is closed and active chat is cleared
+  const conversation = state.conversations.find((item) => item.requestId === request.id);
+  if (conversation) {
+    conversation.status = "closed";
+    if (state.activeConversationId === conversation.id) {
+      state.activeConversationId = null;
+    }
+  }
+
+  recordSecurityEvent("REQUEST_COMPLETED", user.role);
   return true;
 }
 
@@ -712,9 +782,267 @@ export function resetDemoChatState() {
   state.messages = [];
   state.activeConversationId = null;
   state.messageAttempts = {};
+  state.reviews = [];
+  state.reports = [];
+  resetAbuseSignals();
 }
 
 export function clearRequestState() {
   state.selectedWorkerId = null;
   state.currentRequest = null;
+}
+
+// ==========================================
+// #REVIEWS_STATE
+// ==========================================
+
+export function createCustomerReview(data) {
+  const user = state.currentUser;
+  if (!user || user.role !== "customer" || !hasCapability(user.role, "submitReview")) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || null);
+    throw new Error("Only authenticated customers can submit reviews.");
+  }
+  if (!data || typeof data !== "object") {
+    recordSecurityEvent("INVALID_REQUEST", user.role);
+    throw new TypeError("Review data must be an object.");
+  }
+
+  const abuseCheck = checkAndTrackAction(user.id, "review");
+  if (abuseCheck.restricted) {
+    recordSecurityEvent("ABUSE_RESTRICTION_APPLIED", user.role);
+    throw new Error(abuseCheck.reason);
+  }
+
+  const { requestId, rating, text } = data;
+  if (!isValidCustomerRequestId(requestId)) {
+    recordSecurityEvent("INVALID_REQUEST", user.role);
+    throw new TypeError("Invalid request ID for review.");
+  }
+
+  const request = state.customerRequests.find((item) => item.id === requestId);
+  if (!request || request.customerId !== user.id || !isValidStoredCustomerRequest(request)) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user.role);
+    throw new Error("You can only review your own requests.");
+  }
+
+  if (request.status !== "Completed") {
+    recordSecurityEvent("INVALID_REQUEST", user.role);
+    throw new Error("Reviews can only be submitted for completed requests.");
+  }
+
+  const existingReview = state.reviews.find((item) => item.requestId === requestId);
+  if (existingReview) {
+    recordSecurityEvent("VALIDATION_FAILURE", user.role);
+    throw new Error("A review has already been submitted for this request.");
+  }
+
+  const normalizedRating = Number(rating);
+  if (!Number.isInteger(normalizedRating) || normalizedRating < 1 || normalizedRating > 5) {
+    recordSecurityEvent("VALIDATION_FAILURE", user.role);
+    throw new RangeError("Rating must be an integer between 1 and 5.");
+  }
+
+  if (!validateReview(text) || markupPattern.test(text)) {
+    recordSecurityEvent("VALIDATION_FAILURE", user.role);
+    if (markupPattern.test(text)) {
+      recordSecurityEvent("SUSPICIOUS_INPUT", user.role);
+    }
+    throw new TypeError("Invalid review text.");
+  }
+
+  const review = {
+    id: `rev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+    requestId: request.id,
+    customerId: user.id,
+    customerName: request.customerName,
+    workerId: request.workerId,
+    workerName: request.workerName,
+    rating: normalizedRating,
+    text: text.trim(),
+    createdAt: new Date().toISOString(),
+    updatedAt: null,
+    workerReply: null,
+    workerReplyAt: null,
+    status: "published"
+  };
+
+  state.reviews.push(review);
+  recordSecurityEvent("REVIEW_SUBMITTED", user.role);
+  return copyReview(review);
+}
+
+export function getReviewByRequestId(requestId) {
+  if (!isValidCustomerRequestId(requestId)) return null;
+  const review = state.reviews.find((item) => item.requestId === requestId);
+  return review ? copyReview(review) : null;
+}
+
+export function getReviewsForWorker(workerId) {
+  const normalizedId = Number(workerId);
+  if (!Number.isSafeInteger(normalizedId)) return [];
+  return state.reviews
+    .filter((item) => item.workerId === normalizedId)
+    .map(copyReview);
+}
+
+export function getReviewsForCustomer(customerId) {
+  if (!customerId || typeof customerId !== "string" || !customerIdPattern.test(customerId)) return [];
+  return state.reviews
+    .filter((item) => item.customerId === customerId)
+    .map(copyReview);
+}
+
+export function getReviewById(reviewId) {
+  if (!reviewId || typeof reviewId !== "string" || !reviewIdPattern.test(reviewId)) return null;
+  const review = state.reviews.find((item) => item.id === reviewId);
+  return review ? copyReview(review) : null;
+}
+
+export function addWorkerReviewReply(reviewId, replyText) {
+  const user = state.currentUser;
+  if (!user || user.role !== "worker" || !hasCapability(user.role, "manageOwnProfile")) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || null);
+    throw new Error("Only authenticated workers can reply to reviews.");
+  }
+  if (!reviewId || typeof reviewId !== "string" || !reviewIdPattern.test(reviewId)) {
+    recordSecurityEvent("INVALID_REQUEST", user.role);
+    throw new TypeError("Invalid review ID.");
+  }
+
+  const review = state.reviews.find((item) => item.id === reviewId);
+  if (!review) {
+    recordSecurityEvent("INVALID_REQUEST", user.role);
+    throw new Error("Review not found.");
+  }
+
+  if (review.workerId !== user.workerId || user.id !== `demo-worker-${user.workerId}`) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user.role);
+    throw new Error("You can only reply to reviews on your own profile.");
+  }
+
+  if (!validateText(replyText, { minLength: 2, maxLength: 600, allowNewlines: true }) || markupPattern.test(replyText)) {
+    recordSecurityEvent("VALIDATION_FAILURE", user.role);
+    if (markupPattern.test(replyText)) {
+      recordSecurityEvent("SUSPICIOUS_INPUT", user.role);
+    }
+    throw new TypeError("Invalid reply text.");
+  }
+
+  review.workerReply = replyText.trim();
+  review.workerReplyAt = new Date().toISOString();
+  review.updatedAt = review.workerReplyAt;
+
+  recordSecurityEvent("REVIEW_REPLY_SUBMITTED", user.role);
+  return copyReview(review);
+}
+
+// ==========================================
+// #REPORTS_STATE
+// ==========================================
+
+export function createReport(data) {
+  const user = state.currentUser;
+  if (!user || (user.role !== "customer" && user.role !== "worker") || !hasCapability(user.role, "reportUser")) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || null);
+    throw new Error("Reporting requires an authenticated account.");
+  }
+  if (!data || typeof data !== "object") {
+    recordSecurityEvent("INVALID_REQUEST", user.role);
+    throw new TypeError("Report data must be an object.");
+  }
+
+  const abuseCheck = checkAndTrackAction(user.id, "report");
+  if (abuseCheck.restricted) {
+    recordSecurityEvent("ABUSE_RESTRICTION_APPLIED", user.role);
+    throw new Error(abuseCheck.reason);
+  }
+
+  const { targetType, targetId, reason, description } = data;
+  if (!allowedReportTargetTypes.includes(targetType)) {
+    recordSecurityEvent("INVALID_REQUEST", user.role);
+    throw new RangeError("Invalid report target type.");
+  }
+
+  const targetIdStr = String(targetId).trim();
+  if (!targetIdStr) {
+    recordSecurityEvent("INVALID_REQUEST", user.role);
+    throw new TypeError("Target ID is required.");
+  }
+
+  if (targetType === "worker") {
+    const workerId = Number(targetIdStr);
+    if (!Number.isSafeInteger(workerId) || !getWorkerById(workerId)) {
+      recordSecurityEvent("INVALID_REQUEST", user.role);
+      throw new TypeError("Invalid worker target ID.");
+    }
+  } else if (targetType === "customer") {
+    if (!customerIdPattern.test(targetIdStr)) {
+      recordSecurityEvent("INVALID_REQUEST", user.role);
+      throw new TypeError("Invalid customer target ID.");
+    }
+  } else if (targetType === "review") {
+    if (!reviewIdPattern.test(targetIdStr) || !state.reviews.some((r) => r.id === targetIdStr)) {
+      recordSecurityEvent("INVALID_REQUEST", user.role);
+      throw new TypeError("Invalid review target ID.");
+    }
+  } else if (targetType === "message") {
+    if (!/^msg-[a-z0-9-]{8,100}$/.test(targetIdStr) || !state.messages.some((m) => m.id === targetIdStr)) {
+      recordSecurityEvent("INVALID_REQUEST", user.role);
+      throw new TypeError("Invalid message target ID.");
+    }
+  }
+
+  if (!allowedReportReasons.includes(reason)) {
+    recordSecurityEvent("VALIDATION_FAILURE", user.role);
+    throw new RangeError("Invalid report reason.");
+  }
+
+  if (!validateReport(description) || markupPattern.test(description)) {
+    recordSecurityEvent("VALIDATION_FAILURE", user.role);
+    if (markupPattern.test(description)) {
+      recordSecurityEvent("SUSPICIOUS_INPUT", user.role);
+    }
+    throw new TypeError("Invalid report description.");
+  }
+
+  const duplicate = state.reports.some(
+    (item) => item.reporterId === user.id && item.targetId === targetIdStr && item.targetType === targetType
+  );
+  if (duplicate) {
+    recordSecurityEvent("VALIDATION_FAILURE", user.role);
+    throw new Error("You have already submitted a report for this target.");
+  }
+
+  const report = {
+    id: `rep-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+    reporterId: user.id,
+    reporterRole: user.role,
+    targetType,
+    targetId: targetIdStr,
+    reason,
+    description: description.trim(),
+    createdAt: new Date().toISOString(),
+    status: "open"
+  };
+
+  state.reports.push(report);
+  recordSecurityEvent("REPORT_SUBMITTED", user.role);
+  return copyReport(report);
+}
+
+export function hasReportedTarget(targetId, targetType) {
+  const user = state.currentUser;
+  if (!user) return false;
+  const targetIdStr = String(targetId).trim();
+  return state.reports.some(
+    (item) => item.reporterId === user.id && item.targetId === targetIdStr && (!targetType || item.targetType === targetType)
+  );
+}
+
+export function getReportsByReporter(reporterId) {
+  const user = state.currentUser;
+  if (!user || user.id !== reporterId) return [];
+  return state.reports
+    .filter((item) => item.reporterId === reporterId)
+    .map(copyReport);
 }

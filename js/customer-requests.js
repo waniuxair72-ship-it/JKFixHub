@@ -9,6 +9,7 @@ import {
   getCustomerRequestById,
   getCustomerRequests,
   getCurrentUser,
+  getReviewByRequestId,
   isCustomer
 } from "./store.js";
 import { hasCapability, recordSecurityEvent, setTextContent } from "./security.js";
@@ -149,6 +150,24 @@ function buildRequestCard(request) {
     chatButton.dataset.openCustomerChat = request.id;
     setTextContent(chatButton, "Open Chat");
     actions.append(chatButton);
+  } else if (request.status === "Completed") {
+    const review = getReviewByRequestId(request.id);
+    const reviewButton = document.createElement("button");
+    reviewButton.type = "button";
+    if (review) {
+      reviewButton.className = "button subtle";
+      reviewButton.dataset.viewReview = request.id;
+      setTextContent(reviewButton, "View Your Review");
+    } else {
+      reviewButton.className = "button primary";
+      reviewButton.dataset.leaveReview = request.id;
+      setTextContent(reviewButton, "Leave a Review");
+    }
+    actions.append(reviewButton);
+    const chatClosed = document.createElement("span");
+    chatClosed.className = "customer-chat-locked";
+    setTextContent(chatClosed, "Chat closed · Service completed");
+    actions.append(chatClosed);
   } else {
     const unavailable = document.createElement("span");
     unavailable.className = "customer-chat-locked";
@@ -225,6 +244,27 @@ function showRequestDetails(id) {
   const cancelButton = document.getElementById("customerRequestDetailsCancel");
   cancelButton.hidden = request.status !== "Pending";
   cancelButton.dataset.customerRequestCancel = request.id;
+
+  const reviewButton = document.getElementById("customerRequestDetailsReview");
+  if (reviewButton) {
+    if (request.status === "Completed") {
+      const review = getReviewByRequestId(request.id);
+      reviewButton.hidden = false;
+      if (review) {
+        reviewButton.className = "button subtle";
+        reviewButton.dataset.viewReview = request.id;
+        delete reviewButton.dataset.leaveReview;
+        setTextContent(reviewButton, "View Your Review");
+      } else {
+        reviewButton.className = "button primary";
+        reviewButton.dataset.leaveReview = request.id;
+        delete reviewButton.dataset.viewReview;
+        setTextContent(reviewButton, "Leave a Review");
+      }
+    } else {
+      reviewButton.hidden = true;
+    }
+  }
   closeModal("customerRequestsModal");
   openModal("customerRequestDetailsModal");
 }

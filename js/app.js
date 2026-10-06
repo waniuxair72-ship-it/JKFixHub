@@ -11,6 +11,8 @@ import { setTextContent } from "./security.js";
 import { initializeWorkerDashboard } from "./worker-dashboard.js";
 import { initializeCustomerRequests } from "./customer-requests.js";
 import { initializeChat } from "./chat.js";
+import { initializeReviews } from "./reviews.js";
+import { initializeReports } from "./reports.js";
 
 // ==========================================
 // #UTILITY
@@ -70,6 +72,8 @@ function initializeApp() {
   initializeAuth();
   initializeCustomerRequests();
   initializeChat();
+  initializeReviews();
+  initializeReports({ showToast });
   initializeRevealObserver();
   initializePointerMotion();
 }

@@ -10,7 +10,12 @@ JKFixHub is an interactive frontend prototype for a planned local-services marke
 - `js/request.js` - frontend-only request preview and validation.
 - `js/store.js` - in-memory worker, request, and demo-user state.
 - `js/auth.js` - customer/worker demo-role UI; not real authentication.
-- `js/worker-dashboard.js` - worker dashboard preview with temporary profile overrides and illustrative request samples.
+- `js/worker-dashboard.js` - worker dashboard preview with temporary profile overrides, request workflow, and reviews.
+- `js/customer-requests.js` - customer request history, detail view, cancellation, and review access.
+- `js/chat.js` - frontend-only private chat architecture for accepted demo requests.
+- `js/reviews.js` - frontend-only review system for completed requests and worker replies.
+- `js/reports.js` - frontend-only safety reporting system for workers, customers, reviews, and messages.
+- `js/abuse.js` - in-memory abuse signal tracking and soft prototype rate limiting.
 - `js/security.js` - frontend validation, capability definitions, and temporary security-event helpers.
 - `js/modals.js` and `js/navigation.js` - modal and navigation behavior.
 - `js/scene.js` - standalone Three.js/WebGL background with procedural service objects, network lines, particles, parallax, and adaptive performance controls.
