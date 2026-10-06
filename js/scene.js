@@ -1,11 +1,20 @@
 (function () {
   "use strict";
 
+  // ==========================================
+  // #SCENE_BOOTSTRAP
+  // ==========================================
+  const sceneSettings = {
+    reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    lowPowerDevice: navigator.hardwareConcurrency > 0 && navigator.hardwareConcurrency <= 4,
+    mobileViewport: window.innerWidth < 700
+  };
+
   function initWebGLBackground() {
     const canvas = document.getElementById("webgl-background");
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const lowPowerDevice = navigator.hardwareConcurrency > 0 && navigator.hardwareConcurrency <= 4;
-    const mobileViewport = window.innerWidth < 700;
+    const reducedMotion = sceneSettings.reducedMotion;
+    const lowPowerDevice = sceneSettings.lowPowerDevice;
+    const mobileViewport = sceneSettings.mobileViewport;
     if (!canvas || !window.THREE || !window.WebGLRenderingContext) return;
 
     let renderer;
@@ -98,6 +107,9 @@
     ringSecond.material.opacity = 0.17;
     group.add(ringSecond);
 
+    // ==========================================
+    // #SERVICE_NODES
+    // ==========================================
     const nodePositions = [
       [-2.55, 1.45, -0.9], [2.35, 1.2, -1.6], [-2.45, -1.25, 0.2],
       [2.55, -1.3, -1], [-0.35, 2.35, -2.5], [0.2, -2.25, -2.1],
@@ -157,6 +169,9 @@
     const particles = new THREE.Points(particleGeometry, new THREE.PointsMaterial({ color: 0x829477, size: mobileViewport || lowPowerDevice ? 0.023 : 0.032, transparent: true, opacity: 0.2, depthWrite: false }));
     scene.add(particles);
 
+    // ==========================================
+    // #ANIMATION
+    // ==========================================
     const pointer = { x: 0, y: 0, targetX: 0, targetY: 0 };
     let scrollTarget = 0; let scrollValue = 0; let sceneIntensity = 1; let intensityTarget = 1; let running = true; let lastTime = 0; let lastFrameTime = 0;
     window.addEventListener("pointermove", (event) => { pointer.targetX = (event.clientX / window.innerWidth - 0.5) * 0.35; pointer.targetY = (event.clientY / window.innerHeight - 0.5) * 0.22; }, { passive: true });
