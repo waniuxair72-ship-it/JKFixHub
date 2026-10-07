@@ -28,7 +28,9 @@ export const defaultFirebaseConfig = Object.freeze({
 let runtimeConfig = null;
 let initializedApp = null;
 let initializedAuth = null;
+let initializedFirestore = null;
 let testAuthAdapter = null;
+let testFirestoreAdapter = null;
 
 /**
  * Returns active Firebase Web configuration.
@@ -89,6 +91,22 @@ export function setAuthAdapterForTesting(adapter) {
  */
 export function getTestAuthAdapter() {
   return testAuthAdapter;
+}
+
+/**
+ * Injects a testing Firestore adapter for unit/integration tests in non-browser or mock environments.
+ * @param {object|null} adapter
+ */
+export function setFirestoreAdapterForTesting(adapter) {
+  testFirestoreAdapter = adapter;
+}
+
+/**
+ * Returns test Firestore adapter if set.
+ * @returns {object|null}
+ */
+export function getTestFirestoreAdapter() {
+  return testFirestoreAdapter;
 }
 
 /**
@@ -178,6 +196,90 @@ export async function getFirebaseAuthMethods() {
       "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js"
     );
     return authModule;
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * Initializes and returns Cloud Firestore instance.
+ * Dynamically loads official Firebase modular Firestore Web SDK.
+ * @returns {Promise<{ db: object|null, isConfigured: boolean }>}
+ */
+export async function initializeFirestoreClient() {
+  if (testFirestoreAdapter) {
+    return {
+      db: testFirestoreAdapter,
+      isConfigured: true
+    };
+  }
+
+  if (!isFirebaseConfigured()) {
+    return {
+      db: null,
+      isConfigured: false
+    };
+  }
+
+  if (initializedFirestore) {
+    return {
+      db: initializedFirestore,
+      isConfigured: true
+    };
+  }
+
+  try {
+    const { app } = await initializeFirebaseClient();
+    if (!app) {
+      return { db: null, isConfigured: false };
+    }
+
+    const { getFirestore } = await import(
+      "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js"
+    );
+
+    initializedFirestore = getFirestore(app);
+    return {
+      db: initializedFirestore,
+      isConfigured: true
+    };
+  } catch (error) {
+    console.warn(
+      "[JKFixHub] Cloud Firestore SDK load deferred or network unavailable.",
+      error?.message || error
+    );
+    return {
+      db: null,
+      isConfigured: false
+    };
+  }
+}
+
+/**
+ * Gets currently initialized Firestore instance, or null.
+ * @returns {object|null}
+ */
+export function getFirestoreDb() {
+  if (testFirestoreAdapter) return testFirestoreAdapter;
+  return initializedFirestore;
+}
+
+/**
+ * Loads and returns Firebase Firestore SDK modular functions (or test adapter).
+ * @returns {Promise<object|null>}
+ */
+export async function getFirestoreMethods() {
+  if (testFirestoreAdapter) {
+    return testFirestoreAdapter;
+  }
+  if (!isFirebaseConfigured()) {
+    return null;
+  }
+  try {
+    const firestoreModule = await import(
+      "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js"
+    );
+    return firestoreModule;
   } catch (error) {
     return null;
   }

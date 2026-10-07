@@ -13,7 +13,6 @@
 
 import { closeModal, openModal } from "./modals.js";
 import { openWorkerDashboard } from "./worker-dashboard.js";
-import { openAdminDashboard } from "./admin-dashboard.js";
 import {
   clearRequestState,
   clearCurrentUser,
@@ -776,9 +775,6 @@ export function showAccountView() {
   // Dashboard buttons
   const workerBtn = document.getElementById("openWorkerDashboard");
   if (workerBtn) workerBtn.hidden = user.role !== "worker";
-
-  const adminBtn = document.getElementById("openAdminDashboardFromAccount");
-  if (adminBtn) adminBtn.hidden = user.role !== "admin";
 }
 
 /**
@@ -897,9 +893,6 @@ export async function initializeAuth() {
       if (openWorkerDashboard()) openModal("authModal");
     } else if (target.closest("#openWorkerDashboard")) {
       openWorkerDashboard();
-    } else if (target.closest("#openAdminDashboardFromAccount")) {
-      closeModal("authModal");
-      openAdminDashboard();
     } else if (target.closest("#backToAccount")) {
       showAccountView();
     } else if (target.closest("#authBackToRoles")) {

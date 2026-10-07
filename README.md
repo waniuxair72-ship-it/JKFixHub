@@ -4,12 +4,17 @@
 
 ## Project structure
 
-- `index.html` - page structure, search, worker cards, modals, and account onboarding.
+- `index.html` - public platform interface, search, worker cards, customer modals, and customer/worker account onboarding.
+- `admin.html` - dedicated privileged administration application with Firebase Authentication and server-side authorization.
+- `css/admin.css` - responsive, accessible styling for the platform administration panel adhering to `DESIGN_SYSTEM.md`.
 - `js/worker-data.js` - fictional sample worker records (read-only single source of worker records).
 - `js/search.js` - worker discovery, filtering, and card rendering.
 - `js/request.js` - frontend request validation and creation flow.
 - `js/store.js` - in-memory application state boundary (requests, reviews, reports, temporary sessions).
-- `js/firebase-config.js` - client-side public Firebase Web configuration boundary and modular SDK initialization.
+- `js/firebase-config.js` - client-side public Firebase Web configuration boundary and modular SDK initialization (Auth & Firestore).
+- `js/firestore-service.js` - Cloud Firestore data access layer, admin verification, and audit logging.
+- `js/admin-auth.js` - authoritative administrator authentication and session boundary.
+- `js/admin-app.js` - live Firestore administration panel controller (workers, customers, requests, reports, reviews, security, audit log).
 - `js/auth.js` - Firebase Authentication controller, email/password registration, login, logout, and offline fallback.
 - `js/worker-dashboard.js` - worker workspace with temporary profile overrides, request workflow, and reviews.
 - `js/customer-requests.js` - customer request history, detail view, cancellation, and review access.
@@ -17,27 +22,31 @@
 - `js/reviews.js` - review system for completed requests and worker replies.
 - `js/reports.js` - trust and safety reporting system for workers, customers, reviews, and messages.
 - `js/abuse.js` - in-memory abuse signal tracking and soft prototype rate limiting.
-- `js/admin-dashboard.js` - privileged admin dashboard foundation and security boundary (workers, requests, reports, reviews, security events, audit log).
+- `js/admin-dashboard.js` - legacy in-memory admin security boundary and test harness.
 - `js/security.js` - frontend validation, capability definitions, and security-event logging helpers.
 - `js/modals.js` and `js/navigation.js` - modal and navigation behavior.
 - `js/scene.js` - standalone Three.js/WebGL background with procedural service objects, network lines, particles, parallax, and adaptive performance controls.
 - `css/polish.css` - responsive natural-technology visual system, component styles, and reduced-motion-aware interactions.
+- `firestore.rules` - server-side Cloud Firestore Security Rules enforcing least-privilege, admin membership, and document privacy.
+- `firestore.indexes.json` - Cloud Firestore index configuration.
+- `firebase.json` - Firebase project configuration.
 - `DESIGN_SYSTEM.md` - permanent reference for [JK] FixHub colors, typography, spacing, components, motion, responsiveness, and accessibility.
-- `SECURITY.md` - current frontend security boundaries and production security requirements.
+- `SECURITY.md` - current frontend security boundaries, Firestore security rules, admin authorization architecture, and bootstrap procedures.
 - `.github/agents/jkfixhub-prototype.agent.md` - project-specific prototype guidance.
 
 ## Current Stage & Service Boundaries
 
-### CURRENT (Implemented in Step 16):
+### CURRENT (Implemented in Steps 16 & 17):
 - **Firebase Authentication**: Live email/password registration and sign-in for Customers and Workers via modular Firebase Web SDK.
-- **Email Verification**: Identity provider verification email dispatch and live `emailVerified` status tracking.
-- **Strict Role Isolation**: Public interface exposes only Customer and Worker options; Admin interface is completely segregated and protected by `canAccessAdmin()` boundaries.
-- **In-Memory Store**: Application state (`js/store.js`) maintains sessions, request drafts, reviews, reports, and audit events in memory during the active browser session.
+- **Cloud Firestore Backend Foundation (Step 17)**: Document data layer supporting users, workers, requests, reviews, reports, security events, and audit logs.
+- **Server-Side Authorization (`firestore.rules`)**: Authoritative database security rules enforcing least privilege, customer request ownership, worker profile boundaries, and `/admins/{uid}` membership verification. Client-side role tampering cannot bypass Firestore rules.
+- **Dedicated Admin Panel (`admin.html`)**: Segregated administrative panel requiring Firebase Authentication and verified `/admins/{uid}` document membership.
+- **Administrative Operations**: Worker moderation (approve/suspend/restore), customer inspection, request tracking, trust & safety report resolution, review moderation, and security signal monitoring.
+- **Append-Only Audit Trail**: Every privileged administrative operation writes an immutable record to `/auditLogs` with admin UID, action, target, timestamp, and outcome.
 
 ### NOT YET (Planned for Future Steps):
-- **Cloud Firestore** (Step 17+): Persistent cloud database storage and server-enforced Security Rules.
-- **Firebase Storage** (Step 18+): Cloud object storage for documents and profile attachments.
-- **Cloud Functions / Backend Enforcement** (Step 19+): Server-authoritative role verification, custom claims, and production anti-abuse infrastructure.
+- **Firebase Storage** (Step 18+): Cloud object storage for identity documents, verification certificates, and profile attachments.
+- **Cloud Functions / Backend Enforcement** (Step 19+): Server-authoritative custom claims (`admin: true`), automated database triggers, and production-grade rate limiting.
 
 ## 3D background
 

@@ -858,12 +858,4 @@ export function initializeAdminDashboard(options = {}) {
       return;
     }
   });
-
-  // Attach controlled demo interface to window for testing
-  window.JKFixHubAdmin = Object.freeze({
-    login: loginAsDemoAdmin,
-    logout: logoutAdmin,
-    open: openAdminDashboard,
-    canAccess: canAccessAdmin
-  });
 }

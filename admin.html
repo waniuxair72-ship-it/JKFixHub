@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>[JK] FixHub — Platform Administration</title>
+    <meta name="description" content="Privileged administration panel for JK FixHub platform." />
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="stylesheet" href="css/polish.css" />
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body class="admin-body">
+    <!-- #ADMIN_LOGIN_VIEW -->
+    <main id="adminLoginSection" class="admin-login-screen">
+      <div class="admin-login-card">
+        <div class="admin-brand-header">
+          <div class="admin-brand-logo">
+            <span class="admin-brand-mark">JK</span>
+            <span class="admin-brand-title">FixHub</span>
+          </div>
+          <span class="admin-badge-privileged">Privileged Area</span>
+        </div>
+
+        <h1>Administrator Sign In</h1>
+        <p class="admin-login-subtitle">
+          Authorized platform management access only.
+        </p>
+
+        <div id="adminLoginError" class="admin-alert-banner" role="alert" hidden>
+          <span id="adminLoginErrorMessage">Access unavailable. This area is restricted to authorized administrators.</span>
+        </div>
+
+        <form id="adminLoginForm" novalidate>
+          <div class="admin-form-group">
+            <label for="adminEmailInput">Admin Email Address</label>
+            <input
+              id="adminEmailInput"
+              type="email"
+              autocomplete="username"
+              placeholder="admin@example.com"
+              required
+            />
+          </div>
+
+          <div class="admin-form-group">
+            <label for="adminPasswordInput">Password</label>
+            <input
+              id="adminPasswordInput"
+              type="password"
+              autocomplete="current-password"
+              placeholder="••••••••••••"
+              required
+            />
+          </div>
+
+          <button id="adminLoginSubmit" type="submit" class="admin-btn-primary">
+            Sign In to Admin Panel
+          </button>
+        </form>
+
+        <div class="admin-login-footer-note">
+          Restricted access. All administrative actions and authentication attempts are audited server-side.
+        </div>
+      </div>
+    </main>
+
+    <!-- #ADMIN_APP_SHELL -->
+    <div id="adminAppSection" class="admin-shell" hidden>
+      <!-- Topbar -->
+      <header class="admin-topbar">
+        <div class="admin-topbar-left">
+          <div class="admin-brand-logo">
+            <span class="admin-brand-mark">JK</span>
+            <span class="admin-brand-title">FixHub</span>
+          </div>
+          <span class="admin-badge-privileged">Platform Administration</span>
+        </div>
+
+        <div class="admin-topbar-right">
+          <div class="admin-session-badge">
+            <span class="admin-status-dot"></span>
+            <span id="adminIdentityDisplay">Platform Administrator</span>
+          </div>
+          <button id="adminSignOutBtn" type="button" class="admin-btn-subtle">
+            Sign Out
+          </button>
+        </div>
+      </header>
+
+      <!-- Main Layout: Sidebar + Content -->
+      <div class="admin-layout">
+        <!-- Sidebar Navigation -->
+        <nav class="admin-sidebar" aria-label="Admin Navigation">
+          <button type="button" class="admin-nav-item active" data-admin-tab="dashboard">
+            <span>Dashboard</span>
+          </button>
+          <button type="button" class="admin-nav-item" data-admin-tab="workers">
+            <span>Workers</span>
+          </button>
+          <button type="button" class="admin-nav-item" data-admin-tab="customers">
+            <span>Customers</span>
+          </button>
+          <button type="button" class="admin-nav-item" data-admin-tab="requests">
+            <span>Requests</span>
+          </button>
+          <button type="button" class="admin-nav-item" data-admin-tab="reports">
+            <span>Reports</span>
+          </button>
+          <button type="button" class="admin-nav-item" data-admin-tab="reviews">
+            <span>Reviews</span>
+          </button>
+          <button type="button" class="admin-nav-item" data-admin-tab="security">
+            <span>Security &amp; Abuse</span>
+          </button>
+          <button type="button" class="admin-nav-item" data-admin-tab="audit">
+            <span>Audit Log</span>
+          </button>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="admin-content" id="adminMainContent">
+          <!-- Views rendered dynamically by js/admin-app.js -->
+        </main>
+      </div>
+    </div>
+
+    <!-- #ADMIN_ACTION_MODAL -->
+    <div id="adminActionModal" class="admin-modal-backdrop" hidden>
+      <div class="admin-modal" role="dialog" aria-modal="true" aria-labelledby="adminModalTitle">
+        <div class="admin-modal-header">
+          <h3 id="adminModalTitle">Confirm Action</h3>
+          <button type="button" class="admin-modal-close" id="adminModalClose" aria-label="Close dialog">×</button>
+        </div>
+        <div class="admin-modal-body" id="adminModalBody">
+          <!-- Populated dynamically -->
+        </div>
+        <div class="admin-modal-actions" id="adminModalActions">
+          <button type="button" class="admin-btn-subtle" id="adminModalCancel">Cancel</button>
+          <button type="button" class="admin-btn-primary" id="adminModalConfirm">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="adminToast" class="admin-toast" role="status" aria-live="polite"></div>
+
+    <script type="module" src="js/admin-app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,210 @@
+rules_version = '2';
+
+// ============================================================================
+// [JK] FixHub — Cloud Firestore Security Rules (Step 17)
+// ============================================================================
+// Principles:
+// 1. Default-deny on all unlisted collections.
+// 2. Strict least-privilege for Customers and Workers.
+// 3. Admin authorization validated exclusively through /admins/{uid} membership.
+// 4. Client-side role manipulation in DevTools CANNOT bypass database rules.
+// 5. Immutable logs for security events and audit records.
+// ============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ------------------------------------------------------------------------
+    // Helper Functions
+    // ------------------------------------------------------------------------
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isUser(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    // Authoritative Admin Validation
+    // Checks that:
+    // a) User is authenticated
+    // b) Document exists in /admins/{uid}
+    // c) Admin document is marked active == true
+    // d) Admin document role is "admin"
+    function isAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == "admin";
+    }
+
+    // ------------------------------------------------------------------------
+    // 1. Admin Membership Collection: /admins/{uid}
+    // ------------------------------------------------------------------------
+    // Security Boundary:
+    // - Authenticated users can only read their OWN admin document to verify membership.
+    // - Active admins can list / inspect admin records.
+    // - Normal customers and workers CANNOT write, create, or modify any admin document.
+    // - Writes are blocked client-side; initial admins must be bootstrapped via Console/backend.
+    // ------------------------------------------------------------------------
+    match /admins/{uid} {
+      allow read: if isAuthenticated() && (request.auth.uid == uid || isAdmin());
+      allow write: if false; // Deny all browser-side creation or modification
+    }
+
+    // ------------------------------------------------------------------------
+    // 2. User Accounts: /users/{uid}
+    // ------------------------------------------------------------------------
+    // - Customers and workers can read their own user document.
+    // - Admins can read all user records.
+    // - Users can register their own document, but cannot self-assign role "admin".
+    // - Role and UID are immutable upon update.
+    // ------------------------------------------------------------------------
+    match /users/{uid} {
+      allow read: if isUser(uid) || isAdmin();
+      allow create: if isUser(uid) &&
+                    request.resource.data.uid == uid &&
+                    request.resource.data.role in ['customer', 'worker'];
+      allow update: if (isUser(uid) &&
+                       request.resource.data.uid == resource.data.uid &&
+                       request.resource.data.role == resource.data.role) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ------------------------------------------------------------------------
+    // 3. Worker Profiles: /workers/{workerId}
+    // ------------------------------------------------------------------------
+    // - Public read for search and service discovery.
+    // - Workers can update profile details (availability, bio, experience, phone).
+    // - Workers CANNOT self-approve (isVerified) or change moderation status.
+    // - Admins have full moderation privileges (approve, suspend, restore).
+    // ------------------------------------------------------------------------
+    match /workers/{workerId} {
+      allow read: if true;
+      allow create: if (isAuthenticated() && request.auth.uid == workerId) || isAdmin();
+      allow update: if (isAuthenticated() && request.auth.uid == workerId &&
+                       request.resource.data.isVerified == resource.data.isVerified &&
+                       request.resource.data.status == resource.data.status) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ------------------------------------------------------------------------
+    // 4. Service Requests: /requests/{requestId}
+    // ------------------------------------------------------------------------
+    // - Customers can create requests where customerId matches their auth UID.
+    // - Private read: only the requesting customer, assigned worker, or admin.
+    // - Customer can cancel their own pending request.
+    // - Assigned worker can accept / complete assigned requests.
+    // ------------------------------------------------------------------------
+    match /requests/{requestId} {
+      allow read: if isAuthenticated() && (
+        resource.data.customerId == request.auth.uid ||
+        resource.data.workerUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() &&
+                    request.resource.data.customerId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        (resource.data.customerId == request.auth.uid && request.resource.data.customerId == resource.data.customerId) ||
+        (resource.data.workerUid == request.auth.uid && request.resource.data.customerId == resource.data.customerId) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+
+    // ------------------------------------------------------------------------
+    // 5. Customer Reviews: /reviews/{reviewId}
+    // ------------------------------------------------------------------------
+    // - Published reviews are public for transparency.
+    // - Customers can create reviews where customerId matches their auth UID.
+    // - Workers can reply to reviews on their profile (status cannot be changed).
+    // - Admins can moderate reviews (publish, hide, flag).
+    // ------------------------------------------------------------------------
+    match /reviews/{reviewId} {
+      allow read: if resource.data.status == "published" ||
+                  isAdmin() ||
+                  (isAuthenticated() && resource.data.customerId == request.auth.uid);
+      allow create: if isAuthenticated() &&
+                    request.resource.data.customerId == request.auth.uid;
+      allow update: if (isAuthenticated() &&
+                       resource.data.workerUid == request.auth.uid &&
+                       request.resource.data.customerId == resource.data.customerId &&
+                       request.resource.data.status == resource.data.status) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ------------------------------------------------------------------------
+    // 6. Trust & Safety Reports: /reports/{reportId}
+    // ------------------------------------------------------------------------
+    // - Authenticated users can submit reports (reporterUid must match auth UID).
+    // - ONLY administrators can read, update status, resolve, or dismiss reports.
+    // - Normal customers/workers cannot list or view reports.
+    // ------------------------------------------------------------------------
+    match /reports/{reportId} {
+      allow create: if isAuthenticated() &&
+                    request.resource.data.reporterUid == request.auth.uid;
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ------------------------------------------------------------------------
+    // 7. In-App Private Chat: /chats/{chatId} & /messages/{messageId}
+    // ------------------------------------------------------------------------
+    // - Read/Write strictly restricted to conversation participants.
+    // - Admins have inspection capability for trust & safety dispute resolution.
+    // ------------------------------------------------------------------------
+    match /chats/{chatId} {
+      allow read: if isAuthenticated() && (
+        request.auth.uid in resource.data.participants || isAdmin()
+      );
+      allow create: if isAuthenticated() &&
+                    request.auth.uid in request.resource.data.participants;
+      allow update: if isAuthenticated() && (
+        request.auth.uid in resource.data.participants || isAdmin()
+      );
+
+      match /messages/{messageId} {
+        allow read: if isAuthenticated() && (
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants || isAdmin()
+        );
+        allow create: if isAuthenticated() &&
+                      request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants &&
+                      request.resource.data.senderId == request.auth.uid;
+        allow update, delete: if isAdmin();
+      }
+    }
+
+    // ------------------------------------------------------------------------
+    // 8. Security Events: /securityEvents/{eventId}
+    // ------------------------------------------------------------------------
+    // - App clients can write security signals (create-only).
+    // - ONLY administrators can read security event logs.
+    // - Modifying or deleting security events is forbidden (immutable log).
+    // ------------------------------------------------------------------------
+    match /securityEvents/{eventId} {
+      allow create: if true;
+      allow read: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // 9. Administrative Audit Trail: /auditLogs/{auditId}
+    // ------------------------------------------------------------------------
+    // - Privileged actions log here (create-only by active admins).
+    // - ONLY administrators can read audit logs.
+    // - Tamper-resistant: updating or deleting audit logs is strictly denied.
+    // ------------------------------------------------------------------------
+    match /auditLogs/{auditId} {
+      allow create: if isAdmin() && request.resource.data.adminUid == request.auth.uid;
+      allow read: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // Default Fallback: Deny Everything Else
+    // ------------------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

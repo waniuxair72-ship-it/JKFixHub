@@ -47,6 +47,44 @@ No client-side measure can guarantee that an application will never be compromis
 - **Admin Authentication Isolation:** Admin access remains strictly isolated. Public registration and login interfaces offer only Customer and Worker options. Production admin authorization must require Firebase Authentication with custom admin claims assigned by a trusted backend, validated by Firestore Security Rules, and fortified with Multi-Factor Authentication (MFA).
 - **Graceful Prototype Fallback:** If Firebase project credentials are not yet configured, the system provides an explicitly labeled "Demo Preview" fallback mode so development and manual testing can continue without compromising security boundaries.
 
+## Cloud Firestore & Admin Authorization security architecture (Step 17)
+
+- **Server-Side Authorization Boundary:** Client-side role variables (`user.role`, `currentUser`, `isAdmin`, capability lists) are strictly UX conveniences. They are NEVER treated as security boundaries. All access to data is enforced on the Google Cloud / Firestore servers via `firestore.rules`. Tampering with client memory, executing JavaScript console commands, modifying DOM attributes, or setting mock cookies has ZERO impact on Firestore data access. If an unauthorized user queries a restricted collection, the Firestore database engine denies the request at the protocol level.
+- **Authoritative Admin Authorization Pipeline:**
+  1. User authenticates via Firebase Authentication (`admin.html`).
+  2. Client receives verified Firebase UID (`request.auth.uid`).
+  3. Client queries Firestore document `/admins/{uid}`.
+  4. `firestore.rules` verifies:
+     - `exists(/databases/$(database)/documents/admins/$(request.auth.uid))`
+     - `data.active == true`
+     - `data.role == "admin"`
+  5. If valid, Admin Panel loads; otherwise, session is immediately terminated with `signOut()` and a generic access denied message is displayed.
+- **Zero Client-Side Admin Mutation:** Under `firestore.rules`, all write operations to `/admins/{uid}` are blocked (`allow write: if false`). No browser client, customer, or worker can write to, create, or alter an admin document. Admins cannot self-promote, and customers cannot escalate privileges.
+- **First Administrator Bootstrap Procedure (Firebase Console):**
+  To establish the platform's initial administrator securely without introducing client-side backdoors:
+  1. Open the [Firebase Console](https://console.firebase.google.com/) for project `jkfixhub`.
+  2. Under **Authentication** -> **Users**, click **Add user** (or choose a dedicated administrative email, e.g., `admin@jkfixhub.com`).
+  3. Copy the newly generated **User UID** (28-character unique identifier).
+  4. Under **Cloud Firestore** -> **Data**, click **Start collection**:
+     - **Collection ID**: `admins`
+     - **Document ID**: `<Paste the User UID>`
+  5. Add the following fields to the document:
+     - `uid`: string (equal to the User UID)
+     - `email`: string (e.g. `admin@jkfixhub.com`)
+     - `role`: string `"admin"`
+     - `active`: boolean `true`
+     - `displayName`: string `"Platform Administrator"`
+     - `createdBy`: string `"system-bootstrap"`
+     - `createdAt`: timestamp (current date/time)
+     - `lastLoginAt`: timestamp (current date/time)
+  6. Deploy `firestore.rules` to Firebase:
+     `firebase deploy --only firestore:rules`
+  7. Navigate directly to `admin.html` and sign in with the admin credentials.
+- **Separation of Roles & Existing Accounts:** The test customer account (`waniuxair72@gmail.com`) was intentionally NOT given admin access. In accordance with the principle of least privilege, customer and worker identities remain completely segregated from administrative identities.
+- **Dedicated Admin Entry Point (`admin.html`):** The administration interface is physically separated into `admin.html` with its own script (`js/admin-app.js`) and stylesheet (`css/admin.css`). The public application (`index.html`) contains no Admin buttons, links, or navigation options. Attempting to access `#admin` in `index.html` displays a generic denial notice (`adminAccessDeniedModal`) and scrubs `#admin` from the browser history via `history.replaceState`.
+- **Append-Only Tamper-Resistant Audit Trail (`/auditLogs`):** Privileged operations (worker approval, suspension, restoration, report resolution, review moderation) automatically write an immutable audit record to `/auditLogs` with admin UID, action, target, timestamp, and outcome. In `firestore.rules`, audit logs can only be created by verified administrators, can only be read by administrators, and cannot be modified or deleted (`allow update, delete: if false`).
+- **Sanitized Error Messaging:** If an unauthorized user attempts to log in via `admin.html`, the system displays: *"Access unavailable. This area is restricted to authorized administrators."* The system never leaks whether an account exists, whether an email is registered, or internal database schema details.
+
 ## Privacy requirements
 
 ### Customers
