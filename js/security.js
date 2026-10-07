@@ -26,6 +26,7 @@ export const CAPABILITIES = Object.freeze({
     "reportUser"
   ]),
   admin: Object.freeze([
+    "accessAdmin",
     "manageWorkers",
     "manageUsers",
     "manageReports",
@@ -34,6 +35,7 @@ export const CAPABILITIES = Object.freeze({
     "manageDistricts",
     "manageSuspensions",
     "viewSecurityEvents",
+    "viewAuditLog",
     "manageSystemSettings"
   ])
 });
@@ -55,7 +57,22 @@ export const SECURITY_EVENT_TYPES = Object.freeze([
   "REVIEW_REPLY_SUBMITTED",
   "REPORT_SUBMITTED",
   "ABUSE_SIGNAL_TRIGGERED",
-  "ABUSE_RESTRICTION_APPLIED"
+  "ABUSE_RESTRICTION_APPLIED",
+  "ADMIN_ACCESS_DENIED",
+  "ADMIN_ACCESS_GRANTED",
+  "UNAUTHORIZED_ADMIN_ACTION",
+  "WORKER_STATUS_CHANGED",
+  "WORKER_APPROVAL_ACTION",
+  "REPORT_MODERATION_ACTION",
+  "REVIEW_MODERATION_ACTION",
+  "ADMIN_LOGOUT",
+  "INVALID_ADMIN_TARGET",
+  "AUTH_STATE_CHANGED",
+  "FIREBASE_AUTH_ERROR",
+  "REGISTER_ATTEMPT",
+  "REGISTER_SUCCESS",
+  "EMAIL_VERIFICATION_SENT",
+  "EMAIL_VERIFICATION_FAILED"
 ]);
 
 const MAX_SECURITY_EVENTS = 50;
@@ -153,6 +170,50 @@ export function clearSecurityEvents() {
   securityEvents.length = 0;
 }
 
+export function validatePassword(password, confirmPassword = null) {
+  if (typeof password !== "string") {
+    return { isValid: false, errorKey: "invalidPassword" };
+  }
+  if (password.length < 6) {
+    return { isValid: false, errorKey: "passwordTooShort" };
+  }
+  if (confirmPassword !== null && password !== confirmPassword) {
+    return { isValid: false, errorKey: "passwordsDoNotMatch" };
+  }
+  return { isValid: true, errorKey: null };
+}
+
+export function mapFirebaseAuthError(error) {
+  const code = error?.code || "";
+  switch (code) {
+    case "auth/invalid-credential":
+    case "auth/user-not-found":
+    case "auth/wrong-password":
+      return "Email or password is incorrect.";
+    case "auth/email-already-in-use":
+      return "An account with this email already exists.";
+    case "auth/weak-password":
+      return "Please choose a stronger password (at least 6 characters).";
+    case "auth/invalid-email":
+      return "Please enter a valid email address.";
+    case "auth/too-many-requests":
+      return "Too many attempts. Please try again later.";
+    case "auth/network-request-failed":
+      return "Network connection error. Please try again.";
+    case "auth/user-disabled":
+      return "This account has been disabled.";
+    case "auth/requires-recent-login":
+      return "Please sign in again to continue.";
+    case "auth/operation-not-allowed":
+      return "Email/password sign-in is not enabled for this project.";
+    default:
+      if (typeof error?.message === "string" && error.message.startsWith("SAFE:")) {
+        return error.message.replace("SAFE:", "").trim();
+      }
+      return "Authentication could not be completed. Please try again.";
+  }
+}
+
 export function getSafeErrorMessage(code) {
   const messages = {
     invalidName: "Enter a name using letters and common punctuation.",
@@ -167,7 +228,16 @@ export function getSafeErrorMessage(code) {
     invalidReportReason: "Choose a valid reason for this report.",
     duplicateReport: "You have already submitted a report for this target.",
     invalidReply: "Enter a reply between 2 and 600 characters.",
-    actionRestricted: "Action temporarily paused. Please slow down and try again shortly."
+    actionRestricted: "Action temporarily paused. Please slow down and try again shortly.",
+    accessUnavailable: "Access unavailable.",
+    unauthorizedAdmin: "Access unavailable.",
+    invalidAdminTarget: "Invalid target.",
+    invalidEmail: "Please enter a valid email address.",
+    invalidPassword: "Password must be at least 6 characters long.",
+    passwordTooShort: "Password must be at least 6 characters long.",
+    passwordsDoNotMatch: "Passwords do not match.",
+    invalidDistrict: "Please choose a valid district.",
+    firebaseNotConfigured: "Firebase Authentication is in preview/demo mode."
   };
   return messages[code] || "Something went wrong. Please try again.";
 }

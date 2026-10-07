@@ -50,7 +50,7 @@ export function openReportModal({ targetType, targetId, targetLabel = "" }) {
   if (!isAuthenticated() || !user || !hasCapability(user.role, "reportUser")) {
     recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || null);
     if (toastHandler) {
-      toastHandler("Please continue with a demo account to submit reports.");
+      toastHandler("Please sign in to submit a safety report.");
     }
     openModal("authModal");
     return false;
@@ -131,7 +131,7 @@ function handleReportSubmit(event) {
   closeModal("reportModal");
 
   if (toastHandler) {
-    toastHandler("Report received. Our moderation team will review this demo report.");
+    toastHandler("Report received. Our moderation team will review the submitted details.");
   }
 }
 

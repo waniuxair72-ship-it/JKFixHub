@@ -53,7 +53,7 @@ function installCustomerEntryPoints() {
   summary.hidden = true;
   heading.className = "customer-account-request-heading";
   setTextContent(title, "Your Requests");
-  setTextContent(note, "Session demo");
+  setTextContent(note, "Active session");
   heading.append(title, note);
   statistics.id = "customerAccountRequestStatistics";
   statistics.className = "customer-account-request-statistics";
@@ -120,7 +120,7 @@ function buildRequestCard(request) {
   setTextContent(description, request.description);
   metadata.className = "customer-request-card-meta";
   setTextContent(district, request.district);
-  setTextContent(timestamp, `Demo timestamp · ${new Date(request.createdAt).toLocaleString()}`);
+  setTextContent(timestamp, `Created · ${new Date(request.createdAt).toLocaleString()}`);
   metadata.append(district, timestamp);
   details.append(worker, service, description, metadata);
   status.className = `customer-request-status status-${request.status.toLowerCase()}`;
@@ -233,7 +233,7 @@ function showRequestDetails(id) {
     ["customerRequestDetailDescription", request.description],
     ["customerRequestDetailLocation", request.customerLocation],
     ["customerRequestDetailStatus", request.status],
-    ["customerRequestDetailCreatedAt", `Demo timestamp · ${new Date(request.createdAt).toLocaleString()}`]
+    ["customerRequestDetailCreatedAt", `Created · ${new Date(request.createdAt).toLocaleString()}`]
   ];
   for (const [id, value] of fields) {
     setTextContent(document.getElementById(id), value);

@@ -88,10 +88,10 @@ function installAssignedRequestsSection() {
   section.className = "worker-dashboard-section";
   heading.className = "worker-dashboard-section-heading";
   titleWrap.append(label, title);
-  setTextContent(label, "Demo request workflow");
+  setTextContent(label, "Request workflow");
   label.className = "section-label";
   setTextContent(title, "Customer Requests");
-  setTextContent(note, "Accept is a reversible session-only demo action");
+  setTextContent(note, "Accepted requests open direct communication with customer");
   note.className = "dashboard-demo-note";
   heading.append(titleWrap, note);
   requests.id = "workerAssignedCustomerRequests";
@@ -119,7 +119,7 @@ function installWorkerReviewsSection() {
   setTextContent(label, "Customer Feedback");
   label.className = "section-label";
   setTextContent(title, "Reviews Received");
-  setTextContent(note, "Session demo reviews");
+  setTextContent(note, "Customer feedback");
   note.className = "dashboard-demo-note";
   heading.append(titleWrap, note);
   reviews.id = "workerDashboardReviews";
@@ -135,12 +135,27 @@ function getActiveWorker() {
   }
 
   const user = getCurrentUser();
-  const worker = user ? getWorkerById(user.workerId) : null;
-  if (!worker) {
-    recordSecurityEvent("INVALID_REQUEST", user?.role || null);
-    return null;
+  if (!user) return null;
+  if (user.workerId) {
+    const worker = getWorkerById(user.workerId);
+    if (!worker) {
+      recordSecurityEvent("INVALID_REQUEST", user.role);
+      return null;
+    }
+    return worker;
   }
-  return worker;
+  return {
+    id: user.id,
+    name: user.name,
+    service: "Pending Onboarding",
+    district: user.district || "Pending",
+    rating: "—",
+    availability: "Offline",
+    initials: user.name.slice(0, 2).toUpperCase(),
+    experience: "Pending review",
+    services: "Account pending verification",
+    about: "Newly registered worker profile pending verification."
+  };
 }
 
 function buildStatCard(label, value, key) {
@@ -183,9 +198,9 @@ function buildRequestCard(request) {
   setTextContent(title, request.customer);
   setTextContent(service, request.service);
   setTextContent(description, request.description);
-  setTextContent(customer, "Demo customer");
+  setTextContent(customer, "Customer");
   setTextContent(district, request.district);
-  setTextContent(sampleLabel, "Illustrative demo request · not saved");
+  setTextContent(sampleLabel, "Sample request");
   setTextContent(status, request.status);
   meta.append(customer, district, sampleLabel);
   main.append(title, service, description, meta);
@@ -230,7 +245,7 @@ function buildAssignedRequestCard(request) {
     acceptButton.className = "button subtle";
     acceptButton.type = "button";
     acceptButton.dataset.demoAcceptRequest = request.id;
-    setTextContent(acceptButton, "Accept · Demo only");
+    setTextContent(acceptButton, "Accept Request");
     actions.append(acceptButton);
   } else if (request.status === "Accepted") {
     const chatButton = document.createElement("button");
@@ -244,7 +259,7 @@ function buildAssignedRequestCard(request) {
     completeButton.className = "button subtle";
     completeButton.type = "button";
     completeButton.dataset.demoCompleteRequest = request.id;
-    setTextContent(completeButton, "Complete · Demo only");
+    setTextContent(completeButton, "Mark Completed");
     actions.append(completeButton);
   } else if (request.status === "Completed") {
     const completedBadge = document.createElement("span");
@@ -275,7 +290,7 @@ function renderDashboard(worker) {
     ["workerDashboardExperience", worker.experience],
     ["workerDashboardRating", `${worker.rating} ★`],
     ["workerDashboardAvailabilityLabel", worker.availability],
-    ["workerDashboardVerification", "Demo · not verified"]
+    ["workerDashboardVerification", getCurrentUser()?.isVerified ? "Verified worker" : "Pending verification"]
   ];
 
   setTextContent(initials, worker.initials);
@@ -307,7 +322,7 @@ function renderDashboard(worker) {
   } else {
     const empty = document.createElement("p");
     empty.className = "worker-dashboard-empty";
-    setTextContent(empty, "No customer-created demo requests are assigned to this worker.");
+    setTextContent(empty, "No customer requests are currently assigned to this worker.");
     assignedRequests.replaceChildren(empty);
   }
 
@@ -404,7 +419,7 @@ function handleProfileSave(event) {
   closeModal("workerProfileEditModal");
   openModal("authModal");
   renderDashboard(updated);
-  setTextContent(document.getElementById("workerDashboardFeedback"), "Demo profile updated for this session only.");
+  setTextContent(document.getElementById("workerDashboardFeedback"), "Worker profile updated successfully.");
 }
 
 export function openWorkerDashboard() {
@@ -480,7 +495,7 @@ export function initializeWorkerDashboard() {
         if (worker) renderDashboard(worker);
         setTextContent(
           document.getElementById("workerDashboardFeedback"),
-          "Demo only: this request was marked Completed in memory. Customer is now eligible to leave a review."
+          "Request marked Completed. Customer may now leave a review."
         );
       }
     }

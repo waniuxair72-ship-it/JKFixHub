@@ -14,8 +14,16 @@ import {
 } from "./security.js";
 import {
   checkAndTrackAction,
+  getRecordedAbuseSignals,
   resetAbuseSignals
 } from "./abuse.js";
+
+export const AUTH_STATUS = Object.freeze({
+  LOADING: "AUTH_LOADING",
+  AUTHENTICATED: "AUTHENTICATED",
+  SIGNED_OUT: "SIGNED_OUT",
+  ERROR: "AUTH_ERROR"
+});
 
 // ==========================================
 // #APPLICATION_STATE
@@ -24,6 +32,9 @@ const state = {
   selectedWorkerId: null,
   currentRequest: null,
   currentUser: null,
+  authStatus: AUTH_STATUS.SIGNED_OUT,
+  authError: null,
+  userProfiles: {},
   workerDemoProfiles: {},
   customerRequests: [],
   conversations: [],
@@ -31,11 +42,40 @@ const state = {
   activeConversationId: null,
   messageAttempts: {},
   reviews: [],
-  reports: []
+  reports: [],
+  workerAccountStatuses: {},
+  auditLogs: []
 };
 
 let initialized = false;
 let customerRequestSequence = 0;
+
+export function getAuthStatus() {
+  return state.authStatus;
+}
+
+export function setAuthStatus(status, error = null) {
+  if (!Object.values(AUTH_STATUS).includes(status)) {
+    throw new RangeError("Invalid auth status.");
+  }
+  state.authStatus = status;
+  state.authError = error ? String(error) : null;
+}
+
+export function getAuthError() {
+  return state.authError;
+}
+
+export function saveApplicationProfile(uid, profile) {
+  if (typeof uid !== "string" || !uid) {
+    throw new TypeError("A valid uid is required.");
+  }
+  state.userProfiles[uid] = { ...profile, updatedAt: new Date().toISOString() };
+}
+
+export function getApplicationProfile(uid) {
+  return state.userProfiles[uid] ? { ...state.userProfiles[uid] } : null;
+}
 
 const customerRequestStatuses = Object.freeze([
   "Pending",
@@ -166,21 +206,34 @@ export function setCurrentUser(user) {
   if (!user || typeof user !== "object") {
     throw new TypeError("A current user must be an object or null.");
   }
-  if (user.role !== "customer" && user.role !== "worker") {
-    throw new RangeError("The current user role must be customer or worker.");
+  if (user.role !== "customer" && user.role !== "worker" && user.role !== "admin") {
+    throw new RangeError("The current user role must be customer, worker, or admin.");
   }
   if (typeof user.id !== "string" || !user.id || typeof user.name !== "string" || !user.name) {
     throw new TypeError("A current user must have a non-empty ID and name.");
   }
-  if (!customerIdPattern.test(user.id) || !validatePersonName(user.name)) {
-    recordSecurityEvent("INVALID_REQUEST", user.role);
-    throw new TypeError("The current user ID or name is invalid.");
+  if (user.role === "admin") {
+    if (user.id !== "demo-admin-primary") {
+      recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", "tampered");
+      throw new TypeError("Invalid admin credentials.");
+    }
+    if (!validatePersonName(user.name)) {
+      recordSecurityEvent("INVALID_REQUEST", user.role);
+      throw new TypeError("The current user ID or name is invalid.");
+    }
+  } else {
+    if (!customerIdPattern.test(user.id) || !validatePersonName(user.name)) {
+      recordSecurityEvent("INVALID_REQUEST", user.role);
+      throw new TypeError("The current user ID or name is invalid.");
+    }
   }
-  if (user.role === "worker" && !Number.isSafeInteger(user.workerId)) {
-    throw new TypeError("A worker account must reference a valid worker ID.");
-  }
-  if (user.role === "worker" && !getWorkerById(user.workerId)) {
-    throw new RangeError("The worker account must reference an existing worker.");
+  if (user.role === "worker" && user.workerId !== null && user.workerId !== undefined) {
+    if (!Number.isSafeInteger(user.workerId)) {
+      throw new TypeError("A worker account must reference a valid worker ID.");
+    }
+    if (!getWorkerById(user.workerId)) {
+      throw new RangeError("The worker account must reference an existing worker.");
+    }
   }
   if (user.email !== null && user.email !== undefined && !validateEmail(user.email)) {
     throw new TypeError("The current user email is invalid.");
@@ -208,15 +261,21 @@ export function setCurrentUser(user) {
 
   state.currentUser = {
     id: user.id,
+    firebaseUid: typeof user.firebaseUid === "string" ? user.firebaseUid : (user.authProvider === "firebase" ? user.id : null),
     role: user.role,
     name: user.name,
     email: typeof user.email === "string" ? user.email : null,
+    emailVerified: Boolean(user.emailVerified),
     phone: typeof user.phone === "string" ? user.phone : null,
     photo: typeof user.photo === "string" ? user.photo : null,
     district: typeof user.district === "string" ? user.district : null,
     createdAt: typeof user.createdAt === "string" ? user.createdAt : null,
+    isVerified: Boolean(user.isVerified),
+    authProvider: user.authProvider === "firebase" ? "firebase" : "demo",
     ...(user.role === "worker" && Number.isInteger(user.workerId) ? { workerId: user.workerId } : {})
   };
+  state.authStatus = AUTH_STATUS.AUTHENTICATED;
+  state.authError = null;
 }
 
 export function clearCurrentUser() {
@@ -224,6 +283,10 @@ export function clearCurrentUser() {
   state.activeConversationId = null;
   state.reviews = [];
   state.reports = [];
+  state.workerAccountStatuses = {};
+  state.auditLogs = [];
+  state.authStatus = AUTH_STATUS.SIGNED_OUT;
+  state.authError = null;
   resetAbuseSignals();
 }
 
@@ -241,6 +304,77 @@ export function isCustomer() {
 
 export function isWorker() {
   return getUserRole() === "worker";
+}
+
+export function isAdmin() {
+  return getUserRole() === "admin";
+}
+
+export function canAccessAdmin() {
+  const user = state.currentUser;
+  if (!user || typeof user !== "object") {
+    recordSecurityEvent("ADMIN_ACCESS_DENIED", null);
+    return false;
+  }
+  if (user.role !== "admin") {
+    recordSecurityEvent("ADMIN_ACCESS_DENIED", user.role);
+    return false;
+  }
+  if (user.id !== "demo-admin-primary") {
+    recordSecurityEvent("ADMIN_ACCESS_DENIED", "tampered");
+    recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", user.role);
+    return false;
+  }
+  if (!hasCapability("admin", "accessAdmin")) {
+    recordSecurityEvent("ADMIN_ACCESS_DENIED", user.role);
+    return false;
+  }
+  return true;
+}
+
+export function canManageWorkers() {
+  return canAccessAdmin() && hasCapability("admin", "manageWorkers");
+}
+
+export function canManageReports() {
+  return canAccessAdmin() && hasCapability("admin", "manageReports");
+}
+
+export function canManageReviews() {
+  return canAccessAdmin() && hasCapability("admin", "manageReviews");
+}
+
+export function canViewSecurityEvents() {
+  return canAccessAdmin() && hasCapability("admin", "viewSecurityEvents");
+}
+
+export function canViewAuditLog() {
+  return canAccessAdmin() && hasCapability("admin", "viewAuditLog");
+}
+
+export function loginAsAdminForDemo() {
+  const adminUser = {
+    id: "demo-admin-primary",
+    role: "admin",
+    name: "Platform Administrator",
+    email: null,
+    phone: null,
+    photo: null,
+    district: null,
+    createdAt: new Date().toISOString()
+  };
+  setCurrentUser(adminUser);
+  recordSecurityEvent("ADMIN_ACCESS_GRANTED", "admin");
+  recordAuditEvent("ADMIN_LOGIN", "session", adminUser.id, "success");
+  return { ...adminUser };
+}
+
+export function logoutAdminForDemo() {
+  if (state.currentUser?.role === "admin") {
+    recordAuditEvent("ADMIN_LOGOUT", "session", state.currentUser.id, "success");
+    recordSecurityEvent("ADMIN_LOGOUT", "admin");
+  }
+  clearCurrentUser();
 }
 
 export function getWorkerById(id) {
@@ -784,6 +918,8 @@ export function resetDemoChatState() {
   state.messageAttempts = {};
   state.reviews = [];
   state.reports = [];
+  state.workerAccountStatuses = {};
+  state.auditLogs = [];
   resetAbuseSignals();
 }
 
@@ -1045,4 +1181,218 @@ export function getReportsByReporter(reporterId) {
   return state.reports
     .filter((item) => item.reporterId === reporterId)
     .map(copyReport);
+}
+
+// ==========================================
+// #ADMIN_STATE_AND_OPERATIONS
+// ==========================================
+
+const MAX_AUDIT_LOGS = 100;
+
+export function recordAuditEvent(action, targetType, targetId, result = "success") {
+  const user = state.currentUser;
+  const adminId = user?.role === "admin" ? user.id : "system";
+  const entry = {
+    id: `aud-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    adminId,
+    action: String(action),
+    targetType: String(targetType),
+    targetId: String(targetId),
+    timestamp: new Date().toISOString(),
+    result: String(result)
+  };
+  state.auditLogs.unshift(entry);
+  if (state.auditLogs.length > MAX_AUDIT_LOGS) {
+    state.auditLogs.pop();
+  }
+  return { ...entry };
+}
+
+export function getAdminAuditLogs() {
+  if (!canViewAuditLog()) {
+    recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", getCurrentUser()?.role || null);
+    throw new Error("Access unavailable.");
+  }
+  return state.auditLogs.map((item) => ({ ...item }));
+}
+
+export function getAdminOverview() {
+  if (!canAccessAdmin()) {
+    recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", getCurrentUser()?.role || null);
+    throw new Error("Access unavailable.");
+  }
+  const allWorkers = getAdminWorkers();
+  const pendingApprovals = allWorkers.filter(
+    (w) => w.accountStatus === "pending_approval" || w.verificationStatus === "pending"
+  ).length;
+  const totalRequests = state.customerRequests.length;
+  const openReports = state.reports.filter((r) => r.status === "open").length;
+  const activeAbuseFlags = getRecordedAbuseSignals().length;
+  const recentAdminActions = state.auditLogs.length;
+
+  return {
+    totalWorkers: allWorkers.length,
+    pendingApprovals,
+    totalRequests,
+    openReports,
+    activeAbuseFlags,
+    recentAdminActions
+  };
+}
+
+export function getAdminWorkers() {
+  if (!canAccessAdmin()) {
+    recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", getCurrentUser()?.role || null);
+    throw new Error("Access unavailable.");
+  }
+  return getWorkers().map((worker) => {
+    const statusOverride = state.workerAccountStatuses[worker.id] || {};
+    return {
+      ...worker,
+      accountStatus: statusOverride.status || "active",
+      verificationStatus: statusOverride.verification || worker.verification || "verified"
+    };
+  });
+}
+
+export function updateWorkerStatusForDemo(workerId, newStatus) {
+  if (!canManageWorkers()) {
+    recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", getCurrentUser()?.role || null);
+    throw new Error("Access unavailable.");
+  }
+  const normalizedId = Number(workerId);
+  if (!Number.isSafeInteger(normalizedId) || !getWorkerById(normalizedId)) {
+    recordSecurityEvent("INVALID_ADMIN_TARGET", "admin");
+    throw new TypeError("Invalid worker target.");
+  }
+  const allowedStatuses = ["active", "suspended", "pending_approval"];
+  if (!allowedStatuses.includes(newStatus)) {
+    recordSecurityEvent("INVALID_REQUEST", "admin");
+    throw new RangeError("Invalid worker account status.");
+  }
+  if (!state.workerAccountStatuses[normalizedId]) {
+    state.workerAccountStatuses[normalizedId] = { status: "active", verification: "verified" };
+  }
+  state.workerAccountStatuses[normalizedId].status = newStatus;
+  recordSecurityEvent("WORKER_STATUS_CHANGED", "admin");
+  recordAuditEvent("WORKER_STATUS_CHANGED", "worker", normalizedId, newStatus);
+  return { ...state.workerAccountStatuses[normalizedId] };
+}
+
+export function updateWorkerApprovalForDemo(workerId, approved) {
+  if (!canManageWorkers()) {
+    recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", getCurrentUser()?.role || null);
+    throw new Error("Access unavailable.");
+  }
+  const normalizedId = Number(workerId);
+  if (!Number.isSafeInteger(normalizedId) || !getWorkerById(normalizedId)) {
+    recordSecurityEvent("INVALID_ADMIN_TARGET", "admin");
+    throw new TypeError("Invalid worker target.");
+  }
+  if (!state.workerAccountStatuses[normalizedId]) {
+    state.workerAccountStatuses[normalizedId] = { status: "active", verification: "verified" };
+  }
+  if (approved) {
+    state.workerAccountStatuses[normalizedId].status = "active";
+    state.workerAccountStatuses[normalizedId].verification = "verified";
+  } else {
+    state.workerAccountStatuses[normalizedId].status = "pending_approval";
+    state.workerAccountStatuses[normalizedId].verification = "pending";
+  }
+  recordSecurityEvent("WORKER_APPROVAL_ACTION", "admin");
+  recordAuditEvent("WORKER_APPROVAL_ACTION", "worker", normalizedId, approved ? "approved" : "unapproved");
+  return { ...state.workerAccountStatuses[normalizedId] };
+}
+
+export function getAdminRequests() {
+  if (!canAccessAdmin()) {
+    recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", getCurrentUser()?.role || null);
+    throw new Error("Access unavailable.");
+  }
+  return state.customerRequests.map((req) => ({
+    id: req.id,
+    customerId: req.customerId,
+    customerName: req.customerName,
+    workerId: req.workerId,
+    workerName: req.workerName,
+    service: req.service,
+    district: req.district,
+    status: req.status,
+    createdAt: req.createdAt
+  }));
+}
+
+export function getAdminReports() {
+  if (!canAccessAdmin()) {
+    recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", getCurrentUser()?.role || null);
+    throw new Error("Access unavailable.");
+  }
+  return state.reports.map((r) => ({ ...r }));
+}
+
+export function updateReportStatusForDemo(reportId, newStatus) {
+  if (!canManageReports()) {
+    recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", getCurrentUser()?.role || null);
+    throw new Error("Access unavailable.");
+  }
+  const allowedStatuses = ["open", "under_review", "resolved", "dismissed"];
+  if (!allowedStatuses.includes(newStatus)) {
+    recordSecurityEvent("INVALID_REQUEST", "admin");
+    throw new RangeError("Invalid report status.");
+  }
+  const report = state.reports.find((r) => r.id === reportId);
+  if (!report) {
+    recordSecurityEvent("INVALID_ADMIN_TARGET", "admin");
+    throw new Error("Report not found.");
+  }
+  report.status = newStatus;
+  recordSecurityEvent("REPORT_MODERATION_ACTION", "admin");
+  recordAuditEvent("REPORT_MODERATION_ACTION", "report", reportId, newStatus);
+  return { ...report };
+}
+
+export function getAdminReviews() {
+  if (!canAccessAdmin()) {
+    recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", getCurrentUser()?.role || null);
+    throw new Error("Access unavailable.");
+  }
+  return state.reviews.map((rev) => {
+    const isReported = state.reports.some((rep) => rep.targetType === "review" && rep.targetId === rev.id);
+    return {
+      ...rev,
+      isReported
+    };
+  });
+}
+
+export function updateReviewStatusForDemo(reviewId, newStatus) {
+  if (!canManageReviews()) {
+    recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", getCurrentUser()?.role || null);
+    throw new Error("Access unavailable.");
+  }
+  const allowedStatuses = ["published", "hidden", "flagged"];
+  if (!allowedStatuses.includes(newStatus)) {
+    recordSecurityEvent("INVALID_REQUEST", "admin");
+    throw new RangeError("Invalid review status.");
+  }
+  const review = state.reviews.find((r) => r.id === reviewId);
+  if (!review) {
+    recordSecurityEvent("INVALID_ADMIN_TARGET", "admin");
+    throw new Error("Review not found.");
+  }
+  review.status = newStatus;
+  recordSecurityEvent("REVIEW_MODERATION_ACTION", "admin");
+  recordAuditEvent("REVIEW_MODERATION_ACTION", "review", reviewId, newStatus);
+  return { ...review };
+}
+
+export function getAdminSecurityOverview() {
+  if (!canViewSecurityEvents()) {
+    recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", getCurrentUser()?.role || null);
+    throw new Error("Access unavailable.");
+  }
+  return {
+    events: getSecurityEvents(),
+    abuseSignals: getRecordedAbuseSignals()
+  };
 }

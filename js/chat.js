@@ -61,13 +61,13 @@ function renderConversation(conversation) {
   setTextContent(document.getElementById("chatParticipantName"), headerName);
   setTextContent(document.getElementById("chatService"), conversation.service);
   setTextContent(document.getElementById("chatDistrict"), conversation.district);
-  setTextContent(document.getElementById("chatRequestStatus"), "Accepted · Demo only");
+  setTextContent(document.getElementById("chatRequestStatus"), "Accepted · Active");
 
   const messageList = document.getElementById("chatMessages");
   const messages = getConversationMessages(conversation.id);
   messageList.replaceChildren(...messages.map((message) => buildMessage(message, currentUser)));
   messageList.scrollTop = messageList.scrollHeight;
-  setChatFeedback(messages.length ? "" : "Chat is open for this accepted demo request.");
+  setChatFeedback(messages.length ? "" : "Direct communication channel is open.");
   updateMessageCounter();
 }
 
@@ -164,7 +164,7 @@ function handleChatActions(event) {
     }
     openWorkerDashboard();
     openModal("authModal");
-    setTextContent(document.getElementById("workerDashboardFeedback"), "Demo only: this request was marked Accepted in memory.");
+    setTextContent(document.getElementById("workerDashboardFeedback"), "Request marked Accepted. Direct chat is now open.");
     return;
   }
 

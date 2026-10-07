@@ -13,6 +13,7 @@ import { initializeCustomerRequests } from "./customer-requests.js";
 import { initializeChat } from "./chat.js";
 import { initializeReviews } from "./reviews.js";
 import { initializeReports } from "./reports.js";
+import { initializeAdminDashboard } from "./admin-dashboard.js";
 
 // ==========================================
 // #UTILITY
@@ -74,6 +75,7 @@ function initializeApp() {
   initializeChat();
   initializeReviews();
   initializeReports({ showToast });
+  initializeAdminDashboard({ showToast });
   initializeRevealObserver();
   initializePointerMotion();
 }

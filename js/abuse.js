@@ -193,3 +193,20 @@ export function resetAbuseSignals() {
   recordedSignals.length = 0;
 }
 
+export function getRecordedAbuseSignals() {
+  return recordedSignals.map((signal) => ({ ...signal }));
+}
+
+export function getActiveRestrictionsCount() {
+  const now = Date.now();
+  let count = 0;
+  for (const [key, restriction] of activeRestrictions.entries()) {
+    if (now < restriction.expiresAt) {
+      count += 1;
+    } else {
+      activeRestrictions.delete(key);
+    }
+  }
+  return count;
+}
+

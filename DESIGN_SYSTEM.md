@@ -1,6 +1,6 @@
-# JKFixHub Design System
+# [JK] FixHub Design System
 
-This document is the source of truth for JKFixHub's visual language. Keep it synchronized with the shipped UI whenever visual decisions change. The implementation currently lives in `css/polish.css`, with semantic content and the interactive demo in `index.html`.
+This document is the source of truth for [JK] FixHub's visual language. Keep it synchronized with the shipped UI whenever visual decisions change. The implementation currently lives in `css/polish.css`, with semantic content in `index.html`.
 
 ## Product character
 

@@ -44,11 +44,11 @@ export function openModal(id) {
 }
 
 function getFeatureTitle(feature = "Service requests") {
-  if (feature === "Request Service") return "Service requests are not connected yet.";
-  if (feature === "Contact") return "Contact details are not available yet.";
-  if (feature === "Worker registration") return "Worker registration is not connected yet.";
-  if (feature === "Safety controls") return "Safety controls are currently in development.";
-  return `${feature} is not connected yet.`;
+  if (feature === "Request Service") return "This feature is currently unavailable.";
+  if (feature === "Contact") return "This feature isn't available yet.";
+  if (feature === "Worker registration") return "Worker registration isn't available yet.";
+  if (feature === "Safety controls") return "This feature is currently unavailable.";
+  return `${feature} is currently unavailable.`;
 }
 
 export function openMaintenanceNotice(feature = "Service requests") {
@@ -106,7 +106,7 @@ function openWorkerProfile(id) {
   }
 
   about.className = "profile-about";
-  setTextContent(aboutTitle, "About this demo profile");
+  setTextContent(aboutTitle, "About this profile");
   setTextContent(aboutText, worker.about);
   about.append(aboutTitle, aboutText);
   details.append(about);
@@ -192,7 +192,7 @@ function initializeModalHandlers(showToast) {
       }
 
       closeModal("registrationModal");
-      showToast("Prototype profile preview ready");
+      showToast("Profile preview ready");
       openMaintenanceNotice("Worker registration");
     });
   }

@@ -54,7 +54,7 @@ function buildWorkerCard(worker) {
   setTextContent(name, worker.name);
   setTextContent(service, worker.service);
   badge.className = "demo-badge";
-  badge.textContent = "Demo profile";
+  badge.textContent = "Sample profile";
   identity.append(name, service, badge);
   top.append(avatar, identity);
 
