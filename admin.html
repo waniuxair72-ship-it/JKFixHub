@@ -10,6 +10,14 @@
     <link rel="stylesheet" href="css/admin.css" />
   </head>
   <body class="admin-body">
+    <!-- Explicit Loading Screen (Visible during background authorization check) -->
+    <div id="adminAuthLoading" class="admin-auth-loading-screen" role="status" aria-live="polite" hidden>
+      <div class="admin-auth-loading-card">
+        <div class="admin-loading-spinner" aria-hidden="true"></div>
+        <p id="adminAuthLoadingMessage">Verifying administrator access...</p>
+      </div>
+    </div>
+
     <!-- #ADMIN_LOGIN_VIEW -->
     <main id="adminLoginSection" class="admin-login-screen">
       <div class="admin-login-card">
@@ -64,65 +72,8 @@
       </div>
     </main>
 
-    <!-- #ADMIN_APP_SHELL -->
-    <div id="adminAppSection" class="admin-shell" hidden>
-      <!-- Topbar -->
-      <header class="admin-topbar">
-        <div class="admin-topbar-left">
-          <div class="admin-brand-logo">
-            <span class="admin-brand-mark">JK</span>
-            <span class="admin-brand-title">FixHub</span>
-          </div>
-          <span class="admin-badge-privileged">Platform Administration</span>
-        </div>
-
-        <div class="admin-topbar-right">
-          <div class="admin-session-badge">
-            <span class="admin-status-dot"></span>
-            <span id="adminIdentityDisplay">Platform Administrator</span>
-          </div>
-          <button id="adminSignOutBtn" type="button" class="admin-btn-subtle">
-            Sign Out
-          </button>
-        </div>
-      </header>
-
-      <!-- Main Layout: Sidebar + Content -->
-      <div class="admin-layout">
-        <!-- Sidebar Navigation -->
-        <nav class="admin-sidebar" aria-label="Admin Navigation">
-          <button type="button" class="admin-nav-item active" data-admin-tab="dashboard">
-            <span>Dashboard</span>
-          </button>
-          <button type="button" class="admin-nav-item" data-admin-tab="workers">
-            <span>Workers</span>
-          </button>
-          <button type="button" class="admin-nav-item" data-admin-tab="customers">
-            <span>Customers</span>
-          </button>
-          <button type="button" class="admin-nav-item" data-admin-tab="requests">
-            <span>Requests</span>
-          </button>
-          <button type="button" class="admin-nav-item" data-admin-tab="reports">
-            <span>Reports</span>
-          </button>
-          <button type="button" class="admin-nav-item" data-admin-tab="reviews">
-            <span>Reviews</span>
-          </button>
-          <button type="button" class="admin-nav-item" data-admin-tab="security">
-            <span>Security &amp; Abuse</span>
-          </button>
-          <button type="button" class="admin-nav-item" data-admin-tab="audit">
-            <span>Audit Log</span>
-          </button>
-        </nav>
-
-        <!-- Main Content Area -->
-        <main class="admin-content" id="adminMainContent">
-          <!-- Views rendered dynamically by js/admin-app.js -->
-        </main>
-      </div>
-    </div>
+    <!-- #ADMIN_APP_SHELL CONTAINER (EMPTY by default; mounted ONLY after verified admin authorization) -->
+    <div id="adminAppSection" hidden></div>
 
     <!-- #ADMIN_ACTION_MODAL -->
     <div id="adminActionModal" class="admin-modal-backdrop" hidden>

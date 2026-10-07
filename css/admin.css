@@ -3,6 +3,11 @@
    Adheres to DESIGN_SYSTEM.md: calm, natural tech, ivory/charcoal/forest palette.
    ============================================================================ */
 
+/* Fail-Closed Utility */
+[hidden] {
+  display: none !important;
+}
+
 /* Page container */
 .admin-body {
   margin: 0;
@@ -13,6 +18,52 @@
   font-family: var(--font-sans, "Segoe UI", "Helvetica Neue", Arial, sans-serif);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+}
+
+/* ----------------------------------------------------------------------------
+   ADMIN AUTHENTICATION & AUTHORIZATION LOADING SCREEN
+   ---------------------------------------------------------------------------- */
+.admin-auth-loading-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: radial-gradient(circle at 50% 20%, #ebece5 0%, #f3f2ed 70%);
+}
+
+.admin-auth-loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  background: var(--color-surface, #fbfaf6);
+  border: 1px solid var(--color-border-strong, #b8c3b8);
+  border-radius: var(--radius-lg, 24px);
+  padding: 36px 48px;
+  box-shadow: var(--shadow-lg, 0 28px 70px rgba(34, 43, 35, 0.13));
+}
+
+.admin-loading-spinner {
+  width: 38px;
+  height: 38px;
+  border: 3px solid rgba(49, 94, 72, 0.2);
+  border-top-color: var(--color-primary, #315e48);
+  border-radius: 50%;
+  animation: adminSpin 0.8s linear infinite;
+}
+
+@keyframes adminSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+#adminAuthLoadingMessage {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-ink, #242a26);
 }
 
 /* ----------------------------------------------------------------------------

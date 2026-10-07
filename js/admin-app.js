@@ -86,6 +86,11 @@ function showConfirmModal({ title, body, confirmText = "Confirm", onConfirm }) {
 // View Rendering Engine
 // ----------------------------------------------------------------------------
 async function renderActiveView() {
+  if (!currentAdmin || currentAdmin.role !== "admin" || currentAdmin.active !== true) {
+    unmountAdminShell();
+    return;
+  }
+
   const container = document.getElementById("adminMainContent");
   if (!container) return;
 
@@ -992,27 +997,177 @@ async function renderAuditLogView(container) {
 }
 
 // ----------------------------------------------------------------------------
-// Application Lifecycle & Event Binding
+// Application Lifecycle, Dynamic Shell Mounting & Event Binding
 // ----------------------------------------------------------------------------
-function handleAuthStateChange(adminSession) {
-  const loginSection = document.getElementById("adminLoginSection");
+function mountAdminShell(adminSession) {
   const appSection = document.getElementById("adminAppSection");
-  const identityDisplay = document.getElementById("adminIdentityDisplay");
+  if (!appSection) return;
 
-  currentAdmin = adminSession;
+  // Clear container and attach privileged layout
+  appSection.replaceChildren();
+  appSection.className = "admin-shell";
+  appSection.hidden = false;
 
-  if (adminSession) {
+  // 1. Topbar
+  const header = document.createElement("header");
+  header.className = "admin-topbar";
+
+  const topbarLeft = document.createElement("div");
+  topbarLeft.className = "admin-topbar-left";
+
+  const brandLogo = document.createElement("div");
+  brandLogo.className = "admin-brand-logo";
+
+  const brandMark = document.createElement("span");
+  brandMark.className = "admin-brand-mark";
+  brandMark.textContent = "JK";
+
+  const brandTitle = document.createElement("span");
+  brandTitle.className = "admin-brand-title";
+  brandTitle.textContent = "FixHub";
+
+  brandLogo.appendChild(brandMark);
+  brandLogo.appendChild(brandTitle);
+
+  const privilegedBadge = document.createElement("span");
+  privilegedBadge.className = "admin-badge-privileged";
+  privilegedBadge.textContent = "Platform Administration";
+
+  topbarLeft.appendChild(brandLogo);
+  topbarLeft.appendChild(privilegedBadge);
+
+  const topbarRight = document.createElement("div");
+  topbarRight.className = "admin-topbar-right";
+
+  const sessionBadge = document.createElement("div");
+  sessionBadge.className = "admin-session-badge";
+
+  const statusDot = document.createElement("span");
+  statusDot.className = "admin-status-dot";
+
+  const identityDisplay = document.createElement("span");
+  identityDisplay.id = "adminIdentityDisplay";
+  identityDisplay.textContent = `${adminSession.displayName || "Administrator"} (${adminSession.email || adminSession.uid})`;
+
+  sessionBadge.appendChild(statusDot);
+  sessionBadge.appendChild(identityDisplay);
+
+  const signOutBtn = document.createElement("button");
+  signOutBtn.id = "adminSignOutBtn";
+  signOutBtn.type = "button";
+  signOutBtn.className = "admin-btn-subtle";
+  signOutBtn.textContent = "Sign Out";
+  signOutBtn.addEventListener("click", async () => {
+    await signOutAdmin();
+    showToast("Signed out from administration session.");
+  });
+
+  topbarRight.appendChild(sessionBadge);
+  topbarRight.appendChild(signOutBtn);
+
+  header.appendChild(topbarLeft);
+  header.appendChild(topbarRight);
+
+  // 2. Main Layout (Sidebar + Content)
+  const layout = document.createElement("div");
+  layout.className = "admin-layout";
+
+  // Sidebar Navigation
+  const nav = document.createElement("nav");
+  nav.className = "admin-sidebar";
+  nav.setAttribute("aria-label", "Admin Navigation");
+
+  const tabs = [
+    { id: "dashboard", label: "Dashboard" },
+    { id: "workers", label: "Workers" },
+    { id: "customers", label: "Customers" },
+    { id: "requests", label: "Requests" },
+    { id: "reports", label: "Reports" },
+    { id: "reviews", label: "Reviews" },
+    { id: "security", label: "Security & Abuse" },
+    { id: "audit", label: "Audit Log" }
+  ];
+
+  tabs.forEach((tab) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `admin-nav-item${tab.id === activeTab ? " active" : ""}`;
+    btn.dataset.adminTab = tab.id;
+    const span = document.createElement("span");
+    span.textContent = tab.label;
+    btn.appendChild(span);
+
+    btn.addEventListener("click", () => {
+      if (!currentAdmin || currentAdmin.role !== "admin" || currentAdmin.active !== true) return;
+      activeTab = tab.id;
+      renderActiveView();
+    });
+
+    nav.appendChild(btn);
+  });
+
+  // Main Content Area
+  const mainContent = document.createElement("main");
+  mainContent.className = "admin-content";
+  mainContent.id = "adminMainContent";
+
+  layout.appendChild(nav);
+  layout.appendChild(mainContent);
+
+  appSection.appendChild(header);
+  appSection.appendChild(layout);
+
+  renderActiveView();
+}
+
+function unmountAdminShell() {
+  const appSection = document.getElementById("adminAppSection");
+  if (appSection) {
+    appSection.replaceChildren();
+    appSection.className = "";
+    appSection.hidden = true;
+  }
+  activeTab = "dashboard";
+}
+
+function handleAuthStateChange(adminSession, meta = {}) {
+  const loginSection = document.getElementById("adminLoginSection");
+  const authLoading = document.getElementById("adminAuthLoading");
+  const loginError = document.getElementById("adminLoginError");
+  const loginErrorMsg = document.getElementById("adminLoginErrorMessage");
+
+  // 1. Loading verification in progress
+  if (meta?.isVerifying) {
+    if (authLoading) authLoading.hidden = false;
     if (loginSection) loginSection.hidden = true;
-    if (appSection) appSection.hidden = false;
+    unmountAdminShell();
+    return;
+  }
 
-    if (identityDisplay) {
-      identityDisplay.textContent = `${adminSession.displayName || "Administrator"} (${adminSession.email || adminSession.uid})`;
+  // Hide loading screen when check resolves
+  if (authLoading) authLoading.hidden = true;
+
+  // 2. Authorized Admin
+  if (adminSession && adminSession.role === "admin" && adminSession.active === true) {
+    currentAdmin = adminSession;
+    if (loginSection) loginSection.hidden = true;
+    if (loginError) loginError.hidden = true;
+
+    mountAdminShell(adminSession);
+    return;
+  }
+
+  // 3. Unauthenticated or Denied Non-Admin
+  currentAdmin = null;
+  unmountAdminShell();
+
+  if (loginSection) loginSection.hidden = false;
+
+  if (meta?.error) {
+    if (loginError && loginErrorMsg) {
+      loginErrorMsg.textContent = meta.error;
+      loginError.hidden = false;
     }
-
-    renderActiveView();
-  } else {
-    if (loginSection) loginSection.hidden = false;
-    if (appSection) appSection.hidden = true;
   }
 }
 
@@ -1054,27 +1209,6 @@ function initializeAdminApp() {
       }
     });
   }
-
-  // 3. Sign Out Button
-  const signOutBtn = document.getElementById("adminSignOutBtn");
-  if (signOutBtn) {
-    signOutBtn.addEventListener("click", async () => {
-      await signOutAdmin();
-      showToast("Signed out from administration session.");
-    });
-  }
-
-  // 4. Tab Navigation Click Delegation
-  document.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof Element)) return;
-
-    const navBtn = target.closest(".admin-nav-item");
-    if (navBtn && navBtn.dataset.adminTab) {
-      activeTab = navBtn.dataset.adminTab;
-      renderActiveView();
-    }
-  });
 }
 
 if (document.readyState === "loading") {

@@ -9,6 +9,7 @@
 // 3. If a Firebase user signs in but has no active admin document in Firestore,
 //    the session is IMMEDIATELY terminated (signOut) and access is denied.
 // 4. No sensitive information or user existence is disclosed to unauthorized users.
+// 5. Explicit verification loading state emitted while authorization check is active.
 // ==========================================
 
 import {
@@ -16,9 +17,14 @@ import {
   getFirebaseAuth,
   getFirebaseAuthMethods
 } from "./firebase-config.js";
-import { verifyAdminAuthorization, recordAdminAuditLog } from "./firestore-service.js";
+import {
+  verifyAdminAuthorization,
+  recordAdminAuditLog,
+  registerAdminSessionProvider
+} from "./firestore-service.js";
 
 let currentAdminSession = null;
+let isVerifyingAuth = false;
 const authSubscribers = new Set();
 
 /**
@@ -28,6 +34,9 @@ const authSubscribers = new Set();
 export function getAdminSession() {
   return currentAdminSession ? { ...currentAdminSession } : null;
 }
+
+// Register session provider with firestore-service to guard queries
+registerAdminSessionProvider(getAdminSession);
 
 /**
  * Checks whether an active admin session possesses a specific capability.
@@ -43,23 +52,26 @@ export function hasAdminCapability(capability) {
 
 /**
  * Subscribes to admin authentication lifecycle changes.
- * @param {Function} callback - Called with admin session object or null.
+ * @param {Function} callback - Called with (adminSession, meta) where meta = { isVerifying, error }.
  * @returns {Function} Unsubscribe function.
  */
 export function subscribeAdminAuthState(callback) {
   if (typeof callback !== "function") return () => {};
   authSubscribers.add(callback);
-  callback(currentAdminSession ? { ...currentAdminSession } : null);
+  callback(
+    currentAdminSession ? { ...currentAdminSession } : null,
+    { isVerifying: isVerifyingAuth, error: null }
+  );
 
   return () => {
     authSubscribers.delete(callback);
   };
 }
 
-function notifySubscribers(session) {
+function notifySubscribers(session, meta = { isVerifying: false, error: null }) {
   for (const cb of authSubscribers) {
     try {
-      cb(session ? { ...session } : null);
+      cb(session ? { ...session } : null, meta);
     } catch (e) {
       console.warn("[JKFixHub AdminAuth] Subscriber error:", e);
     }
@@ -84,14 +96,22 @@ export async function signInAdmin(email, password) {
   }
 
   try {
+    isVerifyingAuth = true;
+    notifySubscribers(null, { isVerifying: true, error: null });
+
     const { auth } = await initializeFirebaseClient();
     const methods = await getFirebaseAuthMethods();
 
     if (!auth || !methods || typeof methods.signInWithEmailAndPassword !== "function") {
+      isVerifyingAuth = false;
+      notifySubscribers(null, {
+        isVerifying: false,
+        error: "Access unavailable. This area is restricted to authorized administrators."
+      });
       return {
         success: false,
         admin: null,
-        error: "Authentication service unavailable."
+        error: "Access unavailable. This area is restricted to authorized administrators."
       };
     }
 
@@ -100,7 +120,12 @@ export async function signInAdmin(email, password) {
     try {
       userCredential = await methods.signInWithEmailAndPassword(auth, email.trim(), password);
     } catch (authError) {
-      // Intentionally generic error to prevent email enumeration
+      // Intentionally generic error to prevent email enumeration or timing attacks
+      isVerifyingAuth = false;
+      notifySubscribers(null, {
+        isVerifying: false,
+        error: "Access unavailable. This area is restricted to authorized administrators."
+      });
       return {
         success: false,
         admin: null,
@@ -110,6 +135,11 @@ export async function signInAdmin(email, password) {
 
     const firebaseUser = userCredential?.user;
     if (!firebaseUser || !firebaseUser.uid) {
+      isVerifyingAuth = false;
+      notifySubscribers(null, {
+        isVerifying: false,
+        error: "Access unavailable. This area is restricted to authorized administrators."
+      });
       return {
         success: false,
         admin: null,
@@ -120,9 +150,14 @@ export async function signInAdmin(email, password) {
     // 2. Authoritative check: verify document in /admins/{uid}
     const verification = await verifyAdminAuthorization(firebaseUser.uid);
 
-    if (!verification.isAuthorized || !verification.adminData) {
-      // IMMEDIATE TERMINATION: User is authenticated in Firebase, but NOT an admin.
-      // Sign out immediately to prevent unauthorized session retention.
+    if (
+      !verification.isAuthorized ||
+      !verification.adminData ||
+      verification.adminData.role !== "admin" ||
+      verification.adminData.active !== true
+    ) {
+      // IMMEDIATE TERMINATION: User is authenticated in Firebase, but NOT an authorized admin.
+      // Sign out immediately to prevent session retention.
       if (typeof methods.signOut === "function") {
         try {
           await methods.signOut(auth);
@@ -130,7 +165,11 @@ export async function signInAdmin(email, password) {
       }
 
       currentAdminSession = null;
-      notifySubscribers(null);
+      isVerifyingAuth = false;
+      notifySubscribers(null, {
+        isVerifying: false,
+        error: "Access unavailable. This area is restricted to authorized administrators."
+      });
 
       return {
         success: false,
@@ -155,7 +194,8 @@ export async function signInAdmin(email, password) {
       result: "success"
     });
 
-    notifySubscribers(currentAdminSession);
+    isVerifyingAuth = false;
+    notifySubscribers(currentAdminSession, { isVerifying: false, error: null });
 
     return {
       success: true,
@@ -164,6 +204,11 @@ export async function signInAdmin(email, password) {
     };
   } catch (err) {
     console.error("[JKFixHub AdminAuth] Unexpected login error:", err?.message || err);
+    isVerifyingAuth = false;
+    notifySubscribers(null, {
+      isVerifying: false,
+      error: "Access unavailable. This area is restricted to authorized administrators."
+    });
     return {
       success: false,
       admin: null,
@@ -197,12 +242,14 @@ export async function signOutAdmin() {
     }
 
     currentAdminSession = null;
-    notifySubscribers(null);
+    isVerifyingAuth = false;
+    notifySubscribers(null, { isVerifying: false, error: null });
     return true;
   } catch (err) {
     console.warn("[JKFixHub AdminAuth] Sign out warning:", err?.message || err);
     currentAdminSession = null;
-    notifySubscribers(null);
+    isVerifyingAuth = false;
+    notifySubscribers(null, { isVerifying: false, error: null });
     return true;
   }
 }
@@ -212,38 +259,64 @@ export async function signOutAdmin() {
  */
 export async function initializeAdminAuth() {
   try {
+    isVerifyingAuth = true;
+    notifySubscribers(null, { isVerifying: true, error: null });
+
     const { auth } = await initializeFirebaseClient();
     const methods = await getFirebaseAuthMethods();
 
-    if (auth && methods && typeof methods.onAuthStateChanged === "function") {
-      methods.onAuthStateChanged(auth, async (firebaseUser) => {
-        if (!firebaseUser) {
-          currentAdminSession = null;
-          notifySubscribers(null);
-          return;
-        }
-
-        // Verify that this existing user is actually an admin
-        const verification = await verifyAdminAuthorization(firebaseUser.uid);
-        if (verification.isAuthorized && verification.adminData) {
-          currentAdminSession = {
-            ...verification.adminData,
-            email: firebaseUser.email || verification.adminData.email
-          };
-          notifySubscribers(currentAdminSession);
-        } else {
-          // If not an admin, ensure they are signed out of the admin panel
-          if (typeof methods.signOut === "function") {
-            try {
-              await methods.signOut(auth);
-            } catch {}
-          }
-          currentAdminSession = null;
-          notifySubscribers(null);
-        }
-      });
+    if (!auth || !methods || typeof methods.onAuthStateChanged !== "function") {
+      isVerifyingAuth = false;
+      currentAdminSession = null;
+      notifySubscribers(null, { isVerifying: false, error: null });
+      return;
     }
+
+    methods.onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        currentAdminSession = null;
+        isVerifyingAuth = false;
+        notifySubscribers(null, { isVerifying: false, error: null });
+        return;
+      }
+
+      // Explicit verification state while verifying background user
+      isVerifyingAuth = true;
+      notifySubscribers(null, { isVerifying: true, error: null });
+
+      // Authoritative verification against /admins/{uid}
+      const verification = await verifyAdminAuthorization(firebaseUser.uid);
+      if (
+        verification.isAuthorized &&
+        verification.adminData &&
+        verification.adminData.role === "admin" &&
+        verification.adminData.active === true
+      ) {
+        currentAdminSession = {
+          ...verification.adminData,
+          email: firebaseUser.email || verification.adminData.email
+        };
+        isVerifyingAuth = false;
+        notifySubscribers(currentAdminSession, { isVerifying: false, error: null });
+      } else {
+        // Fail-closed: non-admin accounts signed into Firebase are immediately signed out
+        if (typeof methods.signOut === "function") {
+          try {
+            await methods.signOut(auth);
+          } catch {}
+        }
+        currentAdminSession = null;
+        isVerifyingAuth = false;
+        notifySubscribers(null, {
+          isVerifying: false,
+          error: "Access unavailable. This area is restricted to authorized administrators."
+        });
+      }
+    });
   } catch (err) {
     console.warn("[JKFixHub AdminAuth] Init observer warning:", err?.message || err);
+    isVerifyingAuth = false;
+    currentAdminSession = null;
+    notifySubscribers(null, { isVerifying: false, error: null });
   }
 }

@@ -16,6 +16,37 @@ import {
   getFirestoreMethods
 } from "./firebase-config.js";
 
+let adminSessionProvider = null;
+
+/**
+ * Registers an authoritative admin session provider callback.
+ * Ensures data queries cannot initialize or execute before an active admin session is authorized.
+ *
+ * @param {Function} provider - Function returning active admin session object or null.
+ */
+export function registerAdminSessionProvider(provider) {
+  if (typeof provider === "function") {
+    adminSessionProvider = provider;
+  }
+}
+
+/**
+ * Internal guard validating that an authorized admin session is active before querying Firestore.
+ * @returns {boolean}
+ */
+function isSessionAuthorizedAdmin() {
+  if (!adminSessionProvider || typeof adminSessionProvider !== "function") {
+    return false;
+  }
+  const session = adminSessionProvider();
+  return Boolean(
+    session &&
+    typeof session.uid === "string" &&
+    session.role === "admin" &&
+    session.active === true
+  );
+}
+
 /**
  * Verifies whether a given Firebase UID corresponds to an active administrator
  * in the Cloud Firestore /admins/{uid} collection.
@@ -28,7 +59,7 @@ export async function verifyAdminAuthorization(uid) {
     return {
       isAuthorized: false,
       adminData: null,
-      error: "Invalid authentication identifier."
+      error: "Access unavailable. This area is restricted to authorized administrators."
     };
   }
 
@@ -40,14 +71,14 @@ export async function verifyAdminAuthorization(uid) {
       return {
         isAuthorized: false,
         adminData: null,
-        error: "Firestore service is unavailable."
+        error: "Access unavailable. This area is restricted to authorized administrators."
       };
     }
 
     const adminRef = methods.doc(db, "admins", uid);
     const docSnap = await methods.getDoc(adminRef);
 
-    if (!docSnap.exists()) {
+    if (!docSnap.exists() || docSnap.id !== uid) {
       return {
         isAuthorized: false,
         adminData: null,
@@ -56,7 +87,7 @@ export async function verifyAdminAuthorization(uid) {
     }
 
     const data = docSnap.data();
-    if (!data || data.active !== true || data.role !== "admin") {
+    if (!data || data.active !== true || data.role !== "admin" || (data.uid && data.uid !== uid)) {
       return {
         isAuthorized: false,
         adminData: null,
@@ -145,6 +176,10 @@ export async function getAdminOverviewStats() {
     reportedReviews: 0,
     securityEvents: 0
   };
+
+  if (!isSessionAuthorizedAdmin()) {
+    return stats;
+  }
 
   try {
     const { db } = await initializeFirestoreClient();
@@ -240,6 +275,8 @@ export async function getAdminOverviewStats() {
  * @returns {Promise<Array<object>>}
  */
 export async function getAdminWorkers() {
+  if (!isSessionAuthorizedAdmin()) return [];
+
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
@@ -265,6 +302,10 @@ export async function getAdminWorkers() {
  * @returns {Promise<{ success: boolean, error: string|null }>}
  */
 export async function updateAdminWorkerStatus(workerId, updates, adminUid) {
+  if (!isSessionAuthorizedAdmin()) {
+    return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
+  }
+
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
@@ -296,6 +337,8 @@ export async function updateAdminWorkerStatus(workerId, updates, adminUid) {
  * @returns {Promise<Array<object>>}
  */
 export async function getAdminCustomers() {
+  if (!isSessionAuthorizedAdmin()) return [];
+
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
@@ -329,6 +372,8 @@ export async function getAdminCustomers() {
  * @returns {Promise<Array<object>>}
  */
 export async function getAdminRequests() {
+  if (!isSessionAuthorizedAdmin()) return [];
+
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
@@ -351,6 +396,8 @@ export async function getAdminRequests() {
  * @returns {Promise<Array<object>>}
  */
 export async function getAdminReports() {
+  if (!isSessionAuthorizedAdmin()) return [];
+
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
@@ -376,6 +423,10 @@ export async function getAdminReports() {
  * @returns {Promise<{ success: boolean, error: string|null }>}
  */
 export async function updateAdminReportStatus(reportId, status, adminUid) {
+  if (!isSessionAuthorizedAdmin()) {
+    return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
+  }
+
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
@@ -411,6 +462,8 @@ export async function updateAdminReportStatus(reportId, status, adminUid) {
  * @returns {Promise<Array<object>>}
  */
 export async function getAdminReviews() {
+  if (!isSessionAuthorizedAdmin()) return [];
+
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
@@ -436,6 +489,10 @@ export async function getAdminReviews() {
  * @returns {Promise<{ success: boolean, error: string|null }>}
  */
 export async function updateAdminReviewStatus(reviewId, status, adminUid) {
+  if (!isSessionAuthorizedAdmin()) {
+    return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
+  }
+
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
@@ -471,6 +528,8 @@ export async function updateAdminReviewStatus(reviewId, status, adminUid) {
  * @returns {Promise<Array<object>>}
  */
 export async function getAdminSecurityEvents() {
+  if (!isSessionAuthorizedAdmin()) return [];
+
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
@@ -493,6 +552,8 @@ export async function getAdminSecurityEvents() {
  * @returns {Promise<Array<object>>}
  */
 export async function getAdminAuditLogs() {
+  if (!isSessionAuthorizedAdmin()) return [];
+
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
