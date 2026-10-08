@@ -1,13 +1,15 @@
 // ==========================================
 // #ADMIN_CANVAS
 // ==========================================
-// Lightweight 3D Cinematic Background & Signature Parallax System
+// Ultra-Lightweight Architectural Background & Signature Parallax System
 //
-// Performance & Accessibility Guarantees:
-// 1. Zero external 3D libraries — ultra-fast vanilla Canvas 2D engine (<60fps target).
-// 2. Halts animation loop when document is hidden (0% background CPU usage).
-// 3. Strictly respects prefers-reduced-motion (draws single static frame, halts rAF).
-// 4. Subtle, non-intrusive ambient depth that never interferes with text readability.
+// Performance & Accessibility Hardening:
+// 1. Device-adaptive rendering profiles (Desktop vs. Mobile vs. Reduced Motion).
+// 2. Strict DPR capping (1.0 on mobile, max 1.25 on desktop) to prevent GPU fill-rate exhaustion.
+// 3. Frame rate pacing (capped at ~30-40fps) to eliminate 120Hz battery drain.
+// 4. Zero DOM mutations in continuous animation loop. Parallax updates strictly throttled to pointer events.
+// 5. Zero heavy canvas full-screen gradients in per-frame tick (offloaded to CSS compositor).
+// 6. 100% CPU idle (0% rAF) when document is hidden or prefers-reduced-motion is active.
 // ==========================================
 
 export function initializeAdminCanvas() {
@@ -15,12 +17,13 @@ export function initializeAdminCanvas() {
   const signatureLayer = document.getElementById("adminSignatureLayer");
   if (!canvas) return;
 
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { alpha: true });
   if (!ctx) return;
 
   let width = 0;
   let height = 0;
   let dpr = 1;
+  let isMobile = false;
 
   // Reduced motion query
   const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -42,64 +45,74 @@ export function initializeAdminCanvas() {
   let targetMouseX = 0;
   let targetMouseY = 0;
   let isMouseActive = false;
+  let parallaxPending = false;
 
   const handlePointerMove = (e) => {
+    if (isMobile || isReducedMotion) return;
     targetMouseX = e.clientX;
     targetMouseY = e.clientY;
     isMouseActive = true;
-  };
 
-  window.addEventListener("pointermove", handlePointerMove, { passive: true });
-  window.addEventListener("pointerleave", () => {
-    isMouseActive = false;
-  }, { passive: true });
-
-  // Resize handler
-  const handleResize = () => {
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
-    width = window.innerWidth;
-    height = window.innerHeight;
-
-    canvas.width = Math.floor(width * dpr);
-    canvas.height = Math.floor(height * dpr);
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.scale(dpr, dpr);
-
-    if (isReducedMotion) {
-      drawStaticFrame();
+    // Throttle DOM parallax mutation to pointer activity only
+    if (!parallaxPending && signatureLayer) {
+      parallaxPending = true;
+      requestAnimationFrame(() => {
+        if (signatureLayer && !isReducedMotion && !isMobile) {
+          const offsetX = (targetMouseX - width / 2) / (width / 2);
+          const offsetY = (targetMouseY - height / 2) / (height / 2);
+          const tiltX = -offsetY * 3.5;
+          const tiltY = offsetX * 4.5;
+          const panX = offsetX * 12;
+          const panY = offsetY * 8;
+          signatureLayer.style.transform = `perspective(1000px) rotateX(${tiltX.toFixed(2)}deg) rotateY(${tiltY.toFixed(2)}deg) translate3d(${panX.toFixed(1)}px, ${panY.toFixed(1)}px, 0)`;
+        }
+        parallaxPending = false;
+      });
     }
   };
 
-  window.addEventListener("resize", handleResize, { passive: true });
-  handleResize();
+  const handlePointerLeave = () => {
+    isMouseActive = false;
+    if (signatureLayer) {
+      signatureLayer.style.transform = "none";
+    }
+  };
 
-  // --------------------------------------------------------------------------
-  // Spatial Geometry Models
-  // --------------------------------------------------------------------------
-  // 3D Polygons & Nodes
-  const nodes = [];
-  const nodeCount = 35;
-  for (let i = 0; i < nodeCount; i++) {
-    nodes.push({
-      x: (Math.random() - 0.5) * 1600,
-      y: (Math.random() - 0.5) * 1200,
-      z: Math.random() * 800 + 200,
-      vx: (Math.random() - 0.5) * 0.35,
-      vy: (Math.random() - 0.5) * 0.35,
-      radius: Math.random() * 1.6 + 0.8,
-      alpha: Math.random() * 0.35 + 0.15
-    });
-  }
+  window.addEventListener("pointermove", handlePointerMove, { passive: true });
+  window.addEventListener("pointerleave", handlePointerLeave, { passive: true });
 
-  // Floating wireframe rings (Architectural rings)
-  const rings = [
-    { x: -280, y: -120, z: 450, radius: 140, rotX: 0.8, rotY: 0.4, rotZ: 0, speed: 0.003 },
-    { x: 380, y: 160, z: 550, radius: 220, rotX: -0.6, rotY: 0.8, rotZ: 0, speed: -0.0025 },
-    { x: 120, y: -260, z: 650, radius: 180, rotX: 1.2, rotY: -0.5, rotZ: 0, speed: 0.002 }
-  ];
+  // Geometry nodes & rings
+  let nodes = [];
+  let rings = [];
+
+  const setupGeometry = () => {
+    isMobile = window.innerWidth < 768;
+    const nodeCount = isMobile ? 12 : 22;
+
+    nodes = [];
+    for (let i = 0; i < nodeCount; i++) {
+      nodes.push({
+        x: (Math.random() - 0.5) * 1400,
+        y: (Math.random() - 0.5) * 1000,
+        z: Math.random() * 700 + 200,
+        vx: (Math.random() - 0.5) * 0.25,
+        vy: (Math.random() - 0.5) * 0.25,
+        radius: Math.random() * 1.4 + 0.8,
+        alpha: Math.random() * 0.3 + 0.15
+      });
+    }
+
+    if (isMobile) {
+      rings = [
+        { x: 100, y: 50, z: 500, radius: 130, rotX: 0.6, rotY: 0.3, rotZ: 0, speed: 0.0015 }
+      ];
+    } else {
+      rings = [
+        { x: -220, y: -90, z: 450, radius: 140, rotX: 0.8, rotY: 0.4, rotZ: 0, speed: 0.002 },
+        { x: 280, y: 120, z: 550, radius: 190, rotX: -0.6, rotY: 0.8, rotZ: 0, speed: -0.0018 }
+      ];
+    }
+  };
 
   // Perspective project helper
   const fov = 600;
@@ -112,104 +125,103 @@ export function initializeAdminCanvas() {
     };
   }
 
+  // Resize handler
+  const handleResize = () => {
+    isMobile = window.innerWidth < 768;
+    // Strict DPR capping: 1 on mobile to prevent GPU fill-rate exhaustion; 1.25 on desktop
+    dpr = isMobile ? 1 : Math.min(window.devicePixelRatio || 1, 1.25);
+    width = window.innerWidth;
+    height = window.innerHeight;
+
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+
+    setupGeometry();
+
+    if (signatureLayer && isMobile) {
+      signatureLayer.style.transform = "none";
+    }
+
+    if (isReducedMotion) {
+      drawStaticFrame();
+    }
+  };
+
+  window.addEventListener("resize", handleResize, { passive: true });
+  handleResize();
+
   // --------------------------------------------------------------------------
-  // Render Routine
+  // Paced Render Loop (Throttled for zero UI contention)
   // --------------------------------------------------------------------------
   let animationFrameId = null;
-  let lastTime = performance.now();
+  let lastFrameTime = 0;
+  // Frame interval: ~33ms (30fps) on mobile, ~22ms (45fps) on desktop
+  const getTargetInterval = () => (isMobile ? 33 : 22);
 
   function drawScene(time) {
-    const delta = Math.min((time - lastTime) / 1000, 0.1);
-    lastTime = time;
-
-    // Smooth pointer damping
-    if (!isMouseActive) {
-      // Gentle ambient lissajous motion if idle
-      targetMouseX = width / 2 + Math.sin(time * 0.0008) * 120;
-      targetMouseY = height / 2 + Math.cos(time * 0.0006) * 80;
-    }
-    mouseX += (targetMouseX - mouseX) * 0.05;
-    mouseY += (targetMouseY - mouseY) * 0.05;
-
-    // Clear canvas with deep obsidian slate gradient
+    // Clear canvas fast
     ctx.clearRect(0, 0, width, height);
 
-    // 1. Subtle Ambient Radial Glow following pointer
-    const glowRadius = Math.max(width * 0.55, 600);
-    const ambientGlow = ctx.createRadialGradient(
-      mouseX, mouseY, 40,
-      mouseX, mouseY, glowRadius
-    );
-    ambientGlow.addColorStop(0, "rgba(49, 122, 86, 0.12)");
-    ambientGlow.addColorStop(0.45, "rgba(35, 78, 56, 0.05)");
-    ambientGlow.addColorStop(1, "rgba(10, 16, 12, 0)");
-    ctx.fillStyle = ambientGlow;
-    ctx.fillRect(0, 0, width, height);
-
-    // 2. Perspective Coordinate Grid
+    // 1. Perspective Coordinate Grid (subtle architectural grid lines)
     ctx.save();
-    ctx.strokeStyle = "rgba(63, 142, 101, 0.045)";
+    ctx.strokeStyle = "rgba(63, 142, 101, 0.04)";
     ctx.lineWidth = 1;
 
-    const gridSpan = 700;
-    const gridStep = 100;
-    const gridZ = 300;
+    const gridSpan = isMobile ? 400 : 600;
+    const gridStep = isMobile ? 120 : 100;
+    const gridZ = 320;
 
+    ctx.beginPath();
     // Horizontal perspective lines
     for (let gy = -gridSpan; gy <= gridSpan; gy += gridStep) {
       const p1 = project(-gridSpan, gy, gridZ);
       const p2 = project(gridSpan, gy, gridZ);
-      ctx.beginPath();
       ctx.moveTo(p1.x, p1.y);
       ctx.lineTo(p2.x, p2.y);
-      ctx.stroke();
     }
-
     // Vertical perspective lines
     for (let gx = -gridSpan; gx <= gridSpan; gx += gridStep) {
       const p1 = project(gx, -gridSpan, gridZ);
       const p2 = project(gx, gridSpan, gridZ);
-      ctx.beginPath();
       ctx.moveTo(p1.x, p1.y);
       ctx.lineTo(p2.x, p2.y);
-      ctx.stroke();
     }
+    ctx.stroke();
     ctx.restore();
 
-    // 3. Floating Architectural Wireframe Rings
+    // 2. Floating Architectural Wireframe Rings
     ctx.save();
+    ctx.strokeStyle = "rgba(74, 158, 116, 0.065)";
+    ctx.lineWidth = 1;
+
+    const segments = isMobile ? 12 : 18;
     for (const ring of rings) {
       if (!isReducedMotion) {
         ring.rotZ += ring.speed;
-        ring.rotX += ring.speed * 0.6;
+        ring.rotX += ring.speed * 0.5;
       }
 
-      ctx.strokeStyle = "rgba(74, 158, 116, 0.075)";
-      ctx.lineWidth = 1.2;
-
-      const segments = 24;
       ctx.beginPath();
       for (let i = 0; i <= segments; i++) {
         const theta = (i / segments) * Math.PI * 2;
-        // Local 3D ring coords
-        let rx = Math.cos(theta) * ring.radius;
-        let ry = Math.sin(theta) * ring.radius;
-        let rz = 0;
+        const rx = Math.cos(theta) * ring.radius;
+        const ry = Math.sin(theta) * ring.radius;
 
-        // Apply rotations
-        // Rot X
         const cosX = Math.cos(ring.rotX);
         const sinX = Math.sin(ring.rotX);
-        const y1 = ry * cosX - rz * sinX;
-        const z1 = ry * sinX + rz * cosX;
+        const y1 = ry * cosX;
+        const z1 = ry * sinX;
 
-        // Rot Y
         const cosY = Math.cos(ring.rotY);
         const sinY = Math.sin(ring.rotY);
         const x2 = rx * cosY + z1 * sinY;
         const z2 = -rx * sinY + z1 * cosY;
 
-        // Rot Z
         const cosZ = Math.cos(ring.rotZ);
         const sinZ = Math.sin(ring.rotZ);
         const x3 = x2 * cosZ - y1 * sinZ;
@@ -223,16 +235,16 @@ export function initializeAdminCanvas() {
     }
     ctx.restore();
 
-    // 4. Floating Micro-Nodes / Particles
+    // 3. Floating Micro-Nodes / Particles
     ctx.save();
     for (const node of nodes) {
       if (!isReducedMotion) {
         node.x += node.vx;
         node.y += node.vy;
-        if (node.x > 800) node.x = -800;
-        if (node.x < -800) node.x = 800;
-        if (node.y > 600) node.y = -600;
-        if (node.y < -600) node.y = 600;
+        if (node.x > 700) node.x = -700;
+        if (node.x < -700) node.x = 700;
+        if (node.y > 500) node.y = -500;
+        if (node.y < -500) node.y = 500;
       }
 
       const p = project(node.x, node.y, node.z);
@@ -242,28 +254,20 @@ export function initializeAdminCanvas() {
       ctx.fill();
     }
     ctx.restore();
-
-    // 5. Update Signature Parallax Transformation
-    if (signatureLayer && !isReducedMotion) {
-      const offsetX = (mouseX - width / 2) / (width / 2);
-      const offsetY = (mouseY - height / 2) / (height / 2);
-      const tiltX = -offsetY * 4.5;
-      const tiltY = offsetX * 5.5;
-      const panX = offsetX * 16;
-      const panY = offsetY * 12;
-
-      signatureLayer.style.transform = `perspective(1000px) rotateX(${tiltX.toFixed(2)}deg) rotateY(${tiltY.toFixed(2)}deg) translate3d(${panX.toFixed(1)}px, ${panY.toFixed(1)}px, 0)`;
-    }
   }
 
   function loop(time) {
-    drawScene(time);
+    const targetInterval = getTargetInterval();
+    if (time - lastFrameTime >= targetInterval) {
+      lastFrameTime = time;
+      drawScene(time);
+    }
     animationFrameId = requestAnimationFrame(loop);
   }
 
   function startAnimation() {
     if (!animationFrameId && !isReducedMotion) {
-      lastTime = performance.now();
+      lastFrameTime = performance.now();
       animationFrameId = requestAnimationFrame(loop);
     }
   }
@@ -282,7 +286,7 @@ export function initializeAdminCanvas() {
     }
   }
 
-  // Document visibility management
+  // Document visibility management (Page Visibility API)
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       stopAnimation();
@@ -297,4 +301,3 @@ export function initializeAdminCanvas() {
     startAnimation();
   }
 }
-

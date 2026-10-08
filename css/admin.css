@@ -9,13 +9,13 @@
 }
 
 :root {
-  /* Architectural Deep Slate / Obsidian Forest Palette */
+  /* Architectural Deep Slate / Obsidian Forest Palette (High-Performance Opaque Surfaces) */
   --admin-bg-deep: #080d0a;
   --admin-bg-base: #0c130f;
-  --admin-bg-surface: rgba(16, 24, 19, 0.76);
-  --admin-bg-surface-raised: rgba(22, 33, 27, 0.86);
-  --admin-bg-surface-hover: rgba(28, 42, 34, 0.94);
-  --admin-bg-glass: rgba(14, 21, 17, 0.65);
+  --admin-bg-surface: rgba(16, 24, 19, 0.94);
+  --admin-bg-surface-raised: rgba(22, 33, 27, 0.96);
+  --admin-bg-surface-hover: rgba(28, 42, 34, 0.98);
+  --admin-bg-glass: rgba(14, 21, 17, 0.92);
 
   /* Hairline Borders & Edge Illumination */
   --admin-border-subtle: rgba(62, 114, 86, 0.16);
@@ -46,11 +46,11 @@
   --admin-ink-muted: #6e8273;
   --admin-ink-dark: #121915;
 
-  /* Shadows & Depth */
+  /* Shadows & Depth (GPU-friendly) */
   --admin-shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.3);
   --admin-shadow-md: 0 16px 40px rgba(0, 0, 0, 0.5), 0 0 1px rgba(62, 114, 86, 0.3);
   --admin-shadow-lg: 0 28px 70px rgba(0, 0, 0, 0.7), 0 0 40px rgba(63, 185, 128, 0.1);
-  --admin-glass-blur: blur(20px);
+  --admin-glass-blur: none;
 
   /* Typography */
   --font-sans: "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
@@ -80,7 +80,7 @@
 }
 
 /* ----------------------------------------------------------------------------
-   3D BACKGROUND STAGE & SIGNATURE PARALLAX SYSTEM
+   3D BACKGROUND STAGE & SIGNATURE WATERMARK SYSTEM
    ---------------------------------------------------------------------------- */
 .admin-bg-stage {
   position: fixed;
@@ -88,7 +88,7 @@
   z-index: 0;
   pointer-events: none;
   overflow: hidden;
-  background: radial-gradient(circle at 50% 12%, #141f18 0%, #0c130f 55%, #070b09 100%);
+  background: radial-gradient(circle at 50% 12%, rgba(20, 31, 24, 0.95) 0%, #0c130f 55%, #070b09 100%);
 }
 
 .admin-3d-canvas {
@@ -101,18 +101,16 @@
 
 .admin-signature-layer {
   position: absolute;
-  right: 5%;
-  bottom: 6%;
-  width: 620px;
-  height: 460px;
-  max-width: 65vw;
-  max-height: 55vh;
+  right: 4%;
+  bottom: 5%;
+  width: 520px;
+  height: 380px;
+  max-width: 58vw;
+  max-height: 48vh;
   z-index: 2;
   pointer-events: none;
-  transform-style: preserve-3d;
-  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
-  opacity: 0.055;
-  mix-blend-mode: screen;
+  opacity: 0.22;
+  will-change: transform;
 }
 
 .admin-signature-img {
@@ -122,30 +120,14 @@
   background-repeat: no-repeat;
   background-size: contain;
   background-position: center;
-  filter: drop-shadow(0 0 25px rgba(63, 185, 128, 0.35));
-  animation: signatureLightSweep 24s ease-in-out infinite alternate;
-}
-
-@keyframes signatureLightSweep {
-  0% {
-    opacity: 0.85;
-    filter: drop-shadow(0 0 15px rgba(63, 185, 128, 0.2));
-  }
-  50% {
-    opacity: 1;
-    filter: drop-shadow(0 0 35px rgba(63, 185, 128, 0.5));
-  }
-  100% {
-    opacity: 0.85;
-    filter: drop-shadow(0 0 15px rgba(63, 185, 128, 0.2));
-  }
+  filter: brightness(2.2) drop-shadow(0 0 12px rgba(63, 185, 128, 0.35));
 }
 
 .admin-ambient-vignette {
   position: absolute;
   inset: 0;
   z-index: 3;
-  background: radial-gradient(circle at 50% 50%, transparent 40%, rgba(7, 11, 9, 0.65) 100%);
+  background: radial-gradient(circle at 50% 50%, transparent 50%, rgba(7, 11, 9, 0.5) 100%);
   pointer-events: none;
 }
 
@@ -220,7 +202,6 @@
   border-radius: var(--radius-lg);
   padding: 40px 36px;
   box-shadow: var(--admin-shadow-lg);
-  backdrop-filter: blur(28px);
   position: relative;
   animation: cardEntrance 0.6s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -386,6 +367,40 @@
   font-size: 0.78rem;
   color: var(--admin-ink-muted);
   line-height: 1.45;
+}
+
+.admin-developer-credit {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--admin-accent-emerald);
+  letter-spacing: 0.04em;
+  opacity: 0.85;
+}
+
+.admin-sidebar-credit {
+  margin-top: auto;
+  padding: 16px 10px 4px;
+  border-top: 1px solid var(--admin-border-subtle);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--admin-accent-emerald);
+  letter-spacing: 0.04em;
+  text-align: center;
+  opacity: 0.85;
+}
+
+.admin-social-link {
+  color: var(--admin-ink-primary);
+  text-decoration: none;
+  font-weight: 600;
+  transition: color 0.15s ease;
+}
+
+.admin-social-link:hover {
+  color: var(--admin-accent-emerald);
+  text-decoration: underline;
 }
 
 /* ----------------------------------------------------------------------------
@@ -1192,12 +1207,11 @@
 .admin-modal {
   width: 100%;
   max-width: 540px;
-  background: rgba(16, 25, 20, 0.96);
+  background: rgba(16, 25, 20, 0.98);
   border: 1px solid var(--admin-border-strong);
   border-radius: var(--radius-lg);
   padding: 30px;
   box-shadow: var(--admin-shadow-lg);
-  backdrop-filter: blur(28px);
   animation: cardEntrance 0.25s ease-out;
 }
 
@@ -1512,11 +1526,18 @@
     flex-direction: column;
     gap: 16px;
     border-right: 1px solid var(--admin-border-strong);
-    backdrop-filter: blur(28px);
   }
 
   .admin-sidebar.nav-open {
     transform: translateX(0);
+  }
+
+  .admin-signature-layer {
+    right: 2%;
+    bottom: 3%;
+    width: 300px;
+    height: 220px;
+    opacity: 0.16;
   }
 
   .admin-nav-item {
@@ -1560,13 +1581,31 @@
   }
 }
 
+@media (max-width: 480px) {
+  .admin-metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-login-card {
+    padding: 28px 22px;
+  }
+
+  .admin-signature-layer {
+    right: 1%;
+    bottom: 2%;
+    width: 240px;
+    height: 180px;
+    opacity: 0.14;
+  }
+}
+
 @media (max-width: 390px) {
   .admin-metrics-grid {
     grid-template-columns: 1fr;
   }
 
   .admin-login-card {
-    padding: 26px 20px;
+    padding: 24px 18px;
   }
 
   .admin-content {
@@ -1576,5 +1615,31 @@
   .admin-table th,
   .admin-table td {
     padding: 10px 12px;
+  }
+}
+
+@media (max-width: 340px) {
+  .admin-login-card {
+    padding: 18px 14px;
+  }
+
+  .admin-brand-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .admin-topbar {
+    padding: 10px 12px;
+  }
+
+  .admin-btn-primary,
+  .admin-btn-subtle {
+    font-size: 0.78rem;
+    padding: 7px 10px;
+  }
+
+  .admin-signature-layer {
+    display: none;
   }
 }

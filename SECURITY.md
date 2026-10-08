@@ -85,7 +85,39 @@ No client-side measure can guarantee that an application will never be compromis
 - **Append-Only Tamper-Resistant Audit Trail (`/auditLogs`):** Privileged operations (worker approval, suspension, restoration, report resolution, review moderation) automatically write an immutable audit record to `/auditLogs` with admin UID, action, target, timestamp, and outcome. In `firestore.rules`, audit logs can only be created by verified administrators, can only be read by administrators, and cannot be modified or deleted (`allow update, delete: if false`).
 - **Sanitized Error Messaging:** If an unauthorized user attempts to log in via `admin.html`, the system displays: *"Access unavailable. This area is restricted to authorized administrators."* The system never leaks whether an account exists, whether an email is registered, or internal database schema details.
 
-## Privacy requirements
+## Trusted Backend Logic & Cloud Functions Security Architecture (Step 19)
+
+- **Backend Trust Boundary:**
+  Cloud Functions using the Firebase Admin SDK operate with privileged administrative access to Firestore, bypassing Firestore Security Rules. Therefore, backend authorization must be explicit, defensive, and strictly fail-closed. Never trust roles, customer IDs, worker IDs, or status flags supplied by client browser payloads.
+- **Authoritative Identity Verification:**
+  All sensitive operations are implemented as Cloud Functions for Firebase 2nd Gen HTTPS Callable functions (`onCall`). Authenticated identity is derived strictly from the cryptographic Firebase Auth token (`request.auth.uid`). Role checks read authoritatively from Firestore (`/admins/{uid}` for administrators, `/users/{uid}` for customer/worker account types).
+- **Request Lifecycle State Machine:**
+  To eliminate IDOR and status-jumping vulnerabilities, request status transitions follow an explicit finite state machine:
+  - `Pending -> Accepted`: Permitted ONLY to the assigned worker (`data.workerUid == request.auth.uid`).
+  - `Pending -> Rejected`: Permitted ONLY to the assigned worker (`data.workerUid == request.auth.uid`).
+  - `Pending -> Cancelled`: Permitted ONLY to the requesting customer (`data.customerId == request.auth.uid`).
+  - `Accepted -> Completed`: Permitted ONLY to the assigned worker (`data.workerUid == request.auth.uid`).
+  - Arbitrary status transitions (e.g. `Pending -> Completed`, customer self-completing, or unassigned workers modifying records) are rejected with `failed-precondition` or `permission-denied`, and logged to `/securityEvents`.
+- **Review Eligibility Verification:**
+  Reviews can ONLY be submitted through the trusted backend (`submitReview`). The backend authoritatively verifies:
+  1. Caller is an authenticated customer.
+  2. Caller owns the target request (`request.customerId == request.auth.uid`).
+  3. Target request is authoritatively in `Completed` status in Firestore.
+  4. Exactly one review per request (duplicate submissions are rejected with `already-exists`).
+  5. Rating is an integer strictly between 1 and 5.
+  6. Review text is bounded (5–1,000 characters) and sanitized against HTML/script injection.
+- **Trust & Safety Reporting & Abuse Prevention:**
+  Reports submitted via `submitReport` enforce strict whitelists on target types (`worker`, `customer`, `review`, `message`) and reason codes. Descriptions are bounded (10–1,000 characters) and sanitized. Duplicate active reports for the same target by the same user are rejected, and repeated attempts trigger security event signals.
+- **Privileged Administrative Operations:**
+  All privileged state mutations (`adminUpdateWorkerStatus`, `adminModerateReport`, `adminModerateReview`) invoke `assertActiveAdmin`, which queries `/admins/{uid}` in Firestore. If the document does not exist, `active !== true`, or `role !== "admin"`, access is instantly denied. Every administrative mutation writes an authoritative record to `/auditLogs`.
+- **Data Minimization in Audit Logs & Sanitization:**
+  Audit records never log sensitive information. `sanitizeLogPayload` automatically scrubs and redacts passwords, tokens, API keys, secrets, and private credentials before any write to `/auditLogs` or `/securityEvents`.
+- **Local Emulator Workflow & Deployment Notice:**
+  > **Deployment Notice:**
+  > Cloud Functions are currently developed and tested locally. Production deployment is intentionally deferred until the project is ready for Blaze.
+  Deploying Cloud Functions to Google Cloud production requires upgrading the Firebase project to the Blaze (Pay-as-you-go) billing plan. For Step 19, all functions and authorization flows are verified using the Firebase Emulator Suite and automated in-memory test suites (`functions/test/step19.test.js`).
+- **Storage Deferral:**
+  Firebase Storage (Step 18) remains deferred until identity verification and document upload workflows are scheduled. No storage secrets or dependencies are present.
 
 ### Customers
 

@@ -161,6 +161,17 @@ export async function recordAdminAuditLog({ adminUid, action, targetType, target
   }
 }
 
+// In-memory session cache for overview stats
+let cachedOverviewStats = null;
+let statsCachedAt = 0;
+const STATS_CACHE_TTL_MS = 25000;
+let inflightStatsPromise = null;
+
+export function invalidateAdminStatsCache() {
+  cachedOverviewStats = null;
+  statsCachedAt = 0;
+}
+
 /**
  * Fetches overview metric counts from Firestore collections.
  * @returns {Promise<object>} Live statistics map.
@@ -181,93 +192,110 @@ export async function getAdminOverviewStats() {
     return stats;
   }
 
-  try {
-    const { db } = await initializeFirestoreClient();
-    const methods = await getFirestoreMethods();
-    if (!db || !methods || typeof methods.getDocs !== "function") return stats;
-
-    // Helper for safe query snapshot
-    const fetchCount = async (collName, filterField, filterVal) => {
-      try {
-        let collRef = methods.collection(db, collName);
-        let q = collRef;
-        if (filterField && filterVal !== undefined && typeof methods.where === "function" && typeof methods.query === "function") {
-          q = methods.query(collRef, methods.where(filterField, "==", filterVal));
-        }
-        const snap = await methods.getDocs(q);
-        return snap.size;
-      } catch (e) {
-        return 0;
-      }
-    };
-
-    // Workers
-    try {
-      const workersSnap = await methods.getDocs(methods.collection(db, "workers"));
-      stats.totalWorkers = workersSnap.size;
-      let pending = 0;
-      workersSnap.forEach((doc) => {
-        const d = doc.data();
-        if (d.isVerified === false || d.status === "pending") pending++;
-      });
-      stats.pendingWorkerVerification = pending;
-    } catch {}
-
-    // Customers (from users collection where role == 'customer')
-    try {
-      const usersSnap = await methods.getDocs(methods.collection(db, "users"));
-      let customers = 0;
-      usersSnap.forEach((doc) => {
-        const d = doc.data();
-        if (d.role === "customer") customers++;
-      });
-      stats.totalCustomers = customers;
-    } catch {}
-
-    // Requests
-    try {
-      const reqSnap = await methods.getDocs(methods.collection(db, "requests"));
-      let active = 0;
-      let completed = 0;
-      reqSnap.forEach((doc) => {
-        const d = doc.data();
-        if (d.status === "Completed") completed++;
-        else if (d.status === "Accepted" || d.status === "Pending") active++;
-      });
-      stats.activeRequests = active;
-      stats.completedRequests = completed;
-    } catch {}
-
-    // Reports
-    try {
-      const repSnap = await methods.getDocs(methods.collection(db, "reports"));
-      let open = 0;
-      repSnap.forEach((doc) => {
-        const d = doc.data();
-        if (d.status !== "resolved" && d.status !== "dismissed") open++;
-      });
-      stats.openReports = open;
-    } catch {}
-
-    // Reviews (reported or flagged)
-    try {
-      const revSnap = await methods.getDocs(methods.collection(db, "reviews"));
-      let reported = 0;
-      revSnap.forEach((doc) => {
-        const d = doc.data();
-        if (d.status === "flagged" || d.status === "reported") reported++;
-      });
-      stats.reportedReviews = reported;
-    } catch {}
-
-    // Security Events
-    stats.securityEvents = await fetchCount("securityEvents");
-
-    return stats;
-  } catch (err) {
-    console.warn("[JKFixHub Admin] Could not retrieve overview metrics:", err?.message || err);
-    return stats;
+  const now = Date.now();
+  if (cachedOverviewStats && now - statsCachedAt < STATS_CACHE_TTL_MS) {
+    return { ...cachedOverviewStats };
   }
+
+  if (inflightStatsPromise) {
+    return inflightStatsPromise;
+  }
+
+  inflightStatsPromise = (async () => {
+    try {
+      const { db } = await initializeFirestoreClient();
+      const methods = await getFirestoreMethods();
+      if (!db || !methods || typeof methods.getDocs !== "function") return stats;
+
+      // Helper for safe query snapshot
+      const fetchCount = async (collName, filterField, filterVal) => {
+        try {
+          let collRef = methods.collection(db, collName);
+          let q = collRef;
+          if (filterField && filterVal !== undefined && typeof methods.where === "function" && typeof methods.query === "function") {
+            q = methods.query(collRef, methods.where(filterField, "==", filterVal));
+          }
+          const snap = await methods.getDocs(q);
+          return snap.size;
+        } catch (e) {
+          return 0;
+        }
+      };
+
+      // Workers
+      try {
+        const workersSnap = await methods.getDocs(methods.collection(db, "workers"));
+        stats.totalWorkers = workersSnap.size;
+        let pending = 0;
+        workersSnap.forEach((doc) => {
+          const d = doc.data();
+          if (d.isVerified === false || d.status === "pending") pending++;
+        });
+        stats.pendingWorkerVerification = pending;
+      } catch {}
+
+      // Customers (from users collection where role == 'customer')
+      try {
+        const usersSnap = await methods.getDocs(methods.collection(db, "users"));
+        let customers = 0;
+        usersSnap.forEach((doc) => {
+          const d = doc.data();
+          if (d.role === "customer") customers++;
+        });
+        stats.totalCustomers = customers;
+      } catch {}
+
+      // Requests
+      try {
+        const reqSnap = await methods.getDocs(methods.collection(db, "requests"));
+        let active = 0;
+        let completed = 0;
+        reqSnap.forEach((doc) => {
+          const d = doc.data();
+          if (d.status === "Completed") completed++;
+          else if (d.status === "Accepted" || d.status === "Pending") active++;
+        });
+        stats.activeRequests = active;
+        stats.completedRequests = completed;
+      } catch {}
+
+      // Reports
+      try {
+        const repSnap = await methods.getDocs(methods.collection(db, "reports"));
+        let open = 0;
+        repSnap.forEach((doc) => {
+          const d = doc.data();
+          if (d.status !== "resolved" && d.status !== "dismissed") open++;
+        });
+        stats.openReports = open;
+      } catch {}
+
+      // Reviews (reported or flagged)
+      try {
+        const revSnap = await methods.getDocs(methods.collection(db, "reviews"));
+        let reported = 0;
+        revSnap.forEach((doc) => {
+          const d = doc.data();
+          if (d.status === "flagged" || d.status === "reported") reported++;
+        });
+        stats.reportedReviews = reported;
+      } catch {}
+
+      // Security Events
+      stats.securityEvents = await fetchCount("securityEvents");
+
+      cachedOverviewStats = { ...stats };
+      statsCachedAt = Date.now();
+      return stats;
+    } catch (err) {
+      console.warn("[JKFixHub Admin] Could not retrieve overview metrics:", err?.message || err);
+      return stats;
+    } finally {
+      inflightStatsPromise = null;
+    }
+  })();
+
+  return inflightStatsPromise;
 }
 
 /**
@@ -325,6 +353,7 @@ export async function updateAdminWorkerStatus(workerId, updates, adminUid) {
       details: updates
     });
 
+    invalidateAdminStatsCache();
     return { success: true, error: null };
   } catch (err) {
     console.error("[JKFixHub Admin] Worker status update failed:", err?.message || err);
@@ -450,6 +479,7 @@ export async function updateAdminReportStatus(reportId, status, adminUid) {
       details: { newStatus: status }
     });
 
+    invalidateAdminStatsCache();
     return { success: true, error: null };
   } catch (err) {
     console.error("[JKFixHub Admin] Report update failed:", err?.message || err);
@@ -516,6 +546,7 @@ export async function updateAdminReviewStatus(reviewId, status, adminUid) {
       details: { newStatus: status }
     });
 
+    invalidateAdminStatsCache();
     return { success: true, error: null };
   } catch (err) {
     console.error("[JKFixHub Admin] Review moderation failed:", err?.message || err);

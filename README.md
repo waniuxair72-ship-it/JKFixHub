@@ -30,23 +30,35 @@
 - `firestore.rules` - server-side Cloud Firestore Security Rules enforcing least-privilege, admin membership, and document privacy.
 - `firestore.indexes.json` - Cloud Firestore index configuration.
 - `firebase.json` - Firebase project configuration.
+- `functions/` - Cloud Functions for Firebase 2nd Gen codebase (Node.js 22, firebase-functions v2, firebase-admin). Implements trusted backend authorization, finite state machine request lifecycle, reviews, abuse reports, admin mutations, and immutable audit logging.
+- `js/functions-client.js` - client-side boundary for calling Firebase Cloud Functions (HTTPS Callable functions) with graceful fallback during local development.
 - `DESIGN_SYSTEM.md` - permanent reference for [JK] FixHub colors, typography, spacing, components, motion, responsiveness, and accessibility.
-- `SECURITY.md` - current frontend security boundaries, Firestore security rules, admin authorization architecture, and bootstrap procedures.
+- `SECURITY.md` - comprehensive security foundation, Firestore rules, admin authorization architecture, Step 19 backend trust boundaries, and bootstrap procedures.
 - `.github/agents/jkfixhub-prototype.agent.md` - project-specific prototype guidance.
 
 ## Current Stage & Service Boundaries
 
-### CURRENT (Implemented in Steps 16 & 17):
-- **Firebase Authentication**: Live email/password registration and sign-in for Customers and Workers via modular Firebase Web SDK.
+### CURRENT (Implemented through Step 19):
+- **Firebase Authentication (Step 16)**: Live email/password registration and sign-in for Customers and Workers via modular Firebase Web SDK.
 - **Cloud Firestore Backend Foundation (Step 17)**: Document data layer supporting users, workers, requests, reviews, reports, security events, and audit logs.
-- **Server-Side Authorization (`firestore.rules`)**: Authoritative database security rules enforcing least privilege, customer request ownership, worker profile boundaries, and `/admins/{uid}` membership verification. Client-side role tampering cannot bypass Firestore rules.
-- **Dedicated Admin Panel (`admin.html`)**: Segregated administrative panel requiring Firebase Authentication and verified `/admins/{uid}` document membership.
-- **Administrative Operations**: Worker moderation (approve/suspend/restore), customer inspection, request tracking, trust & safety report resolution, review moderation, and security signal monitoring.
-- **Append-Only Audit Trail**: Every privileged administrative operation writes an immutable record to `/auditLogs` with admin UID, action, target, timestamp, and outcome.
+- **Server-Side Database Authorization (`firestore.rules`)**: Authoritative database security rules enforcing least privilege, customer request ownership, worker profile boundaries, and `/admins/{uid}` membership verification. Client-side role tampering cannot bypass Firestore rules.
+- **Dedicated Admin Command Center (`admin.html`)**: Segregated administrative command center requiring Firebase Authentication and verified `/admins/{uid}` document membership.
+- **Trusted Backend Logic & Cloud Functions 2nd Gen (Step 19)**:
+  - Node.js 22 / Cloud Functions 2nd Gen HTTPS Callable functions (`onCall`).
+  - Authoritative request lifecycle state machine (`Pending` -> `Accepted`/`Rejected`/`Cancelled` -> `Completed`).
+  - Review eligibility verification (customer ownership, request completed, single review per request, rating bounds 1–5, sanitized content).
+  - Abuse and safety report submission, validation, and signal tracking.
+  - Privileged administrative mutations (worker approval/suspension, report resolution, review moderation).
+  - Append-only audit logging (`/auditLogs`) and immutable security event capture (`/securityEvents`).
+  - Automated test suite verifying all 18 security criteria in `functions/test/step19.test.js`.
+
+> **Cloud Functions Deployment Status:**
+> Cloud Functions are currently developed and tested locally. Production deployment is intentionally deferred until the project is ready for Blaze.
 
 ### NOT YET (Planned for Future Steps):
-- **Firebase Storage** (Step 18+): Cloud object storage for identity documents, verification certificates, and profile attachments.
-- **Cloud Functions / Backend Enforcement** (Step 19+): Server-authoritative custom claims (`admin: true`), automated database triggers, and production-grade rate limiting.
+- **Firebase Storage** (Step 18 - Deferred): Cloud object storage for identity documents, verification certificates, and profile attachments.
+- **Production Cloud Functions Deployment** (Step 19 Deployment - Deferred): Deploying functions to live Google Cloud infrastructure requires upgrading Firebase project to the Blaze (Pay-as-you-go) plan.
+- **Payment Processing & SMS Notifications**: Intentionally deferred to keep core service foundation secure and focused.
 
 ## 3D background
 

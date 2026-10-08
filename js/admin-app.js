@@ -3081,6 +3081,23 @@ function mountAdminShell(adminSession) {
     nav.appendChild(groupEl);
   });
 
+  // Founder / Developer Credit & Platform Handle
+  const sidebarCredit = document.createElement("div");
+  sidebarCredit.className = "admin-sidebar-credit";
+  const creditText = document.createElement("span");
+  creditText.textContent = "Developed by Uz4ir7";
+  const igLink = document.createElement("a");
+  igLink.href = "https://www.instagram.com/jkfixhub/";
+  igLink.target = "_blank";
+  igLink.rel = "noopener noreferrer";
+  igLink.className = "admin-social-link";
+  igLink.title = "Official Instagram @jkfixhub";
+  igLink.textContent = "@jkfixhub";
+  sidebarCredit.appendChild(creditText);
+  sidebarCredit.appendChild(document.createTextNode(" · "));
+  sidebarCredit.appendChild(igLink);
+  nav.appendChild(sidebarCredit);
+
   // Mobile Drawer Toggle handlers
   const toggleDrawer = () => {
     const isOpen = nav.classList.toggle("nav-open");
@@ -3140,11 +3157,19 @@ function handleAuthStateChange(adminSession, meta = {}) {
 
   // 2. Authorized Admin
   if (adminSession && adminSession.role === "admin" && adminSession.active === true) {
+    const appSection = document.getElementById("adminAppSection");
+    const isAlreadyMounted = currentAdmin?.uid === adminSession.uid &&
+      appSection &&
+      !appSection.hidden &&
+      Boolean(document.getElementById("adminMainContent"));
+
     currentAdmin = adminSession;
     if (loginSection) loginSection.hidden = true;
     if (loginError) loginError.hidden = true;
 
-    mountAdminShell(adminSession);
+    if (!isAlreadyMounted) {
+      mountAdminShell(adminSession);
+    }
     return;
   }
 
