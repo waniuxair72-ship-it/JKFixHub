@@ -523,8 +523,44 @@ export async function updateAdminReviewStatus(reviewId, status, adminUid) {
   }
 }
 
+function getTimestampMillis(v) {
+  if (!v) return 0;
+  if (typeof v.toMillis === "function") {
+    try {
+      return v.toMillis();
+    } catch {
+      // Fall through
+    }
+  }
+  if (typeof v.toDate === "function") {
+    try {
+      const d = v.toDate();
+      return isNaN(d.getTime()) ? 0 : d.getTime();
+    } catch {
+      // Fall through
+    }
+  }
+  if (typeof v.seconds === "number") {
+    return v.seconds * 1000 + Math.floor((v.nanoseconds || 0) / 1e6);
+  }
+  if (typeof v._seconds === "number") {
+    return v._seconds * 1000 + Math.floor((v._nanoseconds || 0) / 1e6);
+  }
+  if (v instanceof Date) {
+    return isNaN(v.getTime()) ? 0 : v.getTime();
+  }
+  if (typeof v === "number" && !isNaN(v)) {
+    return v < 1e11 ? v * 1000 : v;
+  }
+  if (typeof v === "string") {
+    const t = new Date(v).getTime();
+    return isNaN(t) ? 0 : t;
+  }
+  return 0;
+}
+
 /**
- * Fetches security events.
+ * Fetches security events in chronological order (newest first).
  * @returns {Promise<Array<object>>}
  */
 export async function getAdminSecurityEvents() {
@@ -540,6 +576,8 @@ export async function getAdminSecurityEvents() {
     snap.forEach((doc) => {
       events.push({ id: doc.id, ...doc.data() });
     });
+    // Sort newest first
+    events.sort((a, b) => getTimestampMillis(b.timestamp) - getTimestampMillis(a.timestamp));
     return events;
   } catch (err) {
     console.warn("[JKFixHub Admin] Security events fetch failed:", err?.message || err);
@@ -548,7 +586,7 @@ export async function getAdminSecurityEvents() {
 }
 
 /**
- * Fetches audit log records in chronological order.
+ * Fetches audit log records in chronological order (newest first).
  * @returns {Promise<Array<object>>}
  */
 export async function getAdminAuditLogs() {
@@ -565,11 +603,7 @@ export async function getAdminAuditLogs() {
       logs.push({ id: doc.id, ...doc.data() });
     });
     // Sort newest first
-    logs.sort((a, b) => {
-      const ta = typeof a.timestamp === "string" ? new Date(a.timestamp).getTime() : 0;
-      const tb = typeof b.timestamp === "string" ? new Date(b.timestamp).getTime() : 0;
-      return tb - ta;
-    });
+    logs.sort((a, b) => getTimestampMillis(b.timestamp) - getTimestampMillis(a.timestamp));
     return logs;
   } catch (err) {
     console.warn("[JKFixHub Admin] Audit logs fetch failed:", err?.message || err);

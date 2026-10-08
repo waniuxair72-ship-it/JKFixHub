@@ -10,6 +10,15 @@
     <link rel="stylesheet" href="css/admin.css" />
   </head>
   <body class="admin-body">
+    <!-- 3D/Cinematic Ambient Background & Signature Stage -->
+    <div id="adminBackgroundStage" class="admin-bg-stage" aria-hidden="true">
+      <canvas id="admin3dCanvas" class="admin-3d-canvas"></canvas>
+      <div id="adminSignatureLayer" class="admin-signature-layer">
+        <div class="admin-signature-img"></div>
+      </div>
+      <div class="admin-ambient-vignette"></div>
+    </div>
+
     <!-- Explicit Loading Screen (Visible during background authorization check) -->
     <div id="adminAuthLoading" class="admin-auth-loading-screen" role="status" aria-live="polite" hidden>
       <div class="admin-auth-loading-card">
@@ -26,12 +35,12 @@
             <span class="admin-brand-mark">JK</span>
             <span class="admin-brand-title">FixHub</span>
           </div>
-          <span class="admin-badge-privileged">Privileged Area</span>
+          <span class="admin-badge-privileged">COMMAND CENTER</span>
         </div>
 
         <h1>Administrator Sign In</h1>
         <p class="admin-login-subtitle">
-          Authorized platform management access only.
+          Secure administrator access to platform command center.
         </p>
 
         <div id="adminLoginError" class="admin-alert-banner" role="alert" hidden>
@@ -62,12 +71,12 @@
           </div>
 
           <button id="adminLoginSubmit" type="submit" class="admin-btn-primary">
-            Sign In to Admin Panel
+            ENTER COMMAND CENTER
           </button>
         </form>
 
         <div class="admin-login-footer-note">
-          Restricted access. All administrative actions and authentication attempts are audited server-side.
+          Protected platform environment. Administrative credentials and session tokens are validated against server-side Firestore security rules.
         </div>
       </div>
     </main>
