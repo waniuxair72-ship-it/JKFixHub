@@ -20,12 +20,15 @@ import {
   initializeAdminAuth
 } from "./admin-auth.js";
 
+import { shouldConnectToEmulator } from "./firebase-config.js";
+
 import {
   getAdminOverviewStats,
   getAdminWorkers,
   updateAdminWorkerStatus,
   getAdminCustomers,
   getAdminRequests,
+  updateAdminRequestStatus,
   getAdminReports,
   updateAdminReportStatus,
   getAdminReviews,
@@ -796,8 +799,10 @@ async function renderWorkersView(container) {
   stSelect.className = "admin-select-input";
   [
     { val: "all", label: "All Statuses" },
+    { val: "pending", label: "Pending" },
     { val: "active", label: "Active" },
-    { val: "suspended", label: "Suspended" }
+    { val: "suspended", label: "Suspended" },
+    { val: "rejected", label: "Rejected" }
   ].forEach((opt) => {
     const o = document.createElement("option");
     o.value = opt.val;
@@ -862,8 +867,7 @@ async function renderWorkersView(container) {
       if (vFilter === "verified" && !w.isVerified) return false;
       if (vFilter === "pending" && Boolean(w.isVerified)) return false;
       // Status
-      if (sFilter === "active" && w.status === "suspended") return false;
-      if (sFilter === "suspended" && w.status !== "suspended") return false;
+      if (sFilter !== "all" && String(w.status || "").toLowerCase() !== sFilter.toLowerCase()) return false;
       // District
       if (dFilter !== "all" && String(w.district || "").toLowerCase() !== dFilter.toLowerCase()) return false;
 
@@ -901,7 +905,8 @@ async function renderWorkersView(container) {
       const row = document.createElement("tr");
 
       const tdId = document.createElement("td");
-      tdId.textContent = String(w.id || "—");
+      tdId.textContent = String(w.id ? `${w.id.substring(0, 10)}...` : "—");
+      tdId.title = String(w.id || "—");
       row.appendChild(tdId);
 
       const tdName = document.createElement("td");
@@ -922,8 +927,8 @@ async function renderWorkersView(container) {
 
       const tdStatus = document.createElement("td");
       const statusPill = document.createElement("span");
-      statusPill.className = `admin-status-pill ${w.status || "active"}`;
-      statusPill.textContent = String(w.status || "active");
+      statusPill.className = `admin-status-pill ${w.status || "pending"}`;
+      statusPill.textContent = String(w.status || "pending");
       tdStatus.appendChild(statusPill);
       row.appendChild(tdStatus);
 
@@ -938,7 +943,7 @@ async function renderWorkersView(container) {
       const actionsBox = document.createElement("div");
       actionsBox.className = "admin-table-actions";
 
-      // Inspect profile
+      // 1. Inspect profile modal
       const inspectBtn = document.createElement("button");
       inspectBtn.type = "button";
       inspectBtn.className = "admin-table-btn";
@@ -948,16 +953,134 @@ async function renderWorkersView(container) {
         const grid = document.createElement("div");
         grid.className = "admin-detail-grid";
 
-        grid.appendChild(createDetailItem("Worker ID", w.id));
+        grid.appendChild(createDetailItem("Worker ID", w.id, true));
         grid.appendChild(createDetailItem("Full Name", w.name));
         grid.appendChild(createDetailItem("Service Category", w.service));
         grid.appendChild(createDetailItem("District", w.district));
         grid.appendChild(createDetailItem("Rating", w.rating ? `★ ${w.rating}` : "No ratings yet"));
-        grid.appendChild(createDetailItem("Moderation Status", w.status || "active"));
+        grid.appendChild(createDetailItem("Moderation Status", w.status || "pending"));
         grid.appendChild(createDetailItem("Verification", w.isVerified ? "Verified" : "Pending Verification"));
-        if (w.experience) grid.appendChild(createDetailItem("Experience", `${w.experience} years`));
-        if (w.phone) grid.appendChild(createDetailItem("Phone", w.phone));
+        const expDisplay = w.experience ? (String(w.experience).toLowerCase().includes("year") ? w.experience : `${w.experience} years`) : "—";
+        grid.appendChild(createDetailItem("Experience", expDisplay));
+        grid.appendChild(createDetailItem("Contact Email", w.email || "—"));
+        grid.appendChild(createDetailItem("Contact Phone", w.phone || "—"));
+        if (w.createdAt) grid.appendChild(createDetailItem("Registered Date", formatDateTime(w.createdAt)));
         if (w.bio) grid.appendChild(createDetailItem("Professional Bio", w.bio, true));
+        grid.appendChild(createDetailItem(
+          "Privacy & Data Separation",
+          "Worker contact info (email, phone) is securely stored in /users/{uid} and merged exclusively for authorized administrators. The public profile in /workers/{uid} never contains contact fields.",
+          true
+        ));
+
+        // Administrative Moderation Controls inside detail modal
+        const modWrap = document.createElement("div");
+        modWrap.className = "admin-detail-item full-width";
+        const modLbl = document.createElement("div");
+        modLbl.className = "admin-detail-label";
+        modLbl.textContent = "Administrative Moderation Actions";
+        modWrap.appendChild(modLbl);
+
+        const modButtons = document.createElement("div");
+        modButtons.className = "admin-table-actions";
+        modButtons.style.marginTop = "8px";
+
+        if (!w.isVerified || w.status === "pending") {
+          const mApprove = document.createElement("button");
+          mApprove.type = "button";
+          mApprove.className = "admin-table-btn approve";
+          mApprove.textContent = "✓ Approve & Publish";
+          mApprove.onclick = async () => {
+            const res = await updateAdminWorkerStatus(w.id, { isVerified: true, status: "active" }, currentAdmin.uid, { reason: "Moderator approved from detail inspection" });
+            if (res.success) {
+              showToast(`Worker ${w.name} verified and published.`);
+              w.isVerified = true;
+              w.status = "active";
+              const modalBackdrop = document.getElementById("adminActionModal");
+              if (modalBackdrop) modalBackdrop.hidden = true;
+              renderTable();
+            } else {
+              showToast(res.error || "Failed to approve worker.");
+            }
+          };
+          modButtons.appendChild(mApprove);
+
+          const mReject = document.createElement("button");
+          mReject.type = "button";
+          mReject.className = "admin-table-btn suspend";
+          mReject.textContent = "✕ Reject Application";
+          mReject.onclick = async () => {
+            const res = await updateAdminWorkerStatus(w.id, { isVerified: false, status: "rejected" }, currentAdmin.uid, { reason: "Moderator rejected from detail inspection" });
+            if (res.success) {
+              showToast(`Worker ${w.name} application rejected.`);
+              w.isVerified = false;
+              w.status = "rejected";
+              const modalBackdrop = document.getElementById("adminActionModal");
+              if (modalBackdrop) modalBackdrop.hidden = true;
+              renderTable();
+            } else {
+              showToast(res.error || "Failed to reject worker application.");
+            }
+          };
+          modButtons.appendChild(mReject);
+        } else if (w.status === "active") {
+          const mSuspend = document.createElement("button");
+          mSuspend.type = "button";
+          mSuspend.className = "admin-table-btn suspend";
+          mSuspend.textContent = "✕ Suspend Worker Account";
+          mSuspend.onclick = async () => {
+            const res = await updateAdminWorkerStatus(w.id, { status: "suspended" }, currentAdmin.uid, { reason: "Moderator suspended from detail inspection" });
+            if (res.success) {
+              showToast(`Worker ${w.name} suspended from public discovery.`);
+              w.status = "suspended";
+              const modalBackdrop = document.getElementById("adminActionModal");
+              if (modalBackdrop) modalBackdrop.hidden = true;
+              renderTable();
+            } else {
+              showToast(res.error || "Failed to suspend worker.");
+            }
+          };
+          modButtons.appendChild(mSuspend);
+        } else if (w.status === "suspended") {
+          const mRestore = document.createElement("button");
+          mRestore.type = "button";
+          mRestore.className = "admin-table-btn approve";
+          mRestore.textContent = "↺ Restore Worker Account";
+          mRestore.onclick = async () => {
+            const res = await updateAdminWorkerStatus(w.id, { status: "active" }, currentAdmin.uid, { reason: "Moderator restored from detail inspection" });
+            if (res.success) {
+              showToast(`Worker ${w.name} restored to active status.`);
+              w.status = "active";
+              const modalBackdrop = document.getElementById("adminActionModal");
+              if (modalBackdrop) modalBackdrop.hidden = true;
+              renderTable();
+            } else {
+              showToast(res.error || "Failed to restore worker.");
+            }
+          };
+          modButtons.appendChild(mRestore);
+        } else if (w.status === "rejected") {
+          const mReopen = document.createElement("button");
+          mReopen.type = "button";
+          mReopen.className = "admin-table-btn approve";
+          mReopen.textContent = "↺ Reopen Application";
+          mReopen.onclick = async () => {
+            const res = await updateAdminWorkerStatus(w.id, { isVerified: false, status: "pending" }, currentAdmin.uid, { reason: "Moderator reopened application" });
+            if (res.success) {
+              showToast(`Worker ${w.name} application reopened as Pending.`);
+              w.isVerified = false;
+              w.status = "pending";
+              const modalBackdrop = document.getElementById("adminActionModal");
+              if (modalBackdrop) modalBackdrop.hidden = true;
+              renderTable();
+            } else {
+              showToast(res.error || "Failed to reopen application.");
+            }
+          };
+          modButtons.appendChild(mReopen);
+        }
+
+        modWrap.appendChild(modButtons);
+        grid.appendChild(modWrap);
 
         modalContent.appendChild(grid);
 
@@ -969,80 +1092,130 @@ async function renderWorkersView(container) {
       };
       actionsBox.appendChild(inspectBtn);
 
-      // Approve verification
-      if (!w.isVerified) {
+      // 2. Contextual table-level actions
+      if (!w.isVerified || w.status === "pending") {
         const approveBtn = document.createElement("button");
         approveBtn.type = "button";
         approveBtn.className = "admin-table-btn approve";
         approveBtn.textContent = "Approve";
+        approveBtn.title = "Approve verification and publish to public discovery";
         approveBtn.onclick = () => {
           showConfirmModal({
             title: "Approve Worker Verification",
-            body: `Approve and verify ${w.name} (#${w.id}) for public service discovery?`,
+            body: `Approve and verify ${w.name} (#${w.id}) for public service discovery? Their profile will immediately appear on the public website.`,
             confirmText: "Approve Worker",
             onConfirm: async () => {
-              const res = await updateAdminWorkerStatus(w.id, { isVerified: true, status: "active" }, currentAdmin.uid);
+              const res = await updateAdminWorkerStatus(w.id, { isVerified: true, status: "active" }, currentAdmin.uid, { reason: "Admin approved verification" });
               if (res.success) {
-                showToast(`Worker ${w.name} verified.`);
+                showToast(`Worker ${w.name} verified and active.`);
                 w.isVerified = true;
                 w.status = "active";
                 renderTable();
               } else {
-                showToast("Failed to approve worker.");
+                showToast(res.error || "Failed to approve worker.");
               }
             }
           });
         };
         actionsBox.appendChild(approveBtn);
-      }
 
-      // Suspend / Restore
-      if (w.status !== "suspended") {
+        const rejectBtn = document.createElement("button");
+        rejectBtn.type = "button";
+        rejectBtn.className = "admin-table-btn suspend";
+        rejectBtn.textContent = "Reject";
+        rejectBtn.title = "Reject application";
+        rejectBtn.onclick = () => {
+          showConfirmModal({
+            title: "Reject Worker Application",
+            body: `Reject application for ${w.name} (#${w.id})? They will remain hidden from public discovery.`,
+            confirmText: "Reject Application",
+            onConfirm: async () => {
+              const res = await updateAdminWorkerStatus(w.id, { isVerified: false, status: "rejected" }, currentAdmin.uid, { reason: "Admin rejected application" });
+              if (res.success) {
+                showToast(`Worker ${w.name} application rejected.`);
+                w.isVerified = false;
+                w.status = "rejected";
+                renderTable();
+              } else {
+                showToast(res.error || "Failed to reject application.");
+              }
+            }
+          });
+        };
+        actionsBox.appendChild(rejectBtn);
+      } else if (w.status === "active") {
         const suspendBtn = document.createElement("button");
         suspendBtn.type = "button";
         suspendBtn.className = "admin-table-btn suspend";
         suspendBtn.textContent = "Suspend";
+        suspendBtn.title = "Suspend account and remove from public discovery";
         suspendBtn.onclick = () => {
           showConfirmModal({
             title: "Suspend Worker Account",
-            body: `Suspend ${w.name} (#${w.id})? They will be hidden from public discovery.`,
+            body: `Suspend ${w.name} (#${w.id})? They will be immediately hidden from public discovery while preserving their account and private records.`,
             confirmText: "Suspend Worker",
             onConfirm: async () => {
-              const res = await updateAdminWorkerStatus(w.id, { status: "suspended" }, currentAdmin.uid);
+              const res = await updateAdminWorkerStatus(w.id, { status: "suspended" }, currentAdmin.uid, { reason: "Admin suspended account" });
               if (res.success) {
                 showToast(`Worker ${w.name} suspended.`);
                 w.status = "suspended";
                 renderTable();
               } else {
-                showToast("Failed to suspend worker.");
+                showToast(res.error || "Failed to suspend worker.");
               }
             }
           });
         };
         actionsBox.appendChild(suspendBtn);
-      } else {
+      } else if (w.status === "suspended") {
         const restoreBtn = document.createElement("button");
         restoreBtn.type = "button";
         restoreBtn.className = "admin-table-btn approve";
         restoreBtn.textContent = "Restore";
+        restoreBtn.title = "Restore account to active status in public discovery";
         restoreBtn.onclick = () => {
           showConfirmModal({
             title: "Restore Worker Account",
-            body: `Restore ${w.name} (#${w.id}) to active status?`,
+            body: `Restore ${w.name} (#${w.id}) to active status? They will reappear in public discovery.`,
             confirmText: "Restore Worker",
             onConfirm: async () => {
-              const res = await updateAdminWorkerStatus(w.id, { status: "active" }, currentAdmin.uid);
+              const res = await updateAdminWorkerStatus(w.id, { status: "active" }, currentAdmin.uid, { reason: "Admin restored account" });
               if (res.success) {
                 showToast(`Worker ${w.name} restored.`);
                 w.status = "active";
                 renderTable();
               } else {
-                showToast("Failed to restore worker.");
+                showToast(res.error || "Failed to restore worker.");
               }
             }
           });
         };
         actionsBox.appendChild(restoreBtn);
+      } else if (w.status === "rejected") {
+        const reopenBtn = document.createElement("button");
+        reopenBtn.type = "button";
+        reopenBtn.className = "admin-table-btn approve";
+        reopenBtn.textContent = "Reopen";
+        reopenBtn.title = "Reopen application for review";
+        reopenBtn.onclick = () => {
+          showConfirmModal({
+            title: "Reopen Worker Application",
+            body: `Reopen application for ${w.name} (#${w.id}) as Pending for review?`,
+            confirmText: "Reopen Application",
+            onConfirm: async () => {
+              const res = await updateAdminWorkerStatus(w.id, { isVerified: false, status: "pending" }, currentAdmin.uid, { reason: "Admin reopened application" });
+              if (res.success) {
+                showToast(`Worker ${w.name} application reopened.`);
+                w.isVerified = false;
+                w.status = "pending";
+                renderTable();
+              } else {
+                showToast(res.error || "Failed to reopen application.");
+              }
+            }
+          });
+        };
+        actionsBox.appendChild(reopenBtn);
       }
 
       tdActions.appendChild(actionsBox);
@@ -1462,6 +1635,10 @@ async function renderRequestsView(container) {
       row.appendChild(tdDate);
 
       const tdActions = document.createElement("td");
+      const actionsBox = document.createElement("div");
+      actionsBox.className = "admin-table-actions";
+
+      // 1. Inspect & Details Modal
       const inspectBtn = document.createElement("button");
       inspectBtn.type = "button";
       inspectBtn.className = "admin-table-btn";
@@ -1479,7 +1656,9 @@ async function renderRequestsView(container) {
         grid.appendChild(createDetailItem("Assigned Worker", r.workerName || r.workerId));
         if (r.date) grid.appendChild(createDetailItem("Scheduled Date", r.date));
         grid.appendChild(createDetailItem("Created At", formatDateTime(r.createdAt)));
-        if (r.notes || r.description) grid.appendChild(createDetailItem("Request Description", r.notes || r.description, true));
+        if (r.updatedAt) grid.appendChild(createDetailItem("Last Updated", formatDateTime(r.updatedAt)));
+        if (r.adminNotes) grid.appendChild(createDetailItem("Administrative Notes", r.adminNotes, true));
+        if (r.notes || r.description) grid.appendChild(createDetailItem("Customer Description", r.notes || r.description, true));
 
         // Lifecycle Timeline
         const tlWrap = document.createElement("div");
@@ -1490,10 +1669,14 @@ async function renderRequestsView(container) {
         const timeline = document.createElement("div");
         timeline.className = "admin-timeline";
 
+        const isAcceptedOrBeyond = ["Accepted", "Completed"].includes(r.status);
+        const isCompleted = r.status === "Completed";
+        const isTerminated = ["Cancelled", "Rejected"].includes(r.status);
+
         const steps = [
           { label: "Request Created", done: true },
-          { label: "Technician Assignment", done: r.status === "Accepted" || r.status === "Completed" },
-          { label: "Fulfillment & Completion", done: r.status === "Completed" }
+          { label: isTerminated ? `Terminated (${r.status})` : "Technician Assignment", done: isAcceptedOrBeyond || isTerminated },
+          { label: "Fulfillment & Completion", done: isCompleted }
         ];
 
         steps.forEach((step) => {
@@ -1510,6 +1693,101 @@ async function renderRequestsView(container) {
         tlWrap.appendChild(timeline);
         grid.appendChild(tlWrap);
 
+        // Administrative Moderation Controls inside detail modal
+        const modWrap = document.createElement("div");
+        modWrap.className = "admin-detail-item full-width";
+        const modLbl = document.createElement("div");
+        modLbl.className = "admin-detail-label";
+        modLbl.textContent = "Administrative Moderation Actions";
+        modWrap.appendChild(modLbl);
+
+        const modButtons = document.createElement("div");
+        modButtons.className = "admin-table-actions";
+        modButtons.style.marginTop = "8px";
+
+        if (r.status !== "Completed" && !isTerminated) {
+          const mComplete = document.createElement("button");
+          mComplete.type = "button";
+          mComplete.className = "admin-table-btn approve";
+          mComplete.textContent = "✓ Mark Completed";
+          mComplete.onclick = async () => {
+            const res = await updateAdminRequestStatus(r.id, "Completed", currentAdmin.uid, { reason: "Moderator marked Completed from detail inspection" });
+            if (res.success) {
+              showToast(`Request #${r.id} marked Completed.`);
+              r.status = "Completed";
+              const modalBackdrop = document.getElementById("adminActionModal");
+              if (modalBackdrop) modalBackdrop.hidden = true;
+              renderTable();
+            } else {
+              showToast(res.error || "Failed to update request.");
+            }
+          };
+          modButtons.appendChild(mComplete);
+        }
+
+        if (r.status === "Pending") {
+          const mAccept = document.createElement("button");
+          mAccept.type = "button";
+          mAccept.className = "admin-table-btn approve";
+          mAccept.textContent = "✓ Accept on Worker Behalf";
+          mAccept.onclick = async () => {
+            const res = await updateAdminRequestStatus(r.id, "Accepted", currentAdmin.uid, { reason: "Moderator accepted on technician behalf" });
+            if (res.success) {
+              showToast(`Request #${r.id} accepted. Chat enabled.`);
+              r.status = "Accepted";
+              const modalBackdrop = document.getElementById("adminActionModal");
+              if (modalBackdrop) modalBackdrop.hidden = true;
+              renderTable();
+            } else {
+              showToast(res.error || "Failed to accept request.");
+            }
+          };
+          modButtons.appendChild(mAccept);
+        }
+
+        if (!isTerminated) {
+          const mCancel = document.createElement("button");
+          mCancel.type = "button";
+          mCancel.className = "admin-table-btn suspend";
+          mCancel.textContent = "✕ Cancel Request";
+          mCancel.onclick = async () => {
+            const res = await updateAdminRequestStatus(r.id, "Cancelled", currentAdmin.uid, { reason: "Moderator cancelled from detail inspection" });
+            if (res.success) {
+              showToast(`Request #${r.id} cancelled.`);
+              r.status = "Cancelled";
+              const modalBackdrop = document.getElementById("adminActionModal");
+              if (modalBackdrop) modalBackdrop.hidden = true;
+              renderTable();
+            } else {
+              showToast(res.error || "Failed to cancel request.");
+            }
+          };
+          modButtons.appendChild(mCancel);
+        }
+
+        if (isTerminated) {
+          const mReopen = document.createElement("button");
+          mReopen.type = "button";
+          mReopen.className = "admin-table-btn approve";
+          mReopen.textContent = "↺ Reopen as Pending";
+          mReopen.onclick = async () => {
+            const res = await updateAdminRequestStatus(r.id, "Pending", currentAdmin.uid, { reason: "Moderator reopened from detail inspection" });
+            if (res.success) {
+              showToast(`Request #${r.id} reopened as Pending.`);
+              r.status = "Pending";
+              const modalBackdrop = document.getElementById("adminActionModal");
+              if (modalBackdrop) modalBackdrop.hidden = true;
+              renderTable();
+            } else {
+              showToast(res.error || "Failed to reopen request.");
+            }
+          };
+          modButtons.appendChild(mReopen);
+        }
+
+        modWrap.appendChild(modButtons);
+        grid.appendChild(modWrap);
+
         modalContent.appendChild(grid);
 
         showDetailModal({
@@ -1518,7 +1796,132 @@ async function renderRequestsView(container) {
           isWide: true
         });
       };
-      tdActions.appendChild(inspectBtn);
+      actionsBox.appendChild(inspectBtn);
+
+      // 2. Table-level contextual action buttons
+      if (r.status === "Pending") {
+        const acceptBtn = document.createElement("button");
+        acceptBtn.type = "button";
+        acceptBtn.className = "admin-table-btn approve";
+        acceptBtn.textContent = "Accept";
+        acceptBtn.title = "Dispatch / Accept request on assigned technician's behalf";
+        acceptBtn.onclick = () => {
+          showConfirmModal({
+            title: `Accept Request #${r.id}`,
+            body: `Administratively accept Request #${r.id} on behalf of ${r.workerName || "assigned technician"}? This will activate the private chat channel.`,
+            confirmText: "Accept Request",
+            onConfirm: async () => {
+              const res = await updateAdminRequestStatus(r.id, "Accepted", currentAdmin.uid, { reason: "Admin accepted from request fulfillment queue" });
+              if (res.success) {
+                showToast(`Request #${r.id} accepted. Chat enabled.`);
+                r.status = "Accepted";
+                renderTable();
+              } else {
+                showToast(res.error || "Failed to accept request.");
+              }
+            }
+          });
+        };
+        actionsBox.appendChild(acceptBtn);
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.className = "admin-table-btn suspend";
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.title = "Cancel pending request";
+        cancelBtn.onclick = () => {
+          showConfirmModal({
+            title: `Cancel Request #${r.id}`,
+            body: `Administratively cancel pending Request #${r.id} for ${r.customerName || "Customer"}?`,
+            confirmText: "Cancel Request",
+            onConfirm: async () => {
+              const res = await updateAdminRequestStatus(r.id, "Cancelled", currentAdmin.uid, { reason: "Admin cancelled from request fulfillment queue" });
+              if (res.success) {
+                showToast(`Request #${r.id} cancelled.`);
+                r.status = "Cancelled";
+                renderTable();
+              } else {
+                showToast(res.error || "Failed to cancel request.");
+              }
+            }
+          });
+        };
+        actionsBox.appendChild(cancelBtn);
+      } else if (r.status === "Accepted") {
+        const completeBtn = document.createElement("button");
+        completeBtn.type = "button";
+        completeBtn.className = "admin-table-btn approve";
+        completeBtn.textContent = "Complete";
+        completeBtn.title = "Mark request successfully fulfilled";
+        completeBtn.onclick = () => {
+          showConfirmModal({
+            title: `Complete Request #${r.id}`,
+            body: `Mark Request #${r.id} as fulfilled and completed for ${r.customerName || "Customer"}?`,
+            confirmText: "Mark Completed",
+            onConfirm: async () => {
+              const res = await updateAdminRequestStatus(r.id, "Completed", currentAdmin.uid, { reason: "Admin marked fulfilled" });
+              if (res.success) {
+                showToast(`Request #${r.id} completed.`);
+                r.status = "Completed";
+                renderTable();
+              } else {
+                showToast(res.error || "Failed to complete request.");
+              }
+            }
+          });
+        };
+        actionsBox.appendChild(completeBtn);
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.className = "admin-table-btn suspend";
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.title = "Cancel active request and lock chat";
+        cancelBtn.onclick = () => {
+          showConfirmModal({
+            title: `Cancel Active Request #${r.id}`,
+            body: `Cancel active Request #${r.id}? In-app chat between customer and worker will be deactivated.`,
+            confirmText: "Cancel Request",
+            onConfirm: async () => {
+              const res = await updateAdminRequestStatus(r.id, "Cancelled", currentAdmin.uid, { reason: "Admin cancelled active request" });
+              if (res.success) {
+                showToast(`Request #${r.id} cancelled.`);
+                r.status = "Cancelled";
+                renderTable();
+              } else {
+                showToast(res.error || "Failed to cancel request.");
+              }
+            }
+          });
+        };
+        actionsBox.appendChild(cancelBtn);
+      } else if (r.status === "Cancelled" || r.status === "Rejected") {
+        const reopenBtn = document.createElement("button");
+        reopenBtn.type = "button";
+        reopenBtn.className = "admin-table-btn approve";
+        reopenBtn.textContent = "Reopen";
+        reopenBtn.title = "Reopen request to Pending status";
+        reopenBtn.onclick = () => {
+          showConfirmModal({
+            title: `Reopen Request #${r.id}`,
+            body: `Reopen Request #${r.id} and return it to Pending status for fulfillment?`,
+            confirmText: "Reopen as Pending",
+            onConfirm: async () => {
+              const res = await updateAdminRequestStatus(r.id, "Pending", currentAdmin.uid, { reason: "Admin reopened request" });
+              if (res.success) {
+                showToast(`Request #${r.id} reopened as Pending.`);
+                r.status = "Pending";
+                renderTable();
+              } else {
+                showToast(res.error || "Failed to reopen request.");
+              }
+            }
+          });
+        };
+        actionsBox.appendChild(reopenBtn);
+      }
+
+      tdActions.appendChild(actionsBox);
       row.appendChild(tdActions);
 
       tbody.appendChild(row);
@@ -3200,12 +3603,48 @@ function initializeAdminApp() {
   const loginError = document.getElementById("adminLoginError");
   const loginErrorMsg = document.getElementById("adminLoginErrorMessage");
   const submitBtn = document.getElementById("adminLoginSubmit");
+  const emulatorToggle = document.getElementById("adminEmulatorToggle");
+
+  if (emulatorToggle) {
+    if (shouldConnectToEmulator()) {
+      emulatorToggle.checked = true;
+    }
+    emulatorToggle.addEventListener("change", () => {
+      if (emulatorToggle.checked) {
+        try {
+          sessionStorage.setItem("jkfixhub_use_emulator", "true");
+          localStorage.setItem("jkfixhub_use_emulator", "true");
+        } catch (_) {}
+        if (typeof window !== "undefined") {
+          window.__JKFIXHUB_USE_EMULATOR__ = true;
+        }
+      } else {
+        try {
+          sessionStorage.removeItem("jkfixhub_use_emulator");
+          localStorage.removeItem("jkfixhub_use_emulator");
+        } catch (_) {}
+        if (typeof window !== "undefined") {
+          window.__JKFIXHUB_USE_EMULATOR__ = false;
+        }
+      }
+    });
+  }
 
   if (loginForm) {
     loginForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       const email = document.getElementById("adminEmailInput")?.value || "";
       const password = document.getElementById("adminPasswordInput")?.value || "";
+
+      if (emulatorToggle && emulatorToggle.checked) {
+        if (typeof window !== "undefined") {
+          window.__JKFIXHUB_USE_EMULATOR__ = true;
+        }
+        try {
+          sessionStorage.setItem("jkfixhub_use_emulator", "true");
+          localStorage.setItem("jkfixhub_use_emulator", "true");
+        } catch (_) {}
+      }
 
       if (loginError) loginError.hidden = true;
       if (submitBtn) {

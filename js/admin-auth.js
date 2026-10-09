@@ -15,7 +15,9 @@
 import {
   initializeFirebaseClient,
   getFirebaseAuth,
-  getFirebaseAuthMethods
+  getFirebaseAuthMethods,
+  shouldConnectToEmulator,
+  ensureAuthEmulatorConnected
 } from "./firebase-config.js";
 import {
   verifyAdminAuthorization,
@@ -113,6 +115,14 @@ export async function signInAdmin(email, password) {
         admin: null,
         error: "Access unavailable. This area is restricted to authorized administrators."
       };
+    }
+
+    // Authoritatively ensure auth emulator connection before sign-in call
+    if (shouldConnectToEmulator()) {
+      ensureAuthEmulatorConnected(auth, methods);
+      console.log("[JKFixHub AdminAuth Diagnostic] Emulator mode ACTIVE: routing signInAdmin to local Auth Emulator (http://127.0.0.1:9099)");
+    } else {
+      console.log("[JKFixHub AdminAuth Diagnostic] Production mode ACTIVE: routing signInAdmin to Production Firebase Auth");
     }
 
     // 1. Authenticate credentials with Firebase Authentication
@@ -264,6 +274,10 @@ export async function initializeAdminAuth() {
 
     const { auth } = await initializeFirebaseClient();
     const methods = await getFirebaseAuthMethods();
+
+    if (shouldConnectToEmulator() && auth) {
+      ensureAuthEmulatorConnected(auth, methods);
+    }
 
     if (!auth || !methods || typeof methods.onAuthStateChanged !== "function") {
       isVerifyingAuth = false;

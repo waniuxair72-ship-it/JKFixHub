@@ -86,17 +86,32 @@ service cloud.firestore {
     // ------------------------------------------------------------------------
     // 3. Worker Profiles: /workers/{workerId}
     // ------------------------------------------------------------------------
-    // - Public read for search and service discovery.
-    // - Workers can update profile details (availability, bio, experience, phone).
+    // - Public read restricted strictly to verified active profiles.
+    // - Workers can read their own profile (including while pending).
+    // - Workers can create/update details, but CANNOT store phone or email.
     // - Workers CANNOT self-approve (isVerified) or change moderation status.
-    // - Admins have full moderation privileges (approve, suspend, restore).
+    // - Admins have full inspection and moderation privileges.
     // ------------------------------------------------------------------------
     match /workers/{workerId} {
-      allow read: if true;
-      allow create: if (isAuthenticated() && request.auth.uid == workerId) || isAdmin();
-      allow update: if (isAuthenticated() && request.auth.uid == workerId &&
-                       request.resource.data.isVerified == resource.data.isVerified &&
-                       request.resource.data.status == resource.data.status) || isAdmin();
+      allow read: if (resource.data.isVerified == true && resource.data.status == "active") ||
+                   (isAuthenticated() && request.auth.uid == workerId) ||
+                   isAdmin();
+      allow create: if (
+        isAuthenticated() &&
+        request.auth.uid == workerId &&
+        !('email' in request.resource.data) &&
+        !('phone' in request.resource.data) &&
+        request.resource.data.isVerified == false &&
+        request.resource.data.status == "pending"
+      ) || isAdmin();
+      allow update: if (
+        isAuthenticated() &&
+        request.auth.uid == workerId &&
+        !('email' in request.resource.data) &&
+        !('phone' in request.resource.data) &&
+        request.resource.data.isVerified == resource.data.isVerified &&
+        request.resource.data.status == resource.data.status
+      ) || isAdmin();
       allow delete: if isAdmin();
     }
 

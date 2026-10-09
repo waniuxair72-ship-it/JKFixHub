@@ -530,8 +530,6 @@ export async function registerWorker({ name, email, phone, district, service, ex
             id: user.uid,
             uid: user.uid,
             name,
-            email,
-            phone,
             district,
             service,
             experience: experience.trim(),

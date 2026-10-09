@@ -314,6 +314,29 @@
   background: rgba(18, 28, 22, 0.9);
 }
 
+.admin-emulator-toggle-group {
+  margin-top: -6px;
+  margin-bottom: 22px;
+}
+
+.admin-checkbox-label {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 0.84rem !important;
+  color: var(--admin-ink-secondary);
+  user-select: none;
+}
+
+.admin-checkbox-label input[type="checkbox"] {
+  width: 17px !important;
+  height: 17px !important;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--admin-accent-emerald);
+}
+
 .admin-btn-primary {
   width: 100%;
   padding: 14px 20px;
@@ -1105,7 +1128,9 @@
 .admin-status-pill.active,
 .admin-status-pill.published,
 .admin-status-pill.resolved,
-.admin-status-pill.verified {
+.admin-status-pill.verified,
+.admin-status-pill.accepted,
+.admin-status-pill.completed {
   background: var(--admin-status-ok-bg);
   color: var(--admin-status-ok);
   border: 1px solid var(--admin-status-ok-border);
@@ -1121,7 +1146,9 @@
 .admin-status-pill.suspended,
 .admin-status-pill.hidden,
 .admin-status-pill.dismissed,
-.admin-status-pill.flagged {
+.admin-status-pill.flagged,
+.admin-status-pill.cancelled,
+.admin-status-pill.rejected {
   background: var(--admin-status-alert-bg);
   color: var(--admin-status-alert);
   border: 1px solid var(--admin-status-alert-border);

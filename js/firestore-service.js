@@ -310,11 +310,62 @@ export async function getAdminWorkers() {
     const methods = await getFirestoreMethods();
     if (!db || !methods || typeof methods.getDocs !== "function") return [];
 
-    const snap = await methods.getDocs(methods.collection(db, "workers"));
+    const workersSnap = await methods.getDocs(methods.collection(db, "workers"));
+    let usersSnap = null;
+    try {
+      usersSnap = await methods.getDocs(methods.collection(db, "users"));
+    } catch (_) {}
+
+    const contactMap = new Map();
+    const userWorkerMap = new Map();
+    if (usersSnap && typeof usersSnap.forEach === "function") {
+      usersSnap.forEach((uDoc) => {
+        const u = typeof uDoc.data === "function" ? uDoc.data() : uDoc.data;
+        if (u) {
+          contactMap.set(uDoc.id, { email: u.email || null, phone: u.phone || null });
+          if (u.role === "worker") {
+            userWorkerMap.set(uDoc.id, u);
+          }
+        }
+      });
+    }
+
     const workers = [];
-    snap.forEach((doc) => {
-      workers.push({ id: doc.id, ...doc.data() });
+    workersSnap.forEach((doc) => {
+      const data = (typeof doc.data === "function" ? doc.data() : doc.data) || {};
+      const contact = contactMap.get(doc.id) || {};
+      workers.push({
+        id: doc.id,
+        ...data,
+        isVerified: Boolean(data.isVerified),
+        status: data.status || (data.isVerified ? "active" : "pending"),
+        email: data.email || contact.email || null,
+        phone: data.phone || contact.phone || null
+      });
     });
+
+    // Also defensively include any registered users with role: 'worker' missing from workers collection
+    userWorkerMap.forEach((u, uid) => {
+      if (!workers.some((w) => w.id === uid)) {
+        workers.push({
+          id: uid,
+          uid: uid,
+          name: u.name || "Worker",
+          district: u.district || "Srinagar",
+          service: u.service || "General Maintenance",
+          experience: u.experience || "1 year",
+          availability: "Available",
+          rating: "5.0",
+          reviewCount: 0,
+          isVerified: false,
+          status: "pending",
+          createdAt: u.createdAt || null,
+          email: u.email || null,
+          phone: u.phone || null
+        });
+      }
+    });
+
     return workers;
   } catch (err) {
     console.warn("[JKFixHub Admin] Workers fetch failed:", err?.message || err);
@@ -323,41 +374,120 @@ export async function getAdminWorkers() {
 }
 
 /**
- * Updates worker moderation status or verification.
+ * Updates worker moderation status or verification with authoritative admin checks,
+ * strict privacy data separation (never stores email/phone in /workers), and immutable audit logs.
+ *
  * @param {string} workerId
  * @param {object} updates - e.g. { status: "active", isVerified: true }
  * @param {string} adminUid
- * @returns {Promise<{ success: boolean, error: string|null }>}
+ * @param {object} [options={}] - Optional reason or adminNotes
+ * @returns {Promise<{ success: boolean, error: string|null, previousStatus?: string, newStatus?: string, isVerified?: boolean }>}
  */
-export async function updateAdminWorkerStatus(workerId, updates, adminUid) {
+export async function updateAdminWorkerStatus(workerId, updates, adminUid, { reason = "", adminNotes = "" } = {}) {
   if (!isSessionAuthorizedAdmin()) {
     return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
+  }
+
+  if (!workerId || typeof workerId !== "string" || !workerId.trim()) {
+    return { success: false, error: "Worker ID is required." };
+  }
+
+  if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
+    return { success: false, error: "Invalid worker updates payload." };
+  }
+
+  const validStatuses = ["pending", "active", "suspended", "rejected"];
+  if (updates.status !== undefined && !validStatuses.includes(updates.status)) {
+    return { success: false, error: `Invalid worker status '${updates.status}'.` };
   }
 
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
-    if (!db || !methods || typeof methods.updateDoc !== "function") {
+    if (!db || !methods || (typeof methods.updateDoc !== "function" && typeof methods.setDoc !== "function")) {
       return { success: false, error: "Firestore unavailable" };
     }
 
-    const workerRef = methods.doc(db, "workers", String(workerId));
-    await methods.updateDoc(workerRef, updates);
+    const workerRef = methods.doc(db, "workers", String(workerId).trim());
+
+    // Retrieve previous state for accurate audit logging if getDoc is available
+    let previousStatus = "unknown";
+    let previousVerified = false;
+    let existingDoc = false;
+    if (typeof methods.getDoc === "function") {
+      try {
+        const snap = await methods.getDoc(workerRef);
+        if (snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists)) {
+          existingDoc = true;
+          const d = (typeof snap.data === "function" ? snap.data() : snap.data) || {};
+          previousStatus = d.status || "unknown";
+          previousVerified = Boolean(d.isVerified);
+        }
+      } catch (_) {}
+    }
+
+    // Strictly enforce privacy data separation: NEVER write email or phone to /workers
+    const cleanUpdates = { ...updates };
+    delete cleanUpdates.email;
+    delete cleanUpdates.phone;
+
+    cleanUpdates.updatedAt = new Date().toISOString();
+    cleanUpdates.lastModeratedBy = adminUid;
+
+    const note = (adminNotes || reason || "").trim();
+    if (note) {
+      cleanUpdates.adminNotes = note;
+    }
+
+    // Determine specific audit action
+    let auditAction = "WORKER_STATUS_UPDATED";
+    if (cleanUpdates.isVerified === true && (cleanUpdates.status === "active" || cleanUpdates.status === undefined)) {
+      auditAction = "WORKER_APPROVED";
+    } else if (cleanUpdates.status === "suspended") {
+      auditAction = "WORKER_SUSPENDED";
+    } else if (cleanUpdates.status === "active") {
+      auditAction = "WORKER_RESTORED";
+    } else if (cleanUpdates.status === "rejected") {
+      auditAction = "WORKER_REJECTED";
+    } else if (cleanUpdates.status === "pending") {
+      auditAction = "WORKER_PENDING_RESET";
+    }
+
+    // Perform database write
+    if (typeof methods.updateDoc === "function" && existingDoc) {
+      await methods.updateDoc(workerRef, cleanUpdates);
+    } else if (typeof methods.setDoc === "function") {
+      await methods.setDoc(workerRef, cleanUpdates, { merge: true });
+    } else if (typeof methods.updateDoc === "function") {
+      await methods.updateDoc(workerRef, cleanUpdates);
+    }
 
     await recordAdminAuditLog({
       adminUid,
-      action: updates.isVerified ? "WORKER_APPROVED" : "WORKER_STATUS_UPDATED",
+      action: auditAction,
       targetType: "worker",
-      targetId: workerId,
+      targetId: String(workerId).trim(),
       result: "success",
-      details: updates
+      details: {
+        previousStatus,
+        previousVerified,
+        newStatus: cleanUpdates.status ?? previousStatus,
+        newVerified: cleanUpdates.isVerified ?? previousVerified,
+        reason: note || "Administrative moderation"
+      }
     });
 
     invalidateAdminStatsCache();
-    return { success: true, error: null };
+    return {
+      success: true,
+      error: null,
+      previousStatus,
+      newStatus: cleanUpdates.status ?? previousStatus,
+      isVerified: cleanUpdates.isVerified ?? previousVerified
+    };
   } catch (err) {
     console.error("[JKFixHub Admin] Worker status update failed:", err?.message || err);
-    return { success: false, error: "Failed to update worker status." };
+    return { success: false, error: err?.message || "Failed to update worker status." };
   }
 }
 
@@ -411,7 +541,8 @@ export async function getAdminRequests() {
     const snap = await methods.getDocs(methods.collection(db, "requests"));
     const requests = [];
     snap.forEach((doc) => {
-      requests.push({ id: doc.id, ...doc.data() });
+      const data = typeof doc.data === "function" ? doc.data() : doc.data;
+      requests.push({ id: doc.id, ...data });
     });
     return requests;
   } catch (err) {
@@ -419,6 +550,86 @@ export async function getAdminRequests() {
     return [];
   }
 }
+
+/**
+ * Administratively moderates or updates a service request lifecycle status.
+ *
+ * @param {string} requestId - Target request document ID.
+ * @param {string} newStatus - "Pending" | "Accepted" | "Completed" | "Cancelled" | "Rejected"
+ * @param {string} adminUid - Authenticated administrator UID.
+ * @param {object} [options={}] - Optional reason or adminNotes.
+ * @returns {Promise<{ success: boolean, error: string|null, previousStatus?: string, newStatus?: string }>}
+ */
+export async function updateAdminRequestStatus(requestId, newStatus, adminUid, { reason = "", adminNotes = "" } = {}) {
+  if (!isSessionAuthorizedAdmin()) {
+    return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
+  }
+
+  const validStatuses = ["Pending", "Accepted", "Completed", "Cancelled", "Rejected"];
+  if (!requestId || !newStatus || !validStatuses.includes(newStatus)) {
+    return { success: false, error: `Invalid request status '${newStatus}'.` };
+  }
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.doc !== "function" || typeof methods.updateDoc !== "function") {
+      return { success: false, error: "Firestore client unavailable." };
+    }
+
+    const requestRef = methods.doc(db, "requests", String(requestId));
+
+    let previousStatus = "Unknown";
+    let customerId = null;
+    let workerUid = null;
+    if (typeof methods.getDoc === "function") {
+      try {
+        const snap = await methods.getDoc(requestRef);
+        if (snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists)) {
+          const data = (typeof snap.data === "function" ? snap.data() : snap.data) || {};
+          previousStatus = data.status || "Unknown";
+          customerId = data.customerId || null;
+          workerUid = data.workerUid || null;
+        }
+      } catch (_) {}
+    }
+
+    const updates = {
+      status: newStatus,
+      updatedAt: new Date().toISOString(),
+      lastModeratedBy: adminUid
+    };
+
+    const note = (adminNotes || reason || "").trim();
+    if (note) {
+      updates.adminNotes = note;
+    }
+
+    await methods.updateDoc(requestRef, updates);
+
+    await recordAdminAuditLog({
+      adminUid,
+      action: `REQUEST_${newStatus.toUpperCase()}`,
+      targetType: "request",
+      targetId: String(requestId),
+      result: "success",
+      details: {
+        previousStatus,
+        newStatus,
+        reason: note || "Administrative moderation",
+        customerId,
+        workerUid
+      }
+    });
+
+    invalidateAdminStatsCache();
+    return { success: true, error: null, previousStatus, newStatus };
+  } catch (err) {
+    console.error("[JKFixHub Admin] Request moderation failed:", err?.message || err);
+    return { success: false, error: err?.message || "Failed to update service request status." };
+  }
+}
+
 
 /**
  * Fetches Trust & Safety reports.
@@ -652,28 +863,48 @@ export async function getPublicWorkers() {
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
-    if (!db || !methods || typeof methods.getDocs !== "function") return [];
+    if (!db || !methods || typeof methods.getDocs !== "function" || typeof methods.collection !== "function") return [];
 
-    const snap = await methods.getDocs(methods.collection(db, "workers"));
+    if (typeof methods.query !== "function" || typeof methods.where !== "function") {
+      console.warn("[JKFixHub Discovery] Query constraints unavailable. Public discovery deferred.");
+      return [];
+    }
+
+    const workersCol = methods.collection(db, "workers");
+    const q = methods.query(
+      workersCol,
+      methods.where("isVerified", "==", true),
+      methods.where("status", "==", "active")
+    );
+
+    const snap = await methods.getDocs(q);
     const workers = [];
     snap.forEach((doc) => {
-      const data = doc.data();
-      if (!data) return;
+      if (!doc || typeof doc.id !== "string" || !doc.id.trim()) return;
 
-      const status = data.status || (data.isVerified ? "active" : "pending");
-      if (status === "suspended" || status === "deleted") return;
+      const data = typeof doc.data === "function" ? doc.data() : doc.data;
+      if (!data || typeof data !== "object" || Array.isArray(data)) return;
 
-      const name = typeof data.name === "string" && data.name.trim() ? data.name.trim() : "Service Professional";
+      // Approval gating: strictly verified AND active
+      if (data.isVerified !== true || data.status !== "active") return;
+
+      // Malformed profile checks: must have valid string name, service, and district
+      if (typeof data.name !== "string" || !data.name.trim()) return;
+      if (typeof data.service !== "string" || !data.service.trim()) return;
+      if (typeof data.district !== "string" || !data.district.trim()) return;
+
+      const name = data.name.trim();
+      const service = data.service.trim();
+      const district = data.district.trim();
       const initials = typeof data.initials === "string" && data.initials.trim()
         ? data.initials.trim()
         : name.split(/\s+/).map((p) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase() || "SP";
       const experience = typeof data.experience === "string" && data.experience.trim() ? data.experience.trim() : "Experienced";
-      const service = typeof data.service === "string" && data.service.trim() ? data.service.trim() : "Electrician";
-      const district = typeof data.district === "string" && data.district.trim() ? data.district.trim() : "Srinagar";
       const availability = typeof data.availability === "string" && data.availability.trim() ? data.availability.trim() : "Available";
       const rating = typeof data.rating === "string" || typeof data.rating === "number" ? String(data.rating) : "5.0";
       const reviewCount = typeof data.reviewCount === "number" ? data.reviewCount : 0;
-      const isVerified = Boolean(data.isVerified);
+      const isVerified = true;
+      const status = "active";
       const services = Array.isArray(data.services) && data.services.length
         ? data.services.join(", ")
         : service;
