@@ -1,4 +1,5 @@
-import { getWorkers } from "./store.js";
+import { getWorkers, setDiscoveredWorkers } from "./store.js";
+import { getPublicWorkers } from "./firestore-service.js";
 import { setTextContent } from "./security.js";
 
 // ==========================================
@@ -53,14 +54,24 @@ function buildWorkerCard(worker) {
   setTextContent(avatar, worker.initials);
   setTextContent(name, worker.name);
   setTextContent(service, worker.service);
-  badge.className = "demo-badge";
-  badge.textContent = "Sample profile";
+
+  badge.className = worker.isVerified
+    ? "worker-verified-badge"
+    : worker.isDemo
+      ? "demo-badge"
+      : "worker-pending-badge";
+  badge.textContent = worker.isVerified
+    ? "Verified"
+    : worker.isDemo
+      ? "Sample profile"
+      : "Pending Verification";
+
   identity.append(name, service, badge);
   top.append(avatar, identity);
 
   metadata.className = "worker-meta";
   setTextContent(district, worker.district);
-  setTextContent(rating, `${worker.rating} ★`);
+  setTextContent(rating, worker.rating ? `${worker.rating} ★` : "5.0 ★");
   availability.className = "availability";
   availabilityIcon.setAttribute("aria-hidden", "true");
   setTextContent(availability, worker.availability);
@@ -76,7 +87,7 @@ function buildWorkerCard(worker) {
   requestButton.className = "button primary";
   requestButton.type = "button";
   requestButton.dataset.requestWorker = String(worker.id);
-  requestButton.textContent = "Request";
+  requestButton.textContent = "Request Service";
   actions.append(profileButton, requestButton);
   card.append(top, metadata, actions);
   return card;
@@ -149,7 +160,7 @@ export function initializeSearch({ showToast } = {}) {
           getRelevance(second, keyword) - getRelevance(first, keyword);
         if (relevanceDifference) return relevanceDifference;
 
-        return Number(first.id) - Number(second.id);
+        return String(first.id).localeCompare(String(second.id));
       });
   }
 
@@ -210,4 +221,17 @@ export function initializeSearch({ showToast } = {}) {
   });
 
   renderResults(getMatchingWorkers());
+
+  // Load real Firestore worker profiles for discovery in background
+  (async () => {
+    try {
+      const realWorkers = await getPublicWorkers();
+      if (Array.isArray(realWorkers) && realWorkers.length > 0) {
+        setDiscoveredWorkers(realWorkers);
+        renderResults(getMatchingWorkers());
+      }
+    } catch (err) {
+      console.warn("[JKFixHub Discovery] Real worker discovery notice:", err?.message || err);
+    }
+  })();
 }

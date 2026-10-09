@@ -36,6 +36,7 @@ const state = {
   authError: null,
   userProfiles: {},
   workerDemoProfiles: {},
+  discoveredWorkers: [],
   customerRequests: [],
   conversations: [],
   messages: [],
@@ -98,7 +99,7 @@ const customerRequestInputFields = Object.freeze([
   "status"
 ]);
 const customerIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$/;
-const customerRequestIdPattern = /^req-[a-z0-9-]{8,80}$/;
+const customerRequestIdPattern = /^[A-Za-z0-9_-]{8,128}$/;
 const reviewIdPattern = /^rev-[a-z0-9-]{8,80}$/;
 const reportIdPattern = /^rep-[a-z0-9-]{8,80}$/;
 const markupPattern = /<\s*\/?\s*[a-z!][^>]*>/i;
@@ -142,8 +143,8 @@ function isValidStoredCustomerRequest(request) {
   return isValidCustomerRequestId(request.id) &&
     typeof request.customerId === "string" &&
     customerIdPattern.test(request.customerId) &&
-    Number.isSafeInteger(request.workerId) &&
-    getWorkerById(request.workerId) !== null &&
+    ((typeof request.workerId === "string" && request.workerId.trim().length > 0) || Number.isSafeInteger(request.workerId)) &&
+    (getWorkerById(request.workerId) !== null || (typeof request.workerUid === "string" && request.workerUid.length > 0)) &&
     validatePersonName(request.workerName) &&
     validatePersonName(request.customerName) &&
     validateText(request.service, { minLength: 1, maxLength: 80 }) &&
@@ -153,8 +154,8 @@ function isValidStoredCustomerRequest(request) {
     validateLocation(request.customerLocation) &&
     !markupPattern.test(request.customerLocation) &&
     customerRequestStatuses.includes(request.status) &&
-    typeof request.demoAccepted === "boolean" &&
-    (request.status !== "Accepted" || request.demoAccepted) &&
+    (request.demoAccepted === undefined || typeof request.demoAccepted === "boolean") &&
+    (request.status !== "Accepted" || request.demoAccepted !== false) &&
     typeof request.createdAt === "string" &&
     !Number.isNaN(Date.parse(request.createdAt));
 }
@@ -182,7 +183,19 @@ export function initializeStore() {
   clearRequestState();
 }
 
+export function setDiscoveredWorkers(workerList) {
+  if (!Array.isArray(workerList)) return;
+  state.discoveredWorkers = workerList.map((worker) => ({ ...worker }));
+}
+
+export function getDiscoveredWorkers() {
+  return (state.discoveredWorkers || []).map((w) => ({ ...w }));
+}
+
 export function getWorkers() {
+  if (state.discoveredWorkers && state.discoveredWorkers.length > 0) {
+    return state.discoveredWorkers.map((worker) => ({ ...worker }));
+  }
   return workers.map((worker) => getWorkerById(worker.id));
 }
 
@@ -228,11 +241,8 @@ export function setCurrentUser(user) {
     }
   }
   if (user.role === "worker" && user.workerId !== null && user.workerId !== undefined) {
-    if (!Number.isSafeInteger(user.workerId)) {
+    if (!Number.isSafeInteger(user.workerId) && typeof user.workerId !== "string") {
       throw new TypeError("A worker account must reference a valid worker ID.");
-    }
-    if (!getWorkerById(user.workerId)) {
-      throw new RangeError("The worker account must reference an existing worker.");
     }
   }
   if (user.email !== null && user.email !== undefined && !validateEmail(user.email)) {
@@ -272,7 +282,14 @@ export function setCurrentUser(user) {
     createdAt: typeof user.createdAt === "string" ? user.createdAt : null,
     isVerified: Boolean(user.isVerified),
     authProvider: user.authProvider === "firebase" ? "firebase" : "demo",
-    ...(user.role === "worker" && Number.isInteger(user.workerId) ? { workerId: user.workerId } : {})
+    ...(user.role === "worker"
+      ? {
+          workerId: user.workerId !== undefined ? user.workerId : user.id,
+          service: typeof user.service === "string" ? user.service : null,
+          experience: typeof user.experience === "string" ? user.experience : null,
+          availability: typeof user.availability === "string" ? user.availability : "Available"
+        }
+      : {})
   };
   state.authStatus = AUTH_STATUS.AUTHENTICATED;
   state.authError = null;
@@ -281,6 +298,8 @@ export function setCurrentUser(user) {
 export function clearCurrentUser() {
   state.currentUser = null;
   state.activeConversationId = null;
+  state.customerRequests = [];
+  state.currentRequest = null;
   state.reviews = [];
   state.reports = [];
   state.workerAccountStatuses = {};
@@ -378,6 +397,14 @@ export function logoutAdminForDemo() {
 }
 
 export function getWorkerById(id) {
+  if (id === null || id === undefined) return null;
+  const strId = String(id);
+
+  if (state.discoveredWorkers && state.discoveredWorkers.length > 0) {
+    const found = state.discoveredWorkers.find((item) => String(item.id) === strId || String(item.uid) === strId);
+    if (found) return { ...found };
+  }
+
   const normalizedId = typeof id === "number"
     ? id
     : typeof id === "string" && /^\d+$/.test(id)
@@ -386,7 +413,7 @@ export function getWorkerById(id) {
   if (!Number.isSafeInteger(normalizedId)) return null;
   const worker = workers.find((item) => item.id === normalizedId);
   if (!worker) return null;
-  return { ...copyWorker(worker), ...state.workerDemoProfiles[normalizedId] };
+  return { ...copyWorker(worker), ...state.workerDemoProfiles[normalizedId], isDemo: true };
 }
 
 export function setWorkerDemoProfile(id, profile) {
@@ -532,7 +559,7 @@ export function createCustomerRequest(request) {
     throw new TypeError("The customer request data is invalid.");
   }
 
-  const worker = Number.isSafeInteger(request.workerId) ? getWorkerById(request.workerId) : null;
+  const worker = getWorkerById(request.workerId);
   const validRequest = worker &&
     request.customerId === customerId &&
     request.workerName === worker.name &&
@@ -637,19 +664,56 @@ export function cancelCustomerRequest(id) {
   return true;
 }
 
+export function setStoredCustomerRequests(requests) {
+  if (!Array.isArray(requests)) return;
+  state.customerRequests = requests.map((r) => ({
+    ...r,
+    id: r.id || r.requestId,
+    requestId: r.requestId || r.id,
+    workerId: r.workerId || r.workerUid,
+    workerUid: r.workerUid || r.workerId,
+    description: r.description || r.problemDescription,
+    problemDescription: r.problemDescription || r.description,
+    customerLocation: r.customerLocation || r.location,
+    location: r.location || r.customerLocation,
+    demoAccepted: r.status === "Accepted" || Boolean(r.demoAccepted)
+  }));
+}
+
+export function upsertStoredCustomerRequest(request) {
+  if (!request) return;
+  const normalized = {
+    ...request,
+    id: request.id || request.requestId,
+    requestId: request.requestId || request.id,
+    workerId: request.workerId || request.workerUid,
+    workerUid: request.workerUid || request.workerId,
+    description: request.description || request.problemDescription,
+    problemDescription: request.problemDescription || request.description,
+    customerLocation: request.customerLocation || request.location,
+    location: request.location || request.customerLocation,
+    demoAccepted: request.status === "Accepted" || Boolean(request.demoAccepted)
+  };
+  const idx = state.customerRequests.findIndex((r) => r.id === normalized.id);
+  if (idx >= 0) {
+    state.customerRequests[idx] = normalized;
+  } else {
+    state.customerRequests.push(normalized);
+  }
+}
+
 export function getWorkerCustomerRequests() {
   const user = state.currentUser;
   if (!user || user.role !== "worker" || !hasCapability(user.role, "viewOwnRequests")) {
     recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || null);
     return [];
   }
-  const worker = getWorkerById(user.workerId);
-  if (!worker || user.id !== `demo-worker-${worker.id}`) {
-    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user.role);
-    return [];
-  }
+  const workerUid = String(user.workerId || user.id);
   return state.customerRequests
-    .filter((request) => request.workerId === worker.id && isValidStoredCustomerRequest(request))
+    .filter((request) => {
+      const matchWorker = String(request.workerId) === workerUid || String(request.workerUid) === workerUid;
+      return matchWorker && isValidStoredCustomerRequest(request);
+    })
     .map(copyCustomerRequest);
 }
 

@@ -35,6 +35,7 @@ import {
   validateEmail,
   validatePersonName,
   validatePassword,
+  validatePhone,
   mapFirebaseAuthError,
   getSafeErrorMessage
 } from "./security.js";
@@ -42,8 +43,14 @@ import {
   initializeFirebaseClient,
   getFirebaseAuthMethods,
   getFirebaseAuth,
-  isFirebaseConfigured
+  isFirebaseConfigured,
+  initializeFirestoreClient,
+  getFirestoreMethods
 } from "./firebase-config.js";
+import { stopRequestSuccessSubscription } from "./request.js";
+import { stopCustomerDetailsSubscription } from "./customer-requests.js";
+import { unsubscribeAllFirestoreListeners } from "./firestore-service.js";
+import { closeChat } from "./chat.js";
 
 const ALLOWED_DISTRICTS = Object.freeze([
   "Shopian",
@@ -127,37 +134,119 @@ function setFieldError(fieldId, errorId, message) {
 }
 
 /**
- * Switches between auth tabs: 'signin', 'customer-register', 'worker-register', 'demo-roles'
+ * View controllers for auth modal navigation.
  */
-export function switchAuthTab(tabName) {
-  activeAuthTab = tabName;
+export function showAuthEntry() {
+  activeAuthTab = "entry";
   if (typeof document === "undefined") return;
   clearAuthFieldErrors();
 
-  const tabButtons = document.querySelectorAll(".auth-tab-btn");
-  tabButtons.forEach((btn) => {
-    const isSelected = btn.dataset.authTab === tabName;
-    btn.classList.toggle("active", isSelected);
-    btn.setAttribute("aria-selected", String(isSelected));
-  });
+  const entryView = document.getElementById("authEntryView");
+  const signInPanel = document.getElementById("authSignInPanel");
+  const custPanel = document.getElementById("authCustomerRegisterPanel");
+  const wrkPanel = document.getElementById("authWorkerRegisterPanel");
+  const rolePanel = document.getElementById("authRoleSelection");
 
-  const panels = {
-    signin: "authSignInPanel",
-    "customer-register": "authCustomerRegisterPanel",
-    "worker-register": "authWorkerRegisterPanel",
-    "demo-roles": "authRoleSelection"
-  };
+  if (entryView) entryView.hidden = false;
+  if (signInPanel) signInPanel.hidden = true;
+  if (custPanel) custPanel.hidden = true;
+  if (wrkPanel) wrkPanel.hidden = true;
+  if (rolePanel) rolePanel.hidden = true;
+}
 
-  Object.entries(panels).forEach(([key, id]) => {
-    const el = document.getElementById(id);
-    if (el) el.hidden = key !== tabName;
-  });
+export function showSignIn() {
+  activeAuthTab = "signin";
+  if (typeof document === "undefined") return;
+  clearAuthFieldErrors();
+
+  const entryView = document.getElementById("authEntryView");
+  const signInPanel = document.getElementById("authSignInPanel");
+  const custPanel = document.getElementById("authCustomerRegisterPanel");
+  const wrkPanel = document.getElementById("authWorkerRegisterPanel");
+  const rolePanel = document.getElementById("authRoleSelection");
+
+  if (entryView) entryView.hidden = true;
+  if (signInPanel) {
+    signInPanel.hidden = false;
+    document.getElementById("authSignInEmail")?.focus();
+  }
+  if (custPanel) custPanel.hidden = true;
+  if (wrkPanel) wrkPanel.hidden = true;
+  if (rolePanel) rolePanel.hidden = true;
+}
+
+export function showCustomerRegister() {
+  activeAuthTab = "customer-register";
+  if (typeof document === "undefined") return;
+  clearAuthFieldErrors();
+
+  const entryView = document.getElementById("authEntryView");
+  const signInPanel = document.getElementById("authSignInPanel");
+  const custPanel = document.getElementById("authCustomerRegisterPanel");
+  const wrkPanel = document.getElementById("authWorkerRegisterPanel");
+  const rolePanel = document.getElementById("authRoleSelection");
+
+  if (entryView) entryView.hidden = true;
+  if (signInPanel) signInPanel.hidden = true;
+  if (custPanel) {
+    custPanel.hidden = false;
+    document.getElementById("authCustomerName")?.focus();
+  }
+  if (wrkPanel) wrkPanel.hidden = true;
+  if (rolePanel) rolePanel.hidden = true;
+}
+
+export function showWorkerRegister() {
+  activeAuthTab = "worker-register";
+  if (typeof document === "undefined") return;
+  clearAuthFieldErrors();
+
+  const entryView = document.getElementById("authEntryView");
+  const signInPanel = document.getElementById("authSignInPanel");
+  const custPanel = document.getElementById("authCustomerRegisterPanel");
+  const wrkPanel = document.getElementById("authWorkerRegisterPanel");
+  const rolePanel = document.getElementById("authRoleSelection");
+
+  if (entryView) entryView.hidden = true;
+  if (signInPanel) signInPanel.hidden = true;
+  if (custPanel) custPanel.hidden = true;
+  if (wrkPanel) {
+    wrkPanel.hidden = false;
+    document.getElementById("authWorkerName")?.focus();
+  }
+  if (rolePanel) rolePanel.hidden = true;
 }
 
 /**
- * Registers a new Customer using email and password.
+ * Switches between auth tabs/views.
  */
-export async function registerCustomer({ name, email, password, confirmPassword }) {
+export function switchAuthTab(tabName) {
+  if (tabName === "entry") return showAuthEntry();
+  if (tabName === "signin") return showSignIn();
+  if (tabName === "customer-register") return showCustomerRegister();
+  if (tabName === "worker-register") return showWorkerRegister();
+  if (tabName === "demo-roles") {
+    activeAuthTab = "demo-roles";
+    const entryView = document.getElementById("authEntryView");
+    const signInPanel = document.getElementById("authSignInPanel");
+    const custPanel = document.getElementById("authCustomerRegisterPanel");
+    const wrkPanel = document.getElementById("authWorkerRegisterPanel");
+    const rolePanel = document.getElementById("authRoleSelection");
+    if (entryView) entryView.hidden = true;
+    if (signInPanel) signInPanel.hidden = true;
+    if (custPanel) custPanel.hidden = true;
+    if (wrkPanel) wrkPanel.hidden = true;
+    if (rolePanel) rolePanel.hidden = false;
+    return;
+  }
+  showAuthEntry();
+}
+
+/**
+ * Registers a new Customer using full profile attributes:
+ * name, email, phone, district, password, confirmPassword.
+ */
+export async function registerCustomer({ name, email, phone, district, password, confirmPassword }) {
   clearAuthFieldErrors();
 
   const isNameValid = validatePersonName(name);
@@ -170,6 +259,17 @@ export async function registerCustomer({ name, email, password, confirmPassword 
   if (!isEmailValid) {
     setFieldError("authCustomerEmail", "authCustomerEmailError", getSafeErrorMessage("invalidEmail"));
     return { success: false, error: getSafeErrorMessage("invalidEmail") };
+  }
+
+  const isPhoneValid = validatePhone(phone);
+  if (!isPhoneValid) {
+    setFieldError("authCustomerPhone", "authCustomerPhoneError", getSafeErrorMessage("invalidPhone"));
+    return { success: false, error: getSafeErrorMessage("invalidPhone") };
+  }
+
+  if (!district || !ALLOWED_DISTRICTS.includes(district)) {
+    setFieldError("authCustomerDistrict", "authCustomerDistrictError", getSafeErrorMessage("invalidDistrict"));
+    return { success: false, error: getSafeErrorMessage("invalidDistrict") };
   }
 
   const passCheck = validatePassword(password, confirmPassword);
@@ -217,11 +317,34 @@ export async function registerCustomer({ name, email, password, confirmPassword 
       }
 
       const createdAt = new Date().toISOString();
+
+      // Sync customer profile to Firestore /users/{uid}
+      try {
+        const { db } = await initializeFirestoreClient();
+        const firestoreMethods = await getFirestoreMethods();
+        if (db && firestoreMethods && typeof firestoreMethods.setDoc === "function") {
+          const userDocRef = firestoreMethods.doc(db, "users", user.uid);
+          await firestoreMethods.setDoc(userDocRef, {
+            uid: user.uid,
+            name,
+            email,
+            phone,
+            district,
+            role: "customer",
+            emailVerified: Boolean(user.emailVerified),
+            createdAt
+          });
+        }
+      } catch (firestoreErr) {
+        console.warn("[JKFixHub Auth] Firestore customer sync deferred:", firestoreErr?.message || firestoreErr);
+      }
+
       saveApplicationProfile(user.uid, {
         role: "customer",
         name,
         email,
-        district: null,
+        phone,
+        district,
         emailVerified: Boolean(user.emailVerified),
         isVerified: false,
         authProvider: "firebase",
@@ -234,8 +357,9 @@ export async function registerCustomer({ name, email, password, confirmPassword 
         role: "customer",
         name,
         email,
+        phone,
+        district,
         emailVerified: Boolean(user.emailVerified),
-        district: null,
         isVerified: false,
         authProvider: "firebase",
         createdAt
@@ -244,7 +368,7 @@ export async function registerCustomer({ name, email, password, confirmPassword 
       recordSecurityEvent("REGISTER_SUCCESS", "customer");
       updateAccountControls();
       showAccountView();
-      setAuthFeedback("Account created! A verification email has been sent.", false);
+      setAuthFeedback("Account created! A verification email has been sent. You can start using JK FixHub immediately.", false);
       return { success: true };
     } catch (error) {
       recordSecurityEvent("FIREBASE_AUTH_ERROR");
@@ -255,14 +379,15 @@ export async function registerCustomer({ name, email, password, confirmPassword 
     }
   }
 
-  // Development / Prototype Fallback when Firebase configuration is pending
+  // Session Fallback
   const createdAt = new Date().toISOString();
   const demoUid = `cust-${Date.now().toString(36)}`;
   saveApplicationProfile(demoUid, {
     role: "customer",
     name,
     email,
-    district: null,
+    phone,
+    district,
     emailVerified: false,
     isVerified: false,
     authProvider: "demo",
@@ -275,8 +400,9 @@ export async function registerCustomer({ name, email, password, confirmPassword 
     role: "customer",
     name,
     email,
+    phone,
+    district,
     emailVerified: false,
-    district: null,
     isVerified: false,
     authProvider: "demo",
     createdAt
@@ -285,15 +411,16 @@ export async function registerCustomer({ name, email, password, confirmPassword 
   recordSecurityEvent("REGISTER_SUCCESS", "customer");
   updateAccountControls();
   showAccountView();
-  setAuthFeedback("Account created in session mode. (Firebase live credentials pending)", false);
+  setAuthFeedback("Account created in session mode.", false);
   return { success: true };
 }
 
 /**
- * Registers a new Worker using email, password, and district.
- * Crucial: newly registered worker starts with isVerified: false.
+ * Registers a new Worker using full professional attributes:
+ * name, email, phone, district, service, experience, availability, password, confirmPassword.
+ * Crucial: newly registered worker starts with isVerified: false (Pending Verification).
  */
-export async function registerWorker({ name, email, password, confirmPassword, district }) {
+export async function registerWorker({ name, email, phone, district, service, experience, availability, password, confirmPassword }) {
   clearAuthFieldErrors();
 
   const isNameValid = validatePersonName(name);
@@ -308,10 +435,30 @@ export async function registerWorker({ name, email, password, confirmPassword, d
     return { success: false, error: getSafeErrorMessage("invalidEmail") };
   }
 
+  const isPhoneValid = validatePhone(phone);
+  if (!isPhoneValid) {
+    setFieldError("authWorkerPhone", "authWorkerPhoneError", getSafeErrorMessage("invalidPhone"));
+    return { success: false, error: getSafeErrorMessage("invalidPhone") };
+  }
+
   if (!district || !ALLOWED_DISTRICTS.includes(district)) {
     setFieldError("authWorkerDistrict", "authWorkerDistrictError", getSafeErrorMessage("invalidDistrict"));
     return { success: false, error: getSafeErrorMessage("invalidDistrict") };
   }
+
+  const allowedServices = ["Electrician", "Washing Machine Repair", "Refrigerator Repair", "Heater Repair", "TV / Electronics Repair"];
+  if (!service || !allowedServices.includes(service)) {
+    setFieldError("authWorkerService", "authWorkerServiceError", "Please select a valid primary service.");
+    return { success: false, error: "Please select a valid primary service." };
+  }
+
+  if (typeof experience !== "string" || experience.trim().length === 0 || experience.trim().length > 40) {
+    setFieldError("authWorkerExperience", "authWorkerExperienceError", getSafeErrorMessage("invalidExperience"));
+    return { success: false, error: getSafeErrorMessage("invalidExperience") };
+  }
+
+  const allowedAvailabilities = ["Available", "Busy", "Offline"];
+  const safeAvailability = allowedAvailabilities.includes(availability) ? availability : "Available";
 
   const passCheck = validatePassword(password, confirmPassword);
   if (!passCheck.isValid) {
@@ -358,13 +505,60 @@ export async function registerWorker({ name, email, password, confirmPassword, d
       }
 
       const createdAt = new Date().toISOString();
+
+      // Sync worker profile to Firestore /users/{uid} and /workers/{uid}
+      try {
+        const { db } = await initializeFirestoreClient();
+        const firestoreMethods = await getFirestoreMethods();
+        if (db && firestoreMethods && typeof firestoreMethods.setDoc === "function") {
+          // 1. users/{uid}
+          const userDocRef = firestoreMethods.doc(db, "users", user.uid);
+          await firestoreMethods.setDoc(userDocRef, {
+            uid: user.uid,
+            name,
+            email,
+            phone,
+            district,
+            role: "worker",
+            emailVerified: Boolean(user.emailVerified),
+            createdAt
+          });
+
+          // 2. workers/{uid} (Pending Verification)
+          const workerDocRef = firestoreMethods.doc(db, "workers", user.uid);
+          await firestoreMethods.setDoc(workerDocRef, {
+            id: user.uid,
+            uid: user.uid,
+            name,
+            email,
+            phone,
+            district,
+            service,
+            experience: experience.trim(),
+            availability: safeAvailability,
+            rating: "5.0",
+            reviewCount: 0,
+            isVerified: false,
+            status: "pending",
+            createdAt
+          });
+        }
+      } catch (firestoreErr) {
+        console.warn("[JKFixHub Auth] Firestore worker sync deferred:", firestoreErr?.message || firestoreErr);
+      }
+
       saveApplicationProfile(user.uid, {
         role: "worker",
         name,
         email,
+        phone,
         district,
+        service,
+        experience: experience.trim(),
+        availability: safeAvailability,
         emailVerified: Boolean(user.emailVerified),
         isVerified: false,
+        status: "pending",
         authProvider: "firebase",
         createdAt
       });
@@ -375,7 +569,11 @@ export async function registerWorker({ name, email, password, confirmPassword, d
         role: "worker",
         name,
         email,
+        phone,
         district,
+        service,
+        experience: experience.trim(),
+        availability: safeAvailability,
         workerId: null,
         emailVerified: Boolean(user.emailVerified),
         isVerified: false,
@@ -386,7 +584,7 @@ export async function registerWorker({ name, email, password, confirmPassword, d
       recordSecurityEvent("REGISTER_SUCCESS", "worker");
       updateAccountControls();
       showAccountView();
-      setAuthFeedback("Worker account created! Status: Pending Verification. Check email for verification.", false);
+      setAuthFeedback("Worker account created! Status: Pending Verification. Please check your email for verification.", false);
       return { success: true };
     } catch (error) {
       recordSecurityEvent("FIREBASE_AUTH_ERROR");
@@ -397,16 +595,21 @@ export async function registerWorker({ name, email, password, confirmPassword, d
     }
   }
 
-  // Development / Prototype Fallback when Firebase configuration is pending
+  // Session Fallback
   const createdAt = new Date().toISOString();
   const demoUid = `wrk-${Date.now().toString(36)}`;
   saveApplicationProfile(demoUid, {
     role: "worker",
     name,
     email,
+    phone,
     district,
+    service,
+    experience: experience.trim(),
+    availability: safeAvailability,
     emailVerified: false,
     isVerified: false,
+    status: "pending",
     authProvider: "demo",
     createdAt
   });
@@ -417,7 +620,11 @@ export async function registerWorker({ name, email, password, confirmPassword, d
     role: "worker",
     name,
     email,
+    phone,
     district,
+    service,
+    experience: experience.trim(),
+    availability: safeAvailability,
     workerId: null,
     emailVerified: false,
     isVerified: false,
@@ -434,6 +641,8 @@ export async function registerWorker({ name, email, password, confirmPassword, d
 
 /**
  * Signs in an existing user with Email and Password.
+ * Routes to Customer or Worker experience based on profile;
+ * Admin remains strictly separate via admin.html.
  */
 export async function signInUser({ email, password }) {
   clearAuthFieldErrors();
@@ -465,15 +674,60 @@ export async function signInUser({ email, password }) {
       const userCredential = await methods.signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      const profile = getApplicationProfile(user.uid) || {
-        role: "customer",
-        name: user.displayName || "Customer",
-        email: user.email,
-        district: null,
-        isVerified: false,
-        authProvider: "firebase",
-        createdAt: new Date().toISOString()
-      };
+      let profile = getApplicationProfile(user.uid);
+
+      // Try fetching profile from Firestore
+      try {
+        const { db } = await initializeFirestoreClient();
+        const firestoreMethods = await getFirestoreMethods();
+        if (db && firestoreMethods && typeof firestoreMethods.getDoc === "function") {
+          const userDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "users", user.uid));
+          if (userDoc.exists()) {
+            const data = userDoc.data();
+            profile = {
+              role: data.role || "customer",
+              name: data.name || user.displayName || "Customer",
+              email: data.email || user.email,
+              phone: data.phone || null,
+              district: data.district || null,
+              createdAt: data.createdAt || new Date().toISOString()
+            };
+
+            if (profile.role === "worker") {
+              const workerDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "workers", user.uid));
+              if (workerDoc.exists()) {
+                const wData = workerDoc.data();
+                profile.service = wData.service || null;
+                profile.experience = wData.experience || null;
+                profile.availability = wData.availability || "Available";
+                profile.isVerified = Boolean(wData.isVerified);
+                profile.status = wData.status || "pending";
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Fallback to local profile cache
+      }
+
+      if (!profile) {
+        profile = {
+          role: "customer",
+          name: user.displayName || "Customer",
+          email: user.email,
+          phone: null,
+          district: null,
+          isVerified: false,
+          authProvider: "firebase",
+          createdAt: new Date().toISOString()
+        };
+      }
+
+      saveApplicationProfile(user.uid, {
+        ...profile,
+        emailVerified: Boolean(user.emailVerified),
+        authProvider: "firebase"
+      });
 
       setCurrentUser({
         id: user.uid,
@@ -481,9 +735,13 @@ export async function signInUser({ email, password }) {
         role: profile.role,
         name: profile.name,
         email: user.email,
-        emailVerified: Boolean(user.emailVerified),
+        phone: profile.phone || null,
         district: profile.district || null,
+        service: profile.service || null,
+        experience: profile.experience || null,
+        availability: profile.availability || "Available",
         workerId: profile.workerId || null,
+        emailVerified: Boolean(user.emailVerified),
         isVerified: Boolean(profile.isVerified),
         authProvider: "firebase",
         createdAt: profile.createdAt || new Date().toISOString()
@@ -639,6 +897,10 @@ export function demoLogin(role) {
  * Clean up local session state on logout.
  */
 export function demoLogout() {
+  closeChat(false);
+  stopRequestSuccessSubscription();
+  stopCustomerDetailsSubscription();
+  unsubscribeAllFirestoreListeners();
   resetDemoChatState();
   clearCurrentUser();
   clearRequestState();
@@ -669,7 +931,24 @@ export function updateAccountControls() {
 }
 
 /**
- * Displays signed out panels in auth modal.
+ * Sets up show/hide toggle for password fields.
+ */
+function setupPasswordToggles() {
+  document.querySelectorAll("[data-toggle-password]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const targetId = btn.getAttribute("data-toggle-password");
+      const input = document.getElementById(targetId);
+      if (!input) return;
+      const isPassword = input.type === "password";
+      input.type = isPassword ? "text" : "password";
+      btn.textContent = isPassword ? "Hide" : "Show";
+      btn.setAttribute("aria-label", isPassword ? "Hide password" : "Show password");
+    });
+  });
+}
+
+/**
+ * Displays signed out panels in auth modal. Defaults to the clean entry screen.
  */
 export function showSignedOutView() {
   if (typeof document === "undefined") return;
@@ -684,7 +963,7 @@ export function showSignedOutView() {
   if (signedOutView) signedOutView.hidden = false;
   if (accountView) accountView.hidden = true;
   if (dashboardView) dashboardView.hidden = true;
-  switchAuthTab(activeAuthTab || "signin");
+  showAuthEntry();
 }
 
 /**
@@ -735,7 +1014,7 @@ export function showAccountView() {
   }
   setTextContent(document.getElementById("authUserRole"), roleLabel);
 
-  // Email verification badge and notice
+  // Email verification badge and notice (non-blocking recommendation)
   const verifiedBadge = document.getElementById("authEmailVerifiedBadge");
   const verificationNotice = document.getElementById("authEmailVerificationNotice");
   if (verifiedBadge) {
@@ -757,7 +1036,7 @@ export function showAccountView() {
     }
   }
 
-  // Worker status badge
+  // Worker status badge (high-contrast pending status)
   const workerStatusBadge = document.getElementById("authWorkerStatusBadge");
   if (workerStatusBadge) {
     if (user.role === "worker") {
@@ -780,48 +1059,13 @@ export function showAccountView() {
 /**
  * Initializes Firebase Auth state observer and DOM listeners.
  */
-export async function initializeAuth() {
+export function initializeAuth() {
   const modal = document.getElementById("authModal");
   if (!modal || initialized) return;
   initialized = true;
 
   updateAccountControls();
-
-  // Initialize Firebase client
-  const { auth, isConfigured: hasConfig } = await initializeFirebaseClient();
-  const methods = await getFirebaseAuthMethods();
-
-  if (hasConfig && auth && methods && typeof methods.onAuthStateChanged === "function") {
-    methods.onAuthStateChanged(auth, (firebaseUser) => {
-      if (firebaseUser) {
-        const existingProfile = getApplicationProfile(firebaseUser.uid);
-        const currentUser = {
-          id: firebaseUser.uid,
-          firebaseUid: firebaseUser.uid,
-          role: existingProfile?.role || "customer",
-          name: existingProfile?.name || firebaseUser.displayName || "Customer",
-          email: firebaseUser.email,
-          emailVerified: Boolean(firebaseUser.emailVerified),
-          district: existingProfile?.district || null,
-          workerId: existingProfile?.workerId || null,
-          isVerified: Boolean(existingProfile?.isVerified),
-          authProvider: "firebase",
-          createdAt: existingProfile?.createdAt || new Date().toISOString()
-        };
-        setCurrentUser(currentUser);
-        recordSecurityEvent("AUTH_STATE_CHANGED", currentUser.role);
-        updateAccountControls();
-      } else {
-        const current = getCurrentUser();
-        if (current?.authProvider === "firebase") {
-          clearCurrentUser();
-          recordSecurityEvent("AUTH_STATE_CHANGED", null);
-          updateAccountControls();
-          showSignedOutView();
-        }
-      }
-    });
-  }
+  setupPasswordToggles();
 
   // Form Submissions
   const signInForm = document.getElementById("authSignInForm");
@@ -840,9 +1084,11 @@ export async function initializeAuth() {
       e.preventDefault();
       const name = document.getElementById("authCustomerName")?.value || "";
       const email = document.getElementById("authCustomerEmail")?.value || "";
+      const phone = document.getElementById("authCustomerPhone")?.value || "";
+      const district = document.getElementById("authCustomerDistrict")?.value || "";
       const password = document.getElementById("authCustomerPassword")?.value || "";
       const confirmPassword = document.getElementById("authCustomerConfirmPassword")?.value || "";
-      await registerCustomer({ name, email, password, confirmPassword });
+      await registerCustomer({ name, email, phone, district, password, confirmPassword });
     });
   }
 
@@ -852,19 +1098,64 @@ export async function initializeAuth() {
       e.preventDefault();
       const name = document.getElementById("authWorkerName")?.value || "";
       const email = document.getElementById("authWorkerEmail")?.value || "";
+      const phone = document.getElementById("authWorkerPhone")?.value || "";
       const district = document.getElementById("authWorkerDistrict")?.value || "";
+      const service = document.getElementById("authWorkerService")?.value || "";
+      const experience = document.getElementById("authWorkerExperience")?.value || "";
+      const availability = document.getElementById("authWorkerAvailability")?.value || "Available";
       const password = document.getElementById("authWorkerPassword")?.value || "";
       const confirmPassword = document.getElementById("authWorkerConfirmPassword")?.value || "";
-      await registerWorker({ name, email, password, confirmPassword, district });
+      await registerWorker({ name, email, phone, district, service, experience, availability, password, confirmPassword });
     });
   }
+
+  // Capture-phase auth gating for actions requiring an authenticated account
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+
+    if (target.closest("[data-request-worker]")) {
+      if (!isAuthenticated()) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        closeModal("profileModal");
+        showSignedOutView();
+        openModal("authModal");
+      }
+    }
+  }, true);
 
   // Delegated Click Handlers
   document.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
 
-    if (target.closest("#authContinue")) {
+    // Entry view options
+    if (target.closest("#authEntrySignInBtn")) {
+      showSignIn();
+    } else if (target.closest("#authEntryCustomerRegisterBtn")) {
+      showCustomerRegister();
+    } else if (target.closest("#authEntryWorkerRegisterBtn")) {
+      showWorkerRegister();
+    } else if (target.closest("#authSignInBack, #authCustomerRegisterBack, #authWorkerRegisterBack, #authSignInToRegister")) {
+      showAuthEntry();
+    } else if (target.closest("#authCustomerToSignIn, #authWorkerToSignIn")) {
+      showSignIn();
+    } else if (target.closest('[data-auth-target="worker-register"], [data-registration]')) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const user = getCurrentUser();
+      if (user?.role === "worker") {
+        if (openWorkerDashboard()) openModal("authModal");
+      } else if (user) {
+        showAccountView();
+        openModal("authModal");
+      } else {
+        showWorkerRegister();
+        openModal("authModal");
+      }
+    } else if (target.closest("#authContinue")) {
       if (isAuthenticated()) {
         showAccountView();
       } else {
@@ -899,4 +1190,82 @@ export async function initializeAuth() {
       showSignedOutView();
     }
   });
+
+  // Initialize Firebase client in background without blocking UI
+  (async () => {
+    try {
+      const { auth, isConfigured: hasConfig } = await initializeFirebaseClient();
+      const methods = await getFirebaseAuthMethods();
+
+      if (hasConfig && auth && methods && typeof methods.onAuthStateChanged === "function") {
+        methods.onAuthStateChanged(auth, async (firebaseUser) => {
+          if (firebaseUser) {
+            let existingProfile = getApplicationProfile(firebaseUser.uid);
+
+            try {
+              const { db } = await initializeFirestoreClient();
+              const firestoreMethods = await getFirestoreMethods();
+              if (db && firestoreMethods && typeof firestoreMethods.getDoc === "function") {
+                const userDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "users", firebaseUser.uid));
+                if (userDoc.exists()) {
+                  const uData = userDoc.data();
+                  existingProfile = {
+                    ...existingProfile,
+                    role: uData.role || existingProfile?.role || "customer",
+                    name: uData.name || existingProfile?.name || firebaseUser.displayName || "Customer",
+                    email: uData.email || firebaseUser.email,
+                    phone: uData.phone || null,
+                    district: uData.district || null
+                  };
+
+                  if (existingProfile.role === "worker") {
+                    const wDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "workers", firebaseUser.uid));
+                    if (wDoc.exists()) {
+                      const wData = wDoc.data();
+                      existingProfile.service = wData.service || null;
+                      existingProfile.experience = wData.experience || null;
+                      existingProfile.availability = wData.availability || "Available";
+                      existingProfile.isVerified = Boolean(wData.isVerified);
+                      existingProfile.status = wData.status || "pending";
+                    }
+                  }
+                }
+              }
+            } catch {}
+
+            const currentUser = {
+              id: firebaseUser.uid,
+              firebaseUid: firebaseUser.uid,
+              role: existingProfile?.role || "customer",
+              name: existingProfile?.name || firebaseUser.displayName || "Customer",
+              email: firebaseUser.email,
+              phone: existingProfile?.phone || null,
+              district: existingProfile?.district || null,
+              service: existingProfile?.service || null,
+              experience: existingProfile?.experience || null,
+              availability: existingProfile?.availability || "Available",
+              emailVerified: Boolean(firebaseUser.emailVerified),
+              workerId: existingProfile?.workerId || null,
+              isVerified: Boolean(existingProfile?.isVerified),
+              authProvider: "firebase",
+              createdAt: existingProfile?.createdAt || new Date().toISOString()
+            };
+            setCurrentUser(currentUser);
+            recordSecurityEvent("AUTH_STATE_CHANGED", currentUser.role);
+            updateAccountControls();
+          } else {
+            const current = getCurrentUser();
+            if (current?.authProvider === "firebase") {
+              clearCurrentUser();
+              recordSecurityEvent("AUTH_STATE_CHANGED", null);
+              updateAccountControls();
+              showSignedOutView();
+            }
+          }
+        });
+      }
+    } catch (e) {
+      console.warn("[JKFixHub Auth] Background Firebase observer setup notice:", e?.message || e);
+    }
+  })();
 }

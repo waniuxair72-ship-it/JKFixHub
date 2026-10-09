@@ -17,8 +17,13 @@ import {
   getSelectedWorker,
   getWorkerById,
   setCurrentRequest,
-  setSelectedWorker
+  setSelectedWorker,
+  upsertStoredCustomerRequest
 } from "./store.js";
+import {
+  createFirestoreServiceRequest,
+  subscribeToFirestoreRequest
+} from "./firestore-service.js";
 import { refreshCustomerRequestSummary } from "./customer-requests.js";
 import {
   getSafeErrorMessage,
@@ -31,6 +36,81 @@ import {
 
 const markupPattern = /<\s*\/?\s*[a-z!][^>]*>/i;
 
+let requestSuccessUnsubscribe = null;
+let listeningRequestId = null;
+
+export function stopRequestSuccessSubscription() {
+  if (typeof requestSuccessUnsubscribe === "function") {
+    try {
+      requestSuccessUnsubscribe();
+    } catch {}
+    requestSuccessUnsubscribe = null;
+  }
+  listeningRequestId = null;
+}
+
+function startRequestSuccessSubscription(requestId) {
+  stopRequestSuccessSubscription();
+  if (!requestId) return;
+
+  listeningRequestId = requestId;
+
+  subscribeToFirestoreRequest(requestId, (updatedRequest) => {
+    if (!updatedRequest || !updatedRequest.status) return;
+    if (listeningRequestId !== requestId && listeningRequestId !== updatedRequest.id) return;
+
+    // Update in-memory store and drawer counts
+    upsertStoredCustomerRequest(updatedRequest);
+    refreshCustomerRequestSummary();
+
+    const statusEl = document.getElementById("requestSuccessStatus");
+    const tagEl = document.getElementById("requestSuccessTag");
+    const noteEl = document.querySelector("#requestSuccess .request-prototype-note");
+
+    const status = updatedRequest.status;
+
+    if (statusEl) {
+      setTextContent(statusEl, status);
+      statusEl.className = `dashboard-request-status status-${status.toLowerCase()}`;
+    }
+
+    if (tagEl) {
+      if (status === "Accepted") {
+        setTextContent(tagEl, "Request Accepted");
+      } else if (status === "Rejected") {
+        setTextContent(tagEl, "Request Rejected");
+      } else {
+        setTextContent(tagEl, "Request Sent");
+      }
+    }
+
+    if (noteEl) {
+      if (status === "Accepted") {
+        setTextContent(noteEl, "The professional has accepted your request. You can monitor details under My Requests.");
+      } else if (status === "Rejected") {
+        setTextContent(noteEl, "The professional is unavailable and declined this request.");
+      }
+    }
+
+    const chatBtn = document.getElementById("requestSuccessChatBtn");
+    if (chatBtn) {
+      if (status === "Accepted") {
+        chatBtn.hidden = false;
+        chatBtn.dataset.openCustomerChat = updatedRequest.id;
+      } else {
+        chatBtn.hidden = true;
+      }
+    }
+  }).then((unsub) => {
+    const modal = document.getElementById("requestModal");
+    if (!modal || !modal.classList.contains("open") || listeningRequestId !== requestId) {
+      if (typeof unsub === "function") unsub();
+      return;
+    }
+    requestSuccessUnsubscribe = unsub;
+  });
+}
+
 function setFieldError(field, message, errorElement) {
   setTextContent(errorElement, message);
   errorElement.hidden = !message;
@@ -38,9 +118,12 @@ function setFieldError(field, message, errorElement) {
 }
 
 function resetRequestForm(form) {
+  stopRequestSuccessSubscription();
   form.reset();
   form.hidden = false;
   clearRequestState();
+  const chatBtn = document.getElementById("requestSuccessChatBtn");
+  if (chatBtn) chatBtn.hidden = true;
   document.getElementById("requestFormView").hidden = false;
   document.getElementById("requestSuccess").hidden = true;
   document.getElementById("requestModal").querySelector(".modal").setAttribute("aria-labelledby", "requestTitle");
@@ -82,10 +165,34 @@ function showRequestSuccess(request) {
   setTextContent(document.getElementById("requestSuccessWorker"), request.workerName);
   setTextContent(document.getElementById("requestSuccessService"), request.service);
   setTextContent(document.getElementById("requestSuccessDistrict"), request.district);
+
+  const status = request.status || "Pending";
+  const statusEl = document.getElementById("requestSuccessStatus");
+  if (statusEl) {
+    setTextContent(statusEl, status);
+    statusEl.className = `dashboard-request-status status-${status.toLowerCase()}`;
+  }
+
+  const tagEl = document.getElementById("requestSuccessTag");
+  if (tagEl) {
+    if (status === "Accepted") {
+      setTextContent(tagEl, "Request Accepted");
+    } else if (status === "Rejected") {
+      setTextContent(tagEl, "Request Rejected");
+    } else {
+      setTextContent(tagEl, "Request Sent");
+    }
+  }
+
   formView.hidden = true;
   success.hidden = false;
   modal.setAttribute("aria-labelledby", "requestSuccessTitle");
   document.getElementById("requestDone").focus();
+
+  const reqId = request.requestId || request.id;
+  if (reqId && status === "Pending") {
+    startRequestSuccessSubscription(reqId);
+  }
 }
 
 export function initializeRequestFlow() {
@@ -113,10 +220,20 @@ export function initializeRequestFlow() {
     const selectedWorker = getSelectedWorker();
     document.getElementById("requestService").value = selectedWorker.service;
     renderSelectedWorker(selectedWorker);
+
+    // Prepopulate customer name if signed in
+    const currentUser = getCurrentUser();
+    if (currentUser && currentUser.name) {
+      const nameField = document.getElementById("customerName");
+      if (nameField && !nameField.value) {
+        nameField.value = currentUser.name;
+      }
+    }
+
     openModal("requestModal");
   });
 
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
     const customerName = document.getElementById("customerName");
@@ -162,26 +279,69 @@ export function initializeRequestFlow() {
       return;
     }
 
-    const request = {
-      customerId: getUserRole() === "customer" ? getCurrentUser()?.id || null : null,
-      workerId: worker.id,
-      workerName: worker.name,
-      service: serviceValue,
-      district: worker.district,
-      customerName: nameValue,
-      description: descriptionValue,
-      location: locationValue,
-      preferredTime: preferredTimeValue,
-      submittedAt: new Date().toISOString()
-    };
+    const currentUser = getCurrentUser();
+    const customerId = currentUser ? (currentUser.firebaseUid || currentUser.id) : null;
+    const workerUid = worker.workerUid || worker.uid || String(worker.id);
+    const createdAt = new Date().toISOString();
 
-    setCurrentRequest(request);
-    const submittedRequest = getCurrentRequest();
-    if (getUserRole() === "customer") {
-      createCustomerRequest(submittedRequest);
-      refreshCustomerRequestSummary();
+    const submitBtn = form.querySelector('button[type="submit"]');
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      setTextContent(submitBtn, "Sending Request...");
     }
-    showRequestSuccess(submittedRequest);
+
+    try {
+      const result = await createFirestoreServiceRequest({
+        customerId,
+        customerName: nameValue,
+        workerUid,
+        workerId: workerUid,
+        workerName: worker.name,
+        service: serviceValue,
+        district: worker.district,
+        problemDescription: descriptionValue,
+        customerLocation: locationValue,
+        preferredTime: preferredTimeValue,
+        status: "Pending",
+        createdAt
+      });
+
+      const submittedRequest = (result && result.request) ? {
+        ...result.request,
+        submittedAt: result.request.submittedAt || result.request.createdAt || createdAt
+      } : {
+        id: result?.requestId || `req-${Date.now().toString(36)}`,
+        requestId: result?.requestId,
+        customerId,
+        workerId: workerUid,
+        workerUid,
+        workerName: worker.name,
+        service: serviceValue,
+        district: worker.district,
+        customerName: nameValue,
+        description: descriptionValue,
+        problemDescription: descriptionValue,
+        location: locationValue,
+        customerLocation: locationValue,
+        preferredTime: preferredTimeValue,
+        status: "Pending",
+        createdAt,
+        submittedAt: createdAt
+      };
+
+      setCurrentRequest(submittedRequest);
+      upsertStoredCustomerRequest(submittedRequest);
+      refreshCustomerRequestSummary();
+      showRequestSuccess(submittedRequest);
+    } catch (err) {
+      console.error("[JKFixHub Request] Error creating request:", err);
+      setFieldError(requestDescription, "Failed to send request. Please try again.", descriptionError);
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        setTextContent(submitBtn, "Send Request");
+      }
+    }
   });
 
   requestModal.addEventListener("click", (event) => {

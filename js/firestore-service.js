@@ -641,3 +641,759 @@ export async function getAdminAuditLogs() {
     return [];
   }
 }
+
+/**
+ * Loads real worker profiles from Firestore /workers collection for public customer discovery.
+ * Sanitizes data to never expose private worker information (phone numbers, email).
+ * Filters out suspended or inactive accounts.
+ * @returns {Promise<Array<object>>}
+ */
+export async function getPublicWorkers() {
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.getDocs !== "function") return [];
+
+    const snap = await methods.getDocs(methods.collection(db, "workers"));
+    const workers = [];
+    snap.forEach((doc) => {
+      const data = doc.data();
+      if (!data) return;
+
+      const status = data.status || (data.isVerified ? "active" : "pending");
+      if (status === "suspended" || status === "deleted") return;
+
+      const name = typeof data.name === "string" && data.name.trim() ? data.name.trim() : "Service Professional";
+      const initials = typeof data.initials === "string" && data.initials.trim()
+        ? data.initials.trim()
+        : name.split(/\s+/).map((p) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase() || "SP";
+      const experience = typeof data.experience === "string" && data.experience.trim() ? data.experience.trim() : "Experienced";
+      const service = typeof data.service === "string" && data.service.trim() ? data.service.trim() : "Electrician";
+      const district = typeof data.district === "string" && data.district.trim() ? data.district.trim() : "Srinagar";
+      const availability = typeof data.availability === "string" && data.availability.trim() ? data.availability.trim() : "Available";
+      const rating = typeof data.rating === "string" || typeof data.rating === "number" ? String(data.rating) : "5.0";
+      const reviewCount = typeof data.reviewCount === "number" ? data.reviewCount : 0;
+      const isVerified = Boolean(data.isVerified);
+      const services = Array.isArray(data.services) && data.services.length
+        ? data.services.join(", ")
+        : service;
+      const about = typeof data.about === "string" && data.about.trim()
+        ? data.about.trim()
+        : `${experience} specialist providing reliable ${service.toLowerCase()} services in ${district}.`;
+
+      workers.push({
+        id: doc.id,
+        uid: doc.id,
+        name,
+        initials,
+        service,
+        services,
+        district,
+        experience,
+        availability,
+        rating,
+        reviewCount,
+        isVerified,
+        status,
+        about,
+        isDemo: false
+      });
+    });
+    return workers;
+  } catch (err) {
+    console.warn("[JKFixHub Discovery] Real workers fetch notice:", err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * Creates a real service request document in Cloud Firestore /requests/{requestId}.
+ * Initial status is strictly "Pending".
+ *
+ * @param {object} requestData
+ * @param {string} requestData.customerId - Authenticated customer UID.
+ * @param {string} requestData.customerName - Customer name.
+ * @param {string} requestData.workerUid - Assigned worker UID.
+ * @param {string} [requestData.workerId] - Worker ID (matches workerUid).
+ * @param {string} requestData.workerName - Assigned worker name.
+ * @param {string} requestData.service - Requested service category.
+ * @param {string} requestData.district - Operational district.
+ * @param {string} requestData.problemDescription - Description of the issue.
+ * @param {string} requestData.customerLocation - Customer location/area.
+ * @param {string} [requestData.preferredTime] - Preferred timing.
+ * @param {string} [requestData.status] - Initial status (must be "Pending").
+ * @param {string} [requestData.createdAt] - Creation timestamp.
+ * @returns {Promise<{ success: boolean, requestId: string|null, request: object|null, error: string|null }>}
+ */
+export async function createFirestoreServiceRequest(requestData) {
+  const customerId = requestData?.customerId || requestData?.customerUid;
+  const workerUid = requestData?.workerUid || requestData?.workerId;
+  const problemDescription = requestData?.problemDescription || requestData?.description;
+  const customerLocation = requestData?.customerLocation || requestData?.location || "";
+  const customerName = requestData?.customerName;
+  const workerName = requestData?.workerName;
+  const workerId = requestData?.workerId || workerUid;
+  const service = requestData?.service;
+  const district = requestData?.district;
+  const preferredTime = requestData?.preferredTime || "As soon as possible";
+  const status = requestData?.status || "Pending";
+  const createdAt = requestData?.createdAt || new Date().toISOString();
+
+  if (!customerId || !workerUid || !customerName || !service || !problemDescription) {
+    return {
+      success: false,
+      requestId: null,
+      request: null,
+      error: "Missing required service request fields."
+    };
+  }
+
+  const generateId = () => `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+  const finalRequestId = requestData.requestId || requestData.id || generateId();
+
+  const docPayload = {
+    id: finalRequestId,
+    requestId: finalRequestId,
+    customerId: String(customerId),
+    customerName: String(customerName).trim(),
+    workerUid: String(workerUid),
+    workerId: String(workerId || workerUid),
+    workerName: String(workerName).trim(),
+    service: String(service).trim(),
+    district: String(district).trim(),
+    problemDescription: String(problemDescription).trim(),
+    description: String(problemDescription).trim(),
+    customerLocation: String(customerLocation || "").trim(),
+    location: String(customerLocation || "").trim(),
+    preferredTime: String(preferredTime),
+    status: "Pending",
+    createdAt,
+    submittedAt: createdAt,
+    updatedAt: createdAt
+  };
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (db && methods && typeof methods.collection === "function" && typeof methods.setDoc === "function") {
+      const docRef = methods.doc(db, "requests", finalRequestId);
+      await methods.setDoc(docRef, docPayload);
+
+      return {
+        success: true,
+        requestId: finalRequestId,
+        request: docPayload,
+        error: null
+      };
+    }
+  } catch (err) {
+    console.warn("[JKFixHub Request] Direct Firestore write encountered:", err?.message || err);
+    if (err?.code === "permission-denied") {
+      return {
+        success: false,
+        requestId: null,
+        request: null,
+        error: "Permission denied. Ensure you are authenticated as a customer."
+      };
+    }
+  }
+
+  // Safe fallback (offline / mock environment)
+  return {
+    success: true,
+    requestId: finalRequestId,
+    request: docPayload,
+    error: null
+  };
+}
+
+/**
+ * Loads service requests assigned to a worker from Cloud Firestore /requests.
+ * Queries where workerUid == workerUid to satisfy Firestore Security Rules.
+ *
+ * @param {string} workerUid - Authenticated worker's UID.
+ * @returns {Promise<Array<object>>}
+ */
+export async function getWorkerFirestoreRequests(workerUid) {
+  if (!workerUid || typeof workerUid !== "string") return [];
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (!db || !methods || typeof methods.collection !== "function") return [];
+
+    const colRef = methods.collection(db, "requests");
+    const q = methods.query(
+      colRef,
+      methods.where("workerUid", "==", workerUid)
+    );
+
+    const snapshot = await methods.getDocs(q);
+    const requests = [];
+
+    snapshot.forEach((doc) => {
+      const data = doc.data();
+      if (!data) return;
+      requests.push({
+        id: doc.id,
+        requestId: data.requestId || doc.id,
+        ...data
+      });
+    });
+
+    requests.sort((a, b) => {
+      const timeA = new Date(a.createdAt || 0).getTime();
+      const timeB = new Date(b.createdAt || 0).getTime();
+      return timeB - timeA;
+    });
+
+    return requests;
+  } catch (err) {
+    console.warn("[JKFixHub Worker Dashboard] Requests fetch error:", err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * Loads service requests submitted by a customer from Cloud Firestore /requests.
+ * Queries where customerId == customerUid to satisfy Firestore Security Rules.
+ *
+ * @param {string} customerUid - Authenticated customer's UID.
+ * @returns {Promise<Array<object>>}
+ */
+export async function getCustomerFirestoreRequests(customerUid) {
+  if (!customerUid || typeof customerUid !== "string") return [];
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (!db || !methods || typeof methods.collection !== "function") return [];
+
+    const colRef = methods.collection(db, "requests");
+    const q = methods.query(
+      colRef,
+      methods.where("customerId", "==", customerUid)
+    );
+
+    const snapshot = await methods.getDocs(q);
+    const requests = [];
+
+    snapshot.forEach((doc) => {
+      const data = doc.data();
+      if (!data) return;
+      requests.push({
+        id: doc.id,
+        requestId: data.requestId || doc.id,
+        ...data
+      });
+    });
+
+    requests.sort((a, b) => {
+      const timeA = new Date(a.createdAt || 0).getTime();
+      const timeB = new Date(b.createdAt || 0).getTime();
+      return timeB - timeA;
+    });
+
+    return requests;
+  } catch (err) {
+    console.warn("[JKFixHub Customer] Requests fetch error:", err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * Updates the status of a service request in Cloud Firestore.
+ * Enforces strict finite-state machine transitions:
+ * - Worker: Pending -> Accepted, Pending -> Rejected
+ * - Customer: Pending -> Cancelled
+ * Rejects invalid jumps or replaying already resolved requests.
+ *
+ * @param {string} requestId - Request document ID.
+ * @param {"Accepted"|"Rejected"|"Cancelled"} newStatus - Target status.
+ * @param {string} actorUid - Authenticated UID of the actor.
+ * @returns {Promise<{ success: boolean, requestId: string, status: string|null, error: string|null }>}
+ */
+export async function updateFirestoreRequestStatus(requestId, newStatus, actorUid) {
+  if (!requestId || !newStatus || !actorUid) {
+    return { success: false, requestId, status: null, error: "Missing required parameters." };
+  }
+
+  if (!["Accepted", "Rejected", "Cancelled"].includes(newStatus)) {
+    return { success: false, requestId, status: null, error: `Invalid status transition to ${newStatus}.` };
+  }
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (!db || !methods || typeof methods.doc !== "function" || typeof methods.getDoc !== "function") {
+      return { success: false, requestId, status: null, error: "Firestore client unavailable." };
+    }
+
+    const docRef = methods.doc(db, "requests", requestId);
+    const docSnap = await methods.getDoc(docRef);
+
+    if (!docSnap.exists()) {
+      return { success: false, requestId, status: null, error: `Request #${requestId} not found.` };
+    }
+
+    const currentData = docSnap.data();
+
+    // Authorization checks
+    if (newStatus === "Accepted" || newStatus === "Rejected") {
+      if (currentData.workerUid !== actorUid) {
+        return {
+          success: false,
+          requestId,
+          status: currentData.status,
+          error: "Unauthorized: You are not the worker assigned to this request."
+        };
+      }
+    } else if (newStatus === "Cancelled") {
+      if (currentData.customerId !== actorUid) {
+        return {
+          success: false,
+          requestId,
+          status: currentData.status,
+          error: "Unauthorized: You are not the customer who created this request."
+        };
+      }
+    }
+
+    // Idempotency: Already in requested state
+    if (currentData.status === newStatus) {
+      return { success: true, requestId, status: newStatus, error: null };
+    }
+
+    // State machine guard: Can only transition from "Pending"
+    if (currentData.status !== "Pending") {
+      return {
+        success: false,
+        requestId,
+        status: currentData.status,
+        error: `Cannot transition request from "${currentData.status}" to "${newStatus}". Only Pending requests can be accepted or rejected.`
+      };
+    }
+
+    const updatePayload = {
+      status: newStatus,
+      updatedAt: new Date().toISOString()
+    };
+
+    await methods.updateDoc(docRef, updatePayload);
+
+    return {
+      success: true,
+      requestId,
+      status: newStatus,
+      error: null
+    };
+  } catch (err) {
+    console.warn("[JKFixHub Request Lifecycle] Status update error:", err?.message || err);
+    return {
+      success: false,
+      requestId,
+      status: null,
+      error: err?.message || "Failed to update request status in Firestore."
+    };
+  }
+}
+
+// ==========================================
+// #REALTIME_REQUEST_SUBSCRIPTIONS
+// ==========================================
+
+const activeRequestSubscriptions = new Map();
+const activeChatSubscriptions = new Map();
+
+/**
+ * Returns total count of active real-time listeners across requests and chats.
+ * @returns {number}
+ */
+export function getActiveFirestoreListenersCount() {
+  return activeRequestSubscriptions.size + activeChatSubscriptions.size;
+}
+
+/**
+ * Subscribes to real-time updates for a single request document in Cloud Firestore.
+ * Automatically cleans up any previous listener for the same requestId to prevent duplication.
+ *
+ * @param {string} requestId - Request document ID.
+ * @param {Function} onUpdate - Callback invoked with doc data on change.
+ * @param {Function} [onError] - Optional error callback.
+ * @returns {Promise<Function>} Resolves to an unsubscribe function.
+ */
+export async function subscribeToFirestoreRequest(requestId, onUpdate, onError) {
+  if (!requestId || typeof onUpdate !== "function") {
+    return () => {};
+  }
+
+  // Deduplicate: Clean up existing listener for this requestId if any
+  if (activeRequestSubscriptions.has(requestId)) {
+    try {
+      const oldUnsub = activeRequestSubscriptions.get(requestId);
+      if (typeof oldUnsub === "function") oldUnsub();
+    } catch (err) {
+      console.warn(`[JKFixHub Realtime] Error cleaning up previous listener for ${requestId}:`, err);
+    }
+    activeRequestSubscriptions.delete(requestId);
+  }
+
+  let isCleanedUp = false;
+
+  const cleanup = (actualUnsubscribe) => {
+    if (isCleanedUp) return;
+    isCleanedUp = true;
+    activeRequestSubscriptions.delete(requestId);
+    if (typeof actualUnsubscribe === "function") {
+      try {
+        actualUnsubscribe();
+      } catch (err) {
+        console.warn(`[JKFixHub Realtime] Error during unsubscribe for ${requestId}:`, err);
+      }
+    }
+  };
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (!db || !methods || typeof methods.doc !== "function" || typeof methods.onSnapshot !== "function") {
+      console.warn("[JKFixHub Realtime] Firestore onSnapshot method unavailable.");
+      return () => {};
+    }
+
+    const docRef = methods.doc(db, "requests", requestId);
+
+    const actualUnsubscribe = methods.onSnapshot(
+      docRef,
+      (docSnap) => {
+        if (isCleanedUp || !docSnap) return;
+        const exists = typeof docSnap.exists === "function" ? docSnap.exists() : Boolean(docSnap.data);
+        if (exists) {
+          const rawData = typeof docSnap.data === "function" ? docSnap.data() : docSnap;
+          if (rawData) {
+            onUpdate({
+              id: docSnap.id || requestId,
+              requestId: rawData.requestId || docSnap.id || requestId,
+              ...rawData
+            });
+          }
+        }
+      },
+      (err) => {
+        console.warn(`[JKFixHub Realtime] Error listening to request ${requestId}:`, err?.message || err);
+        if (typeof onError === "function") onError(err);
+      }
+    );
+
+    const unsubWrapper = () => cleanup(actualUnsubscribe);
+
+    if (isCleanedUp) {
+      if (typeof actualUnsubscribe === "function") actualUnsubscribe();
+      return () => {};
+    }
+
+    activeRequestSubscriptions.set(requestId, unsubWrapper);
+    return unsubWrapper;
+  } catch (err) {
+    console.warn(`[JKFixHub Realtime] Failed to subscribe to request ${requestId}:`, err?.message || err);
+    return () => {};
+  }
+}
+
+/**
+ * Retrieves a single service request by its ID from Firestore /requests/{requestId}.
+ *
+ * @param {string} requestId - Unique ID of request.
+ * @returns {Promise<object|null>}
+ */
+export async function getFirestoreRequestById(requestId) {
+  if (!requestId) return null;
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.doc !== "function" || typeof methods.getDoc !== "function") {
+      return null;
+    }
+    const docRef = methods.doc(db, "requests", requestId);
+    const snap = await methods.getDoc(docRef);
+    if (!snap || (typeof snap.exists === "function" ? !snap.exists() : !snap.exists)) {
+      return null;
+    }
+    const data = typeof snap.data === "function" ? snap.data() : snap;
+    return {
+      id: snap.id || requestId,
+      requestId: data.requestId || snap.id || requestId,
+      ...data
+    };
+  } catch (err) {
+    console.warn(`[JKFixHub Chat] Error fetching request #${requestId}:`, err?.message || err);
+    return null;
+  }
+}
+
+/**
+ * Ensures a private Firestore conversation document exists under /chats/{chatId}.
+ * The chatId is deterministically requestId.
+ *
+ * @param {object} requestData - The service request document.
+ * @param {string} actorUid - Authenticated UID (customer or worker).
+ * @returns {Promise<{ success: boolean, conversation: object|null, error: string|null }>}
+ */
+export async function getOrCreateFirestoreConversation(requestData, actorUid) {
+  if (!requestData || !requestData.id) {
+    return { success: false, conversation: null, error: "Invalid request data for chat." };
+  }
+
+  const chatId = String(requestData.id);
+  const customerId = requestData.customerId || requestData.customerUid;
+  const workerUid = requestData.workerUid || requestData.workerId;
+
+  if (!customerId || !workerUid) {
+    return { success: false, conversation: null, error: "Missing customer or worker identifier." };
+  }
+
+  if (actorUid && actorUid !== customerId && actorUid !== workerUid) {
+    return { success: false, conversation: null, error: "Unauthorized: You are not a participant in this conversation." };
+  }
+
+  const conversationPayload = {
+    id: chatId,
+    requestId: chatId,
+    customerId,
+    customerUid: customerId,
+    customerName: requestData.customerName || "Customer",
+    workerId: workerUid,
+    workerUid,
+    workerName: requestData.workerName || "Worker",
+    service: requestData.service || "",
+    district: requestData.district || "",
+    participants: [customerId, workerUid],
+    status: "active",
+    createdAt: requestData.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (!db || !methods || typeof methods.doc !== "function" || typeof methods.getDoc !== "function" || typeof methods.setDoc !== "function") {
+      return { success: false, conversation: null, error: "Firestore service is unavailable." };
+    }
+
+    const docRef = methods.doc(db, "chats", chatId);
+    const docSnap = await methods.getDoc(docRef);
+
+    if (docSnap && (typeof docSnap.exists === "function" ? docSnap.exists() : docSnap.exists)) {
+      const data = typeof docSnap.data === "function" ? docSnap.data() : docSnap;
+      return {
+        success: true,
+        conversation: {
+          id: docSnap.id || chatId,
+          ...data
+        },
+        error: null
+      };
+    }
+
+    await methods.setDoc(docRef, conversationPayload);
+    return {
+      success: true,
+      conversation: conversationPayload,
+      error: null
+    };
+  } catch (err) {
+    console.warn(`[JKFixHub Chat] Conversation get/create error for ${chatId}:`, err?.message || err);
+    return {
+      success: false,
+      conversation: null,
+      error: "Failed to access or create chat conversation."
+    };
+  }
+}
+
+/**
+ * Writes a new chat message into /chats/{chatId}/messages/{messageId}.
+ *
+ * @param {object} params
+ * @param {string} params.chatId - The conversation ID (requestId).
+ * @param {string} params.text - The message body.
+ * @param {string} params.senderUid - The sender UID (must equal auth UID).
+ * @param {string} params.senderName - The sender's display name.
+ * @param {"customer"|"worker"} params.senderRole - The sender's role.
+ * @returns {Promise<{ success: boolean, message: object|null, error: string|null }>}
+ */
+export async function sendFirestoreChatMessage({ chatId, text, senderUid, senderName, senderRole }) {
+  if (!chatId || !text || !senderUid) {
+    return { success: false, message: null, error: "Missing required chat message parameters." };
+  }
+
+  const messagePayload = {
+    chatId,
+    senderId: senderUid,
+    senderUid: senderUid,
+    senderName: senderName || "User",
+    senderRole: senderRole || "customer",
+    text: text.trim(),
+    createdAt: new Date().toISOString()
+  };
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (!db || !methods || typeof methods.collection !== "function" || typeof methods.addDoc !== "function") {
+      return { success: false, message: null, error: "Firestore service is unavailable." };
+    }
+
+    const messagesCol = methods.collection(db, "chats", chatId, "messages");
+    const docRef = await methods.addDoc(messagesCol, messagePayload);
+
+    try {
+      if (typeof methods.updateDoc === "function") {
+        const chatDocRef = methods.doc(db, "chats", chatId);
+        await methods.updateDoc(chatDocRef, {
+          updatedAt: new Date().toISOString(),
+          lastMessageText: text.trim()
+        });
+      }
+    } catch (_) {}
+
+    return {
+      success: true,
+      message: {
+        id: docRef.id,
+        ...messagePayload
+      },
+      error: null
+    };
+  } catch (err) {
+    console.warn(`[JKFixHub Chat] Error sending message to ${chatId}:`, err?.message || err);
+    return {
+      success: false,
+      message: null,
+      error: "Failed to send message."
+    };
+  }
+}
+
+/**
+ * Subscribes to real-time chat messages for /chats/{chatId}/messages.
+ *
+ * @param {string} chatId - Conversation ID.
+ * @param {Function} onUpdate - Callback with sorted Array of message objects.
+ * @param {Function} [onError] - Callback on error.
+ * @returns {Promise<Function>} Unsubscribe function.
+ */
+export async function subscribeToFirestoreChatMessages(chatId, onUpdate, onError) {
+  if (!chatId || typeof onUpdate !== "function") {
+    return () => {};
+  }
+
+  if (activeChatSubscriptions.has(chatId)) {
+    try {
+      const prev = activeChatSubscriptions.get(chatId);
+      if (typeof prev === "function") prev();
+    } catch (err) {
+      console.warn(`[JKFixHub Chat] Error cleaning up previous listener for ${chatId}:`, err);
+    }
+    activeChatSubscriptions.delete(chatId);
+  }
+
+  let isCleanedUp = false;
+
+  const cleanup = (actualUnsubscribe) => {
+    if (isCleanedUp) return;
+    isCleanedUp = true;
+    activeChatSubscriptions.delete(chatId);
+    if (typeof actualUnsubscribe === "function") {
+      try {
+        actualUnsubscribe();
+      } catch (err) {
+        console.warn(`[JKFixHub Chat] Error during chat unsubscribe for ${chatId}:`, err);
+      }
+    }
+  };
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (!db || !methods || typeof methods.collection !== "function" || typeof methods.onSnapshot !== "function") {
+      if (typeof onError === "function") {
+        onError(new Error("Firestore service is unavailable."));
+      }
+      return () => {};
+    }
+
+    const messagesCol = methods.collection(db, "chats", chatId, "messages");
+
+    const actualUnsubscribe = methods.onSnapshot(
+      messagesCol,
+      (snapshot) => {
+        if (isCleanedUp || !snapshot) return;
+        const messages = [];
+        if (typeof snapshot.forEach === "function") {
+          snapshot.forEach((doc) => {
+            const data = typeof doc.data === "function" ? doc.data() : doc;
+            if (data) {
+              messages.push({
+                id: doc.id,
+                ...data
+              });
+            }
+          });
+        }
+        messages.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+        onUpdate(messages);
+      },
+      (err) => {
+        console.warn(`[JKFixHub Chat] Error listening to messages for ${chatId}:`, err?.message || err);
+        if (typeof onError === "function") onError(err);
+      }
+    );
+
+    const unsubWrapper = () => cleanup(actualUnsubscribe);
+
+    if (isCleanedUp) {
+      if (typeof actualUnsubscribe === "function") actualUnsubscribe();
+      return () => {};
+    }
+
+    activeChatSubscriptions.set(chatId, unsubWrapper);
+    return unsubWrapper;
+  } catch (err) {
+    console.warn(`[JKFixHub Chat] Failed to subscribe to chat ${chatId}:`, err?.message || err);
+    if (typeof onError === "function") onError(err);
+    return () => {};
+  }
+}
+
+/**
+ * Unsubscribes all active Firestore real-time listeners across the application.
+ * Called on user logout or session reset.
+ */
+export function unsubscribeAllFirestoreListeners() {
+  for (const [id, unsub] of activeRequestSubscriptions.entries()) {
+    try {
+      if (typeof unsub === "function") unsub();
+    } catch (err) {
+      console.warn(`[JKFixHub Realtime] Error cleaning up listener for ${id}:`, err);
+    }
+  }
+  activeRequestSubscriptions.clear();
+
+  for (const [id, unsub] of activeChatSubscriptions.entries()) {
+    try {
+      if (typeof unsub === "function") unsub();
+    } catch (err) {
+      console.warn(`[JKFixHub Chat] Error cleaning up chat listener for ${id}:`, err);
+    }
+  }
+  activeChatSubscriptions.clear();
+}
