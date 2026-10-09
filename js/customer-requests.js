@@ -2,7 +2,7 @@
 // #CUSTOMER_REQUESTS
 // ==========================================
 
-// Customer request history is session-only demo state.
+// Customer request history is connected to real Cloud Firestore data.
 import { closeModal, openModal } from "./modals.js";
 import {
   cancelCustomerRequest,
@@ -10,12 +10,72 @@ import {
   getCustomerRequests,
   getCurrentUser,
   getReviewByRequestId,
-  isCustomer
+  isCustomer,
+  setStoredCustomerRequests,
+  upsertStoredCustomerRequest
 } from "./store.js";
+import {
+  getCustomerFirestoreRequests,
+  subscribeToFirestoreRequest
+} from "./firestore-service.js";
 import { hasCapability, recordSecurityEvent, setTextContent } from "./security.js";
 
 let initialized = false;
 let pendingCancellationId = null;
+let customerDetailsUnsubscribe = null;
+let activeDetailsRequestId = null;
+
+export function stopCustomerDetailsSubscription() {
+  if (typeof customerDetailsUnsubscribe === "function") {
+    try {
+      customerDetailsUnsubscribe();
+    } catch {}
+    customerDetailsUnsubscribe = null;
+  }
+  activeDetailsRequestId = null;
+}
+
+function startCustomerDetailsSubscription(requestId) {
+  stopCustomerDetailsSubscription();
+  if (!requestId) return;
+
+  activeDetailsRequestId = requestId;
+
+  subscribeToFirestoreRequest(requestId, (updatedRequest) => {
+    if (!updatedRequest || !updatedRequest.status) return;
+    if (activeDetailsRequestId !== requestId && activeDetailsRequestId !== updatedRequest.id) return;
+
+    upsertStoredCustomerRequest(updatedRequest);
+    renderCustomerSummary();
+
+    const statusElement = document.getElementById("customerRequestDetailStatus");
+    if (statusElement) {
+      setTextContent(statusElement, updatedRequest.status);
+      statusElement.className = `customer-request-status status-${updatedRequest.status.toLowerCase()}`;
+    }
+
+    const cancelButton = document.getElementById("customerRequestDetailsCancel");
+    if (cancelButton) {
+      cancelButton.hidden = updatedRequest.status !== "Pending";
+    }
+
+    const chatButton = document.getElementById("customerRequestDetailsChat");
+    if (chatButton) {
+      chatButton.hidden = updatedRequest.status !== "Accepted";
+      chatButton.dataset.openCustomerChat = updatedRequest.id;
+    }
+
+    // Also update request list in the background if rendered
+    renderCustomerRequests();
+  }).then((unsub) => {
+    const detailsModal = document.getElementById("customerRequestDetailsModal");
+    if (!detailsModal || !detailsModal.classList.contains("open") || activeDetailsRequestId !== requestId) {
+      if (typeof unsub === "function") unsub();
+      return;
+    }
+    customerDetailsUnsubscribe = unsub;
+  });
+}
 
 function canViewCustomerRequests() {
   if (isCustomer() && hasCapability("customer", "viewOwnRequests")) return true;
@@ -89,7 +149,7 @@ function renderCustomerSummary() {
     ["Total", requests.length],
     ["Pending", requests.filter((request) => request.status === "Pending").length],
     ["Accepted", requests.filter((request) => request.status === "Accepted").length],
-    ["Completed", requests.filter((request) => request.status === "Completed").length]
+    ["Rejected", requests.filter((request) => request.status === "Rejected").length]
   ];
   statistics.replaceChildren(...counts.map(([label, value]) => buildSummaryCard(label, value)));
   summary.hidden = false;
@@ -98,6 +158,20 @@ function renderCustomerSummary() {
 
 function setRequestsFeedback(message) {
   setTextContent(document.getElementById("customerRequestsFeedback"), message);
+}
+
+async function syncCustomerRequestsFromFirestore() {
+  const currentUser = getCurrentUser();
+  if (!currentUser) return;
+  const customerUid = currentUser.firebaseUid || currentUser.id;
+  try {
+    const firestoreRequests = await getCustomerFirestoreRequests(customerUid);
+    if (firestoreRequests && firestoreRequests.length) {
+      setStoredCustomerRequests(firestoreRequests);
+    }
+  } catch (err) {
+    console.warn("[JKFixHub Customer] Firestore requests sync notice:", err);
+  }
 }
 
 function buildRequestCard(request) {
@@ -148,7 +222,7 @@ function buildRequestCard(request) {
     chatButton.className = "button primary";
     chatButton.type = "button";
     chatButton.dataset.openCustomerChat = request.id;
-    setTextContent(chatButton, "Open Chat");
+    setTextContent(chatButton, "Chat with Worker");
     actions.append(chatButton);
   } else if (request.status === "Completed") {
     const review = getReviewByRequestId(request.id);
@@ -197,8 +271,9 @@ function renderCustomerRequests() {
   return true;
 }
 
-export function openCustomerRequests() {
+export async function openCustomerRequests() {
   if (!canViewCustomerRequests()) return false;
+  await syncCustomerRequestsFromFirestore();
   if (!renderCustomerRequests()) return false;
   document.getElementById("nav")?.classList.remove("open");
   document.getElementById("menuButton")?.setAttribute("aria-expanded", "false");
@@ -207,7 +282,8 @@ export function openCustomerRequests() {
   return true;
 }
 
-export function refreshCustomerRequestSummary() {
+export async function refreshCustomerRequestSummary() {
+  await syncCustomerRequestsFromFirestore();
   renderCustomerSummary();
 }
 
@@ -245,6 +321,12 @@ function showRequestDetails(id) {
   cancelButton.hidden = request.status !== "Pending";
   cancelButton.dataset.customerRequestCancel = request.id;
 
+  const chatButton = document.getElementById("customerRequestDetailsChat");
+  if (chatButton) {
+    chatButton.hidden = request.status !== "Accepted";
+    chatButton.dataset.openCustomerChat = request.id;
+  }
+
   const reviewButton = document.getElementById("customerRequestDetailsReview");
   if (reviewButton) {
     if (request.status === "Completed") {
@@ -267,9 +349,16 @@ function showRequestDetails(id) {
   }
   closeModal("customerRequestsModal");
   openModal("customerRequestDetailsModal");
+
+  if (request.status === "Pending") {
+    startCustomerDetailsSubscription(request.id);
+  } else {
+    stopCustomerDetailsSubscription();
+  }
 }
 
 function showCancellationConfirmation(id) {
+  stopCustomerDetailsSubscription();
   if (!canViewCustomerRequests()) return;
   const request = getCustomerRequestById(id);
   if (!request || request.status !== "Pending") {
@@ -288,6 +377,7 @@ function showCancellationConfirmation(id) {
 }
 
 function confirmCancellation() {
+  stopCustomerDetailsSubscription();
   if (!canViewCustomerRequests() || !pendingCancellationId) {
     pendingCancellationId = null;
     return;
@@ -310,11 +400,13 @@ function handleCustomerRequestClick(event) {
     return;
   }
   if (target.closest("#customerRequestsBack")) {
+    stopCustomerDetailsSubscription();
     closeModal("customerRequestsModal");
     openModal("authModal");
     return;
   }
   if (target.closest("#customerRequestsBrowse")) {
+    stopCustomerDetailsSubscription();
     closeModal("customerRequestsModal");
     document.getElementById("find-worker").scrollIntoView({ behavior: "smooth" });
     return;
@@ -341,6 +433,7 @@ function handleCustomerRequestClick(event) {
 
   if (target === document.getElementById("customerRequestDetailsModal") ||
       target.closest('[data-close="customerRequestDetailsModal"]')) {
+    stopCustomerDetailsSubscription();
     window.setTimeout(() => showCustomerRequestsAgain(), 0);
   } else if (target === document.getElementById("cancelCustomerRequestModal") ||
       target.closest('[data-close="cancelCustomerRequestModal"]')) {
@@ -368,6 +461,7 @@ export function initializeCustomerRequests() {
     const shouldReturn = document.getElementById("customerRequestDetailsModal").classList.contains("open") ||
       document.getElementById("cancelCustomerRequestModal").classList.contains("open");
     if (shouldReturn) {
+      stopCustomerDetailsSubscription();
       window.setTimeout(() => {
         pendingCancellationId = null;
         showCustomerRequestsAgain();

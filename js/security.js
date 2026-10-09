@@ -237,6 +237,8 @@ export function getSafeErrorMessage(code) {
     passwordTooShort: "Password must be at least 6 characters long.",
     passwordsDoNotMatch: "Passwords do not match.",
     invalidDistrict: "Please choose a valid district.",
+    invalidPhone: "Please enter a valid phone number (at least 7 digits).",
+    invalidExperience: "Please enter your experience (e.g. 5 years).",
     firebaseNotConfigured: "Firebase Authentication is in preview/demo mode."
   };
   return messages[code] || "Something went wrong. Please try again.";

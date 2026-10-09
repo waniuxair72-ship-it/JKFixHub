@@ -90,9 +90,10 @@ function openWorkerProfile(id) {
   const fields = [
     ["District", worker.district],
     ["Experience", worker.experience],
-    ["Rating", `${worker.rating} ★`],
+    ["Rating", worker.rating ? `${worker.rating} ★` : "5.0 ★"],
     ["Availability", worker.availability],
-    ["Services", worker.services]
+    ["Services", worker.services || worker.service],
+    ["Status", worker.isVerified ? "Verified Professional" : (worker.isDemo ? "Sample Profile" : "Pending Verification")]
   ];
   for (const [label, value] of fields) {
     const row = document.createElement("div");
@@ -133,7 +134,7 @@ function initializeModalHandlers(showToast) {
 
     const profileButton = target.closest("[data-profile]");
     if (profileButton) {
-      openWorkerProfile(Number(profileButton.dataset.profile));
+      openWorkerProfile(profileButton.dataset.profile);
     }
 
     const maintenanceTrigger = target.closest("[data-maintenance]");

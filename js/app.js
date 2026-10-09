@@ -78,6 +78,13 @@ function initializeApp() {
   initializeAdminDashboard({ showToast });
   initializeRevealObserver();
   initializePointerMotion();
+
+  const heroSignInBtn = document.getElementById("heroSignInBtn");
+  if (heroSignInBtn) {
+    heroSignInBtn.addEventListener("click", () => {
+      document.getElementById("authContinue")?.click();
+    });
+  }
 }
 
 initializeApp();
