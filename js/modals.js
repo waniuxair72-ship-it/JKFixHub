@@ -31,6 +31,9 @@ export function closeModal(id) {
   if (!document.querySelector(".modal-backdrop.open")) {
     document.body.classList.remove("modal-open");
   }
+  try {
+    modal.dispatchEvent(new CustomEvent("modal:close", { bubbles: true, detail: { id } }));
+  } catch (_) {}
 }
 
 export function openModal(id) {
@@ -154,8 +157,15 @@ function initializeModalHandlers(showToast) {
   });
 
   document.querySelectorAll(".modal-backdrop").forEach((modal) => {
+    let pointerStartedOnBackdrop = false;
+    modal.addEventListener("pointerdown", (event) => {
+      pointerStartedOnBackdrop = event.target === modal;
+    });
     modal.addEventListener("click", (event) => {
-      if (event.target === modal) closeModal(modal.id);
+      if (event.target === modal && pointerStartedOnBackdrop) {
+        closeModal(modal.id);
+      }
+      pointerStartedOnBackdrop = false;
     });
   });
 
