@@ -36,7 +36,7 @@ const state = {
   authError: null,
   userProfiles: {},
   workerDemoProfiles: {},
-  discoveredWorkers: [],
+  discoveredWorkers: null,
   customerRequests: [],
   conversations: [],
   messages: [],
@@ -184,16 +184,23 @@ export function initializeStore() {
 }
 
 export function setDiscoveredWorkers(workerList) {
-  if (!Array.isArray(workerList)) return;
+  if (!Array.isArray(workerList)) {
+    state.discoveredWorkers = null;
+    return;
+  }
   state.discoveredWorkers = workerList.map((worker) => ({ ...worker }));
 }
 
+export function clearDiscoveredWorkers() {
+  state.discoveredWorkers = null;
+}
+
 export function getDiscoveredWorkers() {
-  return (state.discoveredWorkers || []).map((w) => ({ ...w }));
+  return Array.isArray(state.discoveredWorkers) ? state.discoveredWorkers.map((w) => ({ ...w })) : [];
 }
 
 export function getWorkers() {
-  if (state.discoveredWorkers && state.discoveredWorkers.length > 0) {
+  if (Array.isArray(state.discoveredWorkers)) {
     return state.discoveredWorkers.map((worker) => ({ ...worker }));
   }
   return workers.map((worker) => getWorkerById(worker.id));
@@ -400,9 +407,9 @@ export function getWorkerById(id) {
   if (id === null || id === undefined) return null;
   const strId = String(id);
 
-  if (state.discoveredWorkers && state.discoveredWorkers.length > 0) {
+  if (Array.isArray(state.discoveredWorkers)) {
     const found = state.discoveredWorkers.find((item) => String(item.id) === strId || String(item.uid) === strId);
-    if (found) return { ...found };
+    return found ? { ...found } : null;
   }
 
   const normalizedId = typeof id === "number"

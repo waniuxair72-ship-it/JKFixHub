@@ -1,16 +1,24 @@
 import { getWorkers, setDiscoveredWorkers } from "./store.js";
 import { getPublicWorkers } from "./firestore-service.js";
-import { setTextContent } from "./security.js";
+import {
+  setTextContent,
+  workerMatchesService,
+  normalizeService,
+  areServicesEquivalent
+} from "./security.js";
 
 // ==========================================
 // #SEARCH_LOGIC
 // ==========================================
 function getSearchableText(worker) {
+  const servicesList = Array.isArray(worker.services)
+    ? worker.services.join(" ")
+    : (worker.services || "");
   return [
     worker.name,
     worker.service,
+    servicesList,
     worker.district,
-    worker.services,
     worker.experience,
     worker.availability,
     worker.about,
@@ -20,9 +28,12 @@ function getSearchableText(worker) {
 
 function getRelevance(worker, keyword) {
   if (!keyword) return 0;
-  const fields = [worker.name, worker.service, worker.district]
+  const services = Array.isArray(worker.services)
+    ? worker.services
+    : (worker.services ? [worker.services] : []);
+  const fields = [worker.name, worker.service, ...services, worker.district]
     .filter(Boolean)
-    .map((value) => value.toLowerCase());
+    .map((value) => String(value).toLowerCase());
 
   if (fields.some((value) => value === keyword)) return 3;
   if (fields.some((value) => value.startsWith(keyword))) return 2;
@@ -53,7 +64,11 @@ function buildWorkerCard(worker) {
   avatar.className = "avatar";
   setTextContent(avatar, worker.initials);
   setTextContent(name, worker.name);
-  setTextContent(service, worker.service);
+
+  const displayService = Array.isArray(worker.services) && worker.services.length > 1
+    ? worker.services.join(" · ")
+    : (worker.service || "Local Specialist");
+  setTextContent(service, displayService);
 
   badge.className = worker.isVerified
     ? "worker-verified-badge"
@@ -74,9 +89,9 @@ function buildWorkerCard(worker) {
   setTextContent(rating, worker.rating ? `${worker.rating} ★` : "5.0 ★");
   availability.className = "availability";
   availabilityIcon.setAttribute("aria-hidden", "true");
-  setTextContent(availability, worker.availability);
+  setTextContent(availability, worker.availability || "Available");
   availability.prepend(availabilityIcon);
-  setTextContent(experience, worker.experience);
+  setTextContent(experience, worker.experience || "Experienced");
   metadata.append(district, rating, availability, experience);
 
   actions.className = "worker-actions";
@@ -106,32 +121,93 @@ export function initializeSearch({ showToast } = {}) {
 
   if (!searchForm || !results) return;
 
-  function renderResults(matchingWorkers) {
-    if (matchingWorkers.length) {
-      results.replaceChildren(...matchingWorkers.map(buildWorkerCard));
-    } else {
-      const emptyState = document.createElement("div");
-      const heading = document.createElement("h3");
-      const message = document.createElement("p");
-      const clearButton = document.createElement("button");
+  function renderLoading() {
+    if (feedback) {
+      setTextContent(feedback, "Loading verified professionals...");
+    }
+    const loadingState = document.createElement("div");
+    loadingState.className = "search-loading";
+    loadingState.setAttribute("role", "status");
+    const spinner = document.createElement("div");
+    spinner.className = "search-loading-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    const message = document.createElement("p");
+    setTextContent(message, "Finding verified professionals across Jammu & Kashmir...");
+    loadingState.append(spinner, message);
+    results.replaceChildren(loadingState);
+  }
 
-      emptyState.className = "empty-state";
-      setTextContent(heading, "No workers found");
+  function renderError(err) {
+    if (feedback) {
+      setTextContent(feedback, "Unable to load verified professionals");
+    }
+    const errorState = document.createElement("div");
+    errorState.className = "search-error-state";
+    errorState.setAttribute("role", "alert");
+    const icon = document.createElement("div");
+    icon.className = "search-error-icon";
+    icon.setAttribute("aria-hidden", "true");
+    setTextContent(icon, "⚠️");
+    const heading = document.createElement("h3");
+    setTextContent(heading, "Unable to load verified professionals");
+    const message = document.createElement("p");
+    setTextContent(message, "Could not load worker directory from server. Please check your connection and try again.");
+    const retryButton = document.createElement("button");
+    retryButton.className = "button primary search-retry-button";
+    retryButton.type = "button";
+    retryButton.dataset.searchRetry = "";
+    setTextContent(retryButton, "Retry Search");
+    errorState.append(icon, heading, message, retryButton);
+    results.replaceChildren(errorState);
+  }
+
+  function renderResults(matchingWorkers) {
+    if (matchingWorkers.length > 0) {
+      results.replaceChildren(...matchingWorkers.map(buildWorkerCard));
+      if (feedback) {
+        const count = matchingWorkers.length;
+        setTextContent(feedback, `${count} verified professional${count === 1 ? "" : "s"} found`);
+      }
+      return;
+    }
+
+    const allWorkers = getWorkers();
+    const emptyState = document.createElement("div");
+    const heading = document.createElement("h3");
+    const message = document.createElement("p");
+
+    emptyState.className = "empty-state";
+    emptyState.setAttribute("role", "status");
+
+    if (allWorkers.length === 0) {
+      // Platform-wide zero verified workers registered
+      setTextContent(heading, "No verified professionals available");
+      setTextContent(message, "There are currently no verified active professionals in the directory. Please check back soon or register as a worker.");
+      const joinButton = document.createElement("button");
+      joinButton.className = "button subtle";
+      joinButton.type = "button";
+      joinButton.dataset.jkAction = "join-worker";
+      setTextContent(joinButton, "Join as a Worker");
+      emptyState.append(heading, message, joinButton);
+      if (feedback) {
+        setTextContent(feedback, "No verified professionals found");
+      }
+    } else {
+      // Filters active but no workers match
+      setTextContent(heading, "No matching workers found");
       setTextContent(message, "Try changing your service, district, or search keyword.");
+      const clearButton = document.createElement("button");
       clearButton.className = "button subtle";
       clearButton.type = "button";
       clearButton.dataset.clearFilters = "";
       setTextContent(clearButton, "Clear Filters");
       emptyState.append(heading, message, clearButton);
-      results.replaceChildren(emptyState);
+      if (feedback) {
+        setTextContent(feedback, "No workers found matching your criteria");
+      }
     }
 
-    if (feedback) {
-      const count = matchingWorkers.length;
-      setTextContent(feedback, count === 0
-        ? "No workers found"
-        : `${count} worker${count === 1 ? "" : "s"} found`);
-    }
+    results.replaceChildren(emptyState);
   }
 
   function getMatchingWorkers() {
@@ -142,7 +218,7 @@ export function initializeSearch({ showToast } = {}) {
 
     return getWorkers()
       .filter((worker) => {
-        if (service && worker.service !== service) return false;
+        if (service && !workerMatchesService(worker, service)) return false;
         if (district && worker.district !== district) return false;
         if (!terms.length) return true;
         const searchableText = getSearchableText(worker);
@@ -153,7 +229,7 @@ export function initializeSearch({ showToast } = {}) {
           Number(second.availability === "Available") - Number(first.availability === "Available");
         if (availabilityDifference) return availabilityDifference;
 
-        const ratingDifference = Number(second.rating) - Number(first.rating);
+        const ratingDifference = Number(second.rating || 5.0) - Number(first.rating || 5.0);
         if (ratingDifference) return ratingDifference;
 
         const relevanceDifference =
@@ -194,6 +270,11 @@ export function initializeSearch({ showToast } = {}) {
       window.clearTimeout(searchTimer);
       clearFilters();
     }
+
+    if (target.closest("[data-search-retry]")) {
+      window.clearTimeout(searchTimer);
+      fetchLiveWorkers().catch(() => {});
+    }
   });
 
   locationButton?.addEventListener("click", () => {
@@ -210,28 +291,61 @@ export function initializeSearch({ showToast } = {}) {
     const target = event.target;
     if (!(target instanceof Element)) return;
 
-    const serviceButton = target.closest("[data-service]");
-    if (!serviceButton) return;
+    const serviceTrigger = target.closest("[data-service], [data-service-select]");
+    if (!serviceTrigger) return;
 
-    if (serviceFilter) serviceFilter.value = serviceButton.dataset.service;
+    const rawService = serviceTrigger.dataset.service || serviceTrigger.dataset.serviceSelect;
+    if (!rawService) return;
+
+    const canonicalService = normalizeService(rawService);
+    if (serviceFilter) {
+      let optionFound = false;
+      for (const option of serviceFilter.options) {
+        if (
+          option.value === canonicalService ||
+          areServicesEquivalent(option.value, rawService) ||
+          option.value.toLowerCase() === canonicalService.toLowerCase()
+        ) {
+          serviceFilter.value = option.value;
+          optionFound = true;
+          break;
+        }
+      }
+      if (!optionFound) {
+        serviceFilter.value = canonicalService;
+      }
+    }
+
     const workerSection = document.getElementById("find-worker");
     if (workerSection) workerSection.scrollIntoView({ behavior: "smooth" });
-    if (showToast) showToast("Service selected");
+    if (showToast) showToast(`Service filtered: ${serviceFilter?.value || canonicalService}`);
     updateResults();
   });
 
-  renderResults(getMatchingWorkers());
-
-  // Load real Firestore worker profiles for discovery in background
-  (async () => {
+  async function fetchLiveWorkers() {
+    renderLoading();
     try {
-      const realWorkers = await getPublicWorkers();
-      if (Array.isArray(realWorkers) && realWorkers.length > 0) {
+      const realWorkers = await getPublicWorkers({ throwOnError: true });
+      if (Array.isArray(realWorkers)) {
         setDiscoveredWorkers(realWorkers);
-        renderResults(getMatchingWorkers());
       }
+      renderResults(getMatchingWorkers());
+      return realWorkers;
     } catch (err) {
       console.warn("[JKFixHub Discovery] Real worker discovery notice:", err?.message || err);
+      renderError(err);
+      throw err;
     }
-  })();
+  }
+
+  // Initial load
+  renderLoading();
+  const discoveryPromise = fetchLiveWorkers().catch(() => {});
+
+  return {
+    fetchLiveWorkers,
+    renderResults,
+    getMatchingWorkers,
+    discoveryPromise
+  };
 }

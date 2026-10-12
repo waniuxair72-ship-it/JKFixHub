@@ -14,6 +14,7 @@ import { initializeChat } from "./chat.js";
 import { initializeReviews } from "./reviews.js";
 import { initializeReports } from "./reports.js";
 import { initializeAdminDashboard } from "./admin-dashboard.js";
+import { initializeBrandReveal } from "./brand-reveal.js";
 
 // ==========================================
 // #UTILITY
@@ -78,6 +79,7 @@ function initializeApp() {
   initializeAdminDashboard({ showToast });
   initializeRevealObserver();
   initializePointerMotion();
+  initializeBrandReveal();
 
   const heroSignInBtn = document.getElementById("heroSignInBtn");
   if (heroSignInBtn) {

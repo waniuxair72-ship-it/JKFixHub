@@ -6,6 +6,43 @@
 // Real authorization must be enforced by trusted backend services.
 export const SUPPORTED_ROLES = Object.freeze(["customer", "worker", "admin"]);
 
+export const SUPPORTED_SERVICES = Object.freeze([
+  "Electrician",
+  "Plumbing",
+  "Carpentry",
+  "Appliance repair",
+  "Washing Machine Repair",
+  "Refrigerator Repair",
+  "Heater Repair",
+  "TV / Electronics Repair"
+]);
+
+export const SERVICE_SYNONYMS = Object.freeze({
+  plumber: "Plumbing",
+  plumbing: "Plumbing",
+  carpenter: "Carpentry",
+  carpentry: "Carpentry",
+  electrician: "Electrician",
+  electrical: "Electrician",
+  "electrical repair": "Electrician",
+  appliance: "Appliance repair",
+  "appliance repair": "Appliance repair",
+  "washing machine": "Washing Machine Repair",
+  "washing machine repair": "Washing Machine Repair",
+  refrigerator: "Refrigerator Repair",
+  "refrigerator repair": "Refrigerator Repair",
+  fridge: "Refrigerator Repair",
+  "fridge repair": "Refrigerator Repair",
+  heater: "Heater Repair",
+  "heater repair": "Heater Repair",
+  "tv repair": "TV / Electronics Repair",
+  "electronics repair": "TV / Electronics Repair",
+  electronics: "TV / Electronics Repair",
+  "tv / electronics repair": "TV / Electronics Repair",
+  "tv & electronics repair": "TV / Electronics Repair",
+  "tv & electronics": "TV / Electronics Repair"
+});
+
 export const CAPABILITIES = Object.freeze({
   customer: Object.freeze([
     "browseWorkers",
@@ -147,6 +184,57 @@ export function validateHttpsUrl(value) {
   } catch {
     return false;
   }
+}
+
+export function normalizeService(service) {
+  if (typeof service !== "string") return "";
+  const key = service.trim().toLowerCase();
+  return SERVICE_SYNONYMS[key] || service.trim();
+}
+
+export function areServicesEquivalent(serviceA, serviceB) {
+  if (!serviceA || !serviceB) return false;
+  const normA = normalizeService(serviceA).toLowerCase();
+  const normB = normalizeService(serviceB).toLowerCase();
+  if (normA === normB) return true;
+  return normA.includes(normB) || normB.includes(normA);
+}
+
+export function workerMatchesService(worker, targetService) {
+  if (!targetService) return true;
+  if (!worker) return false;
+
+  const targetNorm = normalizeService(targetService).toLowerCase();
+
+  // Check worker.service
+  if (worker.service) {
+    const workerNorm = normalizeService(worker.service).toLowerCase();
+    if (workerNorm === targetNorm || workerNorm.includes(targetNorm) || targetNorm.includes(workerNorm)) {
+      return true;
+    }
+  }
+
+  // Check worker.services (string or array)
+  if (worker.services) {
+    const servicesList = Array.isArray(worker.services)
+      ? worker.services
+      : String(worker.services).split(/[,;]|\band\b/).map((s) => s.trim()).filter(Boolean);
+
+    for (const item of servicesList) {
+      const itemNorm = normalizeService(item).toLowerCase();
+      if (itemNorm === targetNorm || itemNorm.includes(targetNorm) || targetNorm.includes(itemNorm)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+export function validateService(service) {
+  if (typeof service !== "string") return false;
+  const norm = normalizeService(service).toLowerCase();
+  return SUPPORTED_SERVICES.some((s) => s.toLowerCase() === norm);
 }
 
 export function recordSecurityEvent(type, role = null) {

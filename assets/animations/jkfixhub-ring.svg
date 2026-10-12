@@ -1,0 +1,207 @@
+<svg class="brand-wordmark-svg" viewBox="0 0 540 540" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="JK FixHub">
+  <defs>
+    <!-- Background Radial Aura -->
+    <radialGradient id="ringAtmosphereGlow" cx="45%" cy="50%" r="55%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.24" />
+      <stop offset="35%" stop-color="#2563eb" stop-opacity="0.18" />
+      <stop offset="65%" stop-color="#7c3aed" stop-opacity="0.10" />
+      <stop offset="100%" stop-color="#0284c7" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Arc TL Gradient (Electric Blue 3D glass) -->
+    <linearGradient id="gradArcTL" x1="120" y1="90" x2="260" y2="240" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0284c7" />
+      <stop offset="28%" stop-color="#2563eb" />
+      <stop offset="70%" stop-color="#1e3a8a" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+
+    <!-- Arc BL Gradient (Electric Violet / Magenta neon glass) -->
+    <linearGradient id="gradArcBL" x1="80" y1="360" x2="250" y2="460" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#c084fc" />
+      <stop offset="25%" stop-color="#9333ea" />
+      <stop offset="65%" stop-color="#7c3aed" />
+      <stop offset="100%" stop-color="#3b82f6" />
+    </linearGradient>
+
+    <!-- Arc TR Gradient (Cyan & Deep Blue) -->
+    <linearGradient id="gradArcTR" x1="320" y1="90" x2="480" y2="240" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="40%" stop-color="#0284c7" />
+      <stop offset="85%" stop-color="#1d4ed8" />
+      <stop offset="100%" stop-color="#1e1b4b" />
+    </linearGradient>
+
+    <!-- Arc BR Gradient (Cyan to Electric Blue) -->
+    <linearGradient id="gradArcBR" x1="460" y1="320" x2="310" y2="470" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="35%" stop-color="#06b6d4" />
+      <stop offset="75%" stop-color="#2563eb" />
+      <stop offset="100%" stop-color="#1e1b4b" />
+    </linearGradient>
+
+    <!-- Specular Highlight Gradients -->
+    <linearGradient id="gradSpecularCyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95" />
+      <stop offset="50%" stop-color="#7dd3fc" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#0284c7" stop-opacity="0.2" />
+    </linearGradient>
+
+    <linearGradient id="gradSpecularViolet" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95" />
+      <stop offset="50%" stop-color="#e879f9" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0.2" />
+    </linearGradient>
+
+    <!-- Brilliant Solar Rim Flare Gradient -->
+    <linearGradient id="gradSolarFlare" x1="470" y1="330" x2="320" y2="460" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="1" />
+      <stop offset="25%" stop-color="#67e8f9" stop-opacity="0.95" />
+      <stop offset="60%" stop-color="#06b6d4" stop-opacity="0.85" />
+      <stop offset="100%" stop-color="#2563eb" stop-opacity="0.1" />
+    </linearGradient>
+
+    <!-- Brand JK Typography Gradient -->
+    <linearGradient id="brandJkGradNew" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563eb" />
+      <stop offset="50%" stop-color="#4f46e5" />
+      <stop offset="100%" stop-color="#7c3aed" />
+    </linearGradient>
+
+    <!-- Energy Glow Filters -->
+    <filter id="bloomCyan" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur1" />
+      <feGaussianBlur in="SourceGraphic" stdDeviation="12" result="blur2" />
+      <feMerge>
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="bloomViolet" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur1" />
+      <feGaussianBlur in="SourceGraphic" stdDeviation="15" result="blur2" />
+      <feMerge>
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="solarFlareGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="sharpGlow" />
+      <feGaussianBlur in="SourceGraphic" stdDeviation="14" result="wideGlow" />
+      <feMerge>
+        <feMergeNode in="wideGlow" />
+        <feMergeNode in="sharpGlow" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <!-- Brand Text Reveal Mask -->
+    <mask id="brandRingRevealMask">
+      <rect class="ring-mask-wipe" x="0" y="0" width="540" height="540" fill="#ffffff" />
+    </mask>
+  </defs>
+
+  <!-- 0. Ambient Atmospheric Backdrop -->
+  <circle cx="270" cy="270" r="230" fill="url(#ringAtmosphereGlow)" class="ring-ambient-aura" />
+
+  <!-- 1. Concentric Guide Rails -->
+  <g class="ring-rails-group">
+    <circle cx="270" cy="270" r="188" stroke="rgba(56, 189, 248, 0.45)" stroke-width="2.5" fill="none" stroke-dasharray="14 10" class="rail-inner" />
+    <path d="M 17.89 225.55 A 256 256 0 0 1 522.11 225.55" stroke="rgba(148, 163, 184, 0.28)" stroke-width="1.2" stroke-dasharray="6 8" fill="none" class="rail-outer-1" />
+    <path d="M 510.56 357.56 A 256 256 0 0 1 14 270" stroke="rgba(148, 163, 184, 0.28)" stroke-width="1.2" stroke-dasharray="6 8" fill="none" class="rail-outer-2" />
+  </g>
+
+  <!-- 2. SEGMENTED ARCS GROUP (Mechanically opening & settling) -->
+  <g class="ring-segments-group">
+    <!-- Top-Left Segment (Electric Blue Dimensional Glass with 3D Depth) -->
+    <g class="arc-segment arc-top-left" style="transform-origin: 270px 270px;">
+      <!-- 3D extrusion underlayer -->
+      <path d="M 44.98 219.15 A 235 235 0 0 1 208.23 50.1 L 227.28 92.61 A 189 189 0 0 0 88.13 236.7 Z" fill="rgba(15, 23, 42, 0.65)" filter="blur(2px)" />
+      <!-- Main thick body -->
+      <path d="M 42.95 213.39 A 234 234 0 0 1 205.5 45.06 L 224.03 85.64 A 190 190 0 0 0 84.15 230.5 Z" fill="url(#gradArcTL)" filter="drop-shadow(0 6px 16px rgba(37,99,235,0.38))" />
+      <!-- Outer stepped shell -->
+      <path d="M 41.61 163.5 A 252 252 0 0 1 171.54 38.03 L 180.84 49.33 A 238 238 0 0 0 52.58 173.2 Z" fill="#2563eb" opacity="0.88" />
+      <!-- Specular top edge highlight -->
+      <path d="M 42.95 213.39 A 234 234 0 0 1 205.5 45.06" stroke="url(#gradSpecularCyan)" stroke-width="3" stroke-linecap="round" fill="none" filter="url(#bloomCyan)" />
+      <!-- Inner contour bevel -->
+      <path d="M 85.64 224.03 A 190 190 0 0 1 217.63 87.36" stroke="rgba(255,255,255,0.45)" stroke-width="1.5" stroke-linecap="round" fill="none" />
+      <!-- Node flare -->
+      <circle cx="64.3" cy="218.71" r="3.5" fill="#ffffff" filter="url(#bloomCyan)" />
+    </g>
+
+    <!-- Bottom-Left Segment (Neon Violet / Magenta Glass with 3D Depth) -->
+    <g class="arc-segment arc-bottom-left" style="transform-origin: 270px 270px;">
+      <!-- 3D extrusion underlayer -->
+      <path d="M 202.78 499.97 A 233 233 0 0 1 37.54 316.46 L 79.84 302.3 A 189 189 0 0 0 221.28 459.39 Z" fill="rgba(30, 27, 75, 0.65)" filter="blur(2px)" />
+      <!-- Main thick body -->
+      <path d="M 206.05 493.01 A 232 232 0 0 1 41.52 310.29 L 81.85 296.44 A 190 190 0 0 0 224.03 454.36 Z" fill="url(#gradArcBL)" filter="url(#bloomViolet)" opacity="0.95" />
+      <!-- Outer stepped shell -->
+      <path d="M 165.19 494.76 A 248 248 0 0 1 35.51 350.74 L 45.55 342.93 A 236 236 0 0 0 174.01 485.6 Z" fill="#7c3aed" opacity="0.82" />
+      <!-- Specular top edge highlight -->
+      <path d="M 206.05 493.01 A 232 232 0 0 1 41.52 310.29" stroke="url(#gradSpecularViolet)" stroke-width="3.5" stroke-linecap="round" fill="none" />
+      <!-- Inner glowing contour -->
+      <path d="M 217.63 452.64 A 190 190 0 0 1 82.89 302.99" stroke="rgba(232, 121, 249, 0.75)" stroke-width="2" stroke-linecap="round" fill="none" />
+      <!-- Node flare -->
+      <circle cx="211.84" cy="472.83" r="3.5" fill="#ffffff" filter="url(#bloomViolet)" />
+    </g>
+
+    <!-- Top-Right Segment (Cyan & Indigo with 3D Depth) -->
+    <g class="arc-segment arc-top-right" style="transform-origin: 270px 270px;">
+      <!-- 3D extrusion underlayer -->
+      <path d="M 360.53 53.82 A 231 231 0 0 1 498.14 212.12 L 458.87 228.7 A 189 189 0 0 0 338.64 90.4 Z" fill="rgba(15, 23, 42, 0.6)" filter="blur(2px)" />
+      <!-- Main thick body -->
+      <path d="M 356.16 56.75 A 230 230 0 0 1 493.17 214.36 L 455.85 230.5 A 190 190 0 0 0 334.98 91.46 Z" fill="url(#gradArcTR)" filter="drop-shadow(0 4px 14px rgba(2,132,199,0.32))" />
+      <!-- Outer stepped shell -->
+      <path d="M 396.7 59.14 A 246 246 0 0 1 499.66 181.84 L 489.89 189.97 A 234 234 0 0 0 387 67.35 Z" fill="#0ea5e9" opacity="0.88" />
+      <!-- Specular rim -->
+      <path d="M 356.16 56.75 A 230 230 0 0 1 493.17 214.36" stroke="url(#gradSpecularCyan)" stroke-width="3" stroke-linecap="round" fill="none" />
+      <!-- Inner rim -->
+      <path d="M 341.18 93.84 A 190 190 0 0 1 454.36 224.03" stroke="rgba(255,255,255,0.45)" stroke-width="1.5" stroke-linecap="round" fill="none" />
+      <!-- Node flare -->
+      <circle cx="473.76" cy="219.2" r="3" fill="#ffffff" filter="url(#bloomCyan)" />
+    </g>
+
+    <!-- Bottom-Right Segment (Electric Cyan & Brilliant Solar Rim Flare) -->
+    <g class="arc-segment arc-bottom-right" style="transform-origin: 270px 270px;">
+      <!-- 3D extrusion underlayer -->
+      <path d="M 479.73 384.39 A 233 233 0 0 1 298.36 506.72 L 287.18 463.54 A 189 189 0 0 0 443.87 357.85 Z" fill="rgba(15, 23, 42, 0.6)" filter="blur(2px)" />
+      <!-- Main body -->
+      <path d="M 474.84 378.92 A 232 232 0 0 1 294.25 500.73 L 283.25 459.54 A 190 190 0 0 0 440.77 353.29 Z" fill="url(#gradArcBR)" filter="drop-shadow(0 4px 16px rgba(6,182,212,0.38))" />
+      <!-- Specular outer rim -->
+      <path d="M 474.84 378.92 A 232 232 0 0 1 294.25 500.73" stroke="url(#gradSpecularCyan)" stroke-width="2.5" stroke-linecap="round" fill="none" />
+      <!-- Intense Luminous Solar Rim Flare along inner curve -->
+      <path d="M 442.66 346.87 A 189 189 0 0 1 276.6 458.88" stroke="url(#gradSolarFlare)" stroke-width="6" stroke-linecap="round" fill="none" filter="url(#solarFlareGlow)" />
+      <!-- Core intense white line inside flare -->
+      <path d="M 442.66 346.87 A 189 189 0 0 1 276.6 458.88" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" fill="none" />
+      <!-- Solar Node Flare -->
+      <circle cx="439.87" cy="352.85" r="4.5" fill="#ffffff" filter="url(#solarFlareGlow)" />
+    </g>
+  </g>
+
+  <!-- 3. CENTER BRAND REVEAL APERTURE: JK FixHub -->
+  <g class="ring-brand-center" mask="url(#brandRingRevealMask)">
+    <!-- Hidden / stroke drawing layer for backward-compatibility -->
+    <text x="270" y="278" text-anchor="middle" class="stroke-text brand-svg-text" font-family="'Plus Jakarta Sans', system-ui, -apple-system, sans-serif" font-weight="900" font-size="64" letter-spacing="-0.04em" fill="none" stroke="rgba(56, 189, 248, 0.4)" stroke-width="1.5" opacity="0.3">
+      <tspan>JK</tspan>
+      <tspan dx="12">FixHub</tspan>
+    </text>
+
+    <!-- Crisp Primary Brand Typography -->
+    <text x="270" y="278" text-anchor="middle" class="brand-ring-wordmark brand-svg-text" font-family="'Plus Jakarta Sans', system-ui, -apple-system, sans-serif" font-weight="900" font-size="64" letter-spacing="-0.04em">
+      <tspan fill="url(#brandJkGradNew)" class="svg-jk">JK</tspan>
+      <tspan fill="#0f172a" dx="12" class="svg-hub">FixHub</tspan>
+    </text>
+
+    <!-- Underline Accent Bar -->
+    <rect x="180" y="292" width="180" height="3" rx="1.5" fill="url(#gradSolarFlare)" filter="drop-shadow(0 1px 4px rgba(6,182,212,0.5))" class="brand-underline-bar" />
+  </g>
+
+  <!-- Energy sweep flare across the aperture -->
+  <g class="sweep-plasma-bar" filter="url(#solarFlareGlow)">
+    <line x1="120" y1="270" x2="420" y2="270" stroke="url(#gradSolarFlare)" stroke-width="3" stroke-linecap="round" opacity="0" class="aperture-sweep-beam" />
+  </g>
+</svg>

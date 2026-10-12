@@ -31,7 +31,10 @@ import {
   setTextContent,
   validateDescription,
   validateLocation,
-  validatePersonName
+  validatePersonName,
+  workerMatchesService,
+  areServicesEquivalent,
+  normalizeService
 } from "./security.js";
 
 const markupPattern = /<\s*\/?\s*[a-z!][^>]*>/i;
@@ -218,7 +221,27 @@ export function initializeRequestFlow() {
     resetRequestForm(form);
     setSelectedWorker(worker.id);
     const selectedWorker = getSelectedWorker();
-    document.getElementById("requestService").value = selectedWorker.service;
+    const requestServiceSelect = document.getElementById("requestService");
+    if (requestServiceSelect && selectedWorker) {
+      const normWorkerService = normalizeService(selectedWorker.service).toLowerCase();
+      let matched = false;
+      for (const opt of requestServiceSelect.options) {
+        if (
+          opt.value &&
+          (
+            opt.value === selectedWorker.service ||
+            normalizeService(opt.value).toLowerCase() === normWorkerService
+          )
+        ) {
+          requestServiceSelect.value = opt.value;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched && selectedWorker.service) {
+        requestServiceSelect.value = selectedWorker.service;
+      }
+    }
     renderSelectedWorker(selectedWorker);
 
     // Prepopulate customer name if signed in
@@ -256,7 +279,14 @@ export function initializeRequestFlow() {
     const validName = validatePersonName(nameValue);
     const validDescription = validateDescription(descriptionValue) && !markupPattern.test(descriptionValue);
     const validLocation = validateLocation(locationValue) && !markupPattern.test(locationValue);
-    const validService = Boolean(worker && serviceValue === worker.service);
+    const validService = Boolean(
+      worker &&
+      (
+        serviceValue === worker.service ||
+        areServicesEquivalent(serviceValue, worker.service) ||
+        workerMatchesService(worker, serviceValue)
+      )
+    );
     const validPreferredTime = ["As soon as possible", "Today", "Tomorrow", "Flexible"].includes(preferredTimeValue);
 
     setFieldError(customerName, validName ? "" : getSafeErrorMessage("invalidName"), nameError);

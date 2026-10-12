@@ -27,6 +27,39 @@ export function initializeNavigation() {
     });
   }
 
+  const jkMenuButton = document.getElementById("jkMenuButton");
+  const jkDropdownMenu = document.getElementById("jkDropdownMenu");
+
+  function setJkMenuState(isOpen) {
+    if (!jkMenuButton || !jkDropdownMenu) return;
+    jkDropdownMenu.hidden = !isOpen;
+    jkMenuButton.setAttribute("aria-expanded", String(isOpen));
+  }
+
+  if (jkMenuButton && jkDropdownMenu) {
+    jkMenuButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const shouldOpen = jkDropdownMenu.hidden;
+      // Close mobile nav drawer if open to prevent overlap
+      if (shouldOpen) updateMenuState(false);
+      setJkMenuState(shouldOpen);
+    });
+
+    document.addEventListener("click", (event) => {
+      if (jkDropdownMenu.hidden) return;
+      if (!jkDropdownMenu.contains(event.target) && !jkMenuButton.contains(event.target)) {
+        setJkMenuState(false);
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !jkDropdownMenu.hidden) {
+        setJkMenuState(false);
+        jkMenuButton.focus();
+      }
+    });
+  }
+
   document.querySelectorAll(".nav-links a").forEach((link) => {
     link.addEventListener("click", () => updateMenuState(false));
   });

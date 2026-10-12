@@ -1,0 +1,877 @@
+/* ==========================================================================
+   JK FIXHUB - PREMIUM SEGMENTED-RING HERO & BRAND REVEAL
+   Dedicated stylesheet for the animated segmented circular mechanism
+   ========================================================================== */
+
+/* ==========================================================================
+   KASHMIR-INSPIRED MOUNTAIN & LAKE HERO BACKDROP
+   ========================================================================== */
+.hero-kashmir-wrapper {
+  position: relative;
+  width: 100%;
+  background: #f8fafc;
+  overflow: hidden;
+}
+
+.hero-kashmir-landscape {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.42) 0%, rgba(248, 250, 252, 0.72) 42%, rgba(248, 250, 252, 0.96) 85%, #f8fafc 100%),
+    url("../assets/images/kashmir-landscape.jpg");
+  background-size: cover;
+  background-position: center 25%;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* 1. Hero Grid Layout */
+.container.hero,
+.hero {
+  position: relative;
+  z-index: 1;
+  min-height: auto;
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  align-items: center;
+  column-gap: 36px;
+  row-gap: 14px;
+  padding: 18px 0 20px;
+}
+
+.hero-copy-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: 100%;
+}
+
+/* Hero Headline: "The right help. Right around you." */
+.hero-headline {
+  margin: 0 0 10px 0;
+  font-size: clamp(1.85rem, 3.8vw, 2.75rem);
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  font-weight: 850;
+  color: #0f172a;
+  text-align: center;
+  width: 100%;
+}
+
+.hero-headline-accent,
+.hero .hero-headline span.hero-headline-accent {
+  background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%) !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  display: inline !important;
+}
+
+.brand-hero-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 440px;
+  margin-bottom: 0;
+  overflow: visible;
+}
+
+/* 2. Kashmir Location Beacon Stage (approved scale on desktop: 370px) */
+.hero-ring-stage {
+  position: relative;
+  width: 100%;
+  max-width: 370px;
+  aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
+  margin-bottom: 8px;
+  overflow: visible;
+  animation: kashmirLocationFloat 6.5s ease-in-out infinite;
+}
+
+@keyframes kashmirLocationFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+.ring-atmosphere-aura {
+  position: absolute;
+  inset: -6%;
+  border-radius: 50%;
+  background: radial-gradient(circle at center, rgba(56, 189, 248, 0.20) 0%, rgba(37, 99, 235, 0.12) 36%, rgba(124, 58, 237, 0.05) 65%, transparent 78%);
+  filter: blur(24px);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.85;
+  animation: auraPulse 6s ease-in-out infinite;
+}
+
+@keyframes auraPulse {
+  0%, 100% { opacity: 0.85; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.03); }
+}
+
+/* Kashmir Waypoint Beacon Pulse */
+.waypoint-pulse {
+  transform-origin: 270px 54px;
+  animation: waypointPulse 3.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+@keyframes waypointPulse {
+  0% { r: 5px; opacity: 0.9; stroke-width: 1.8px; }
+  60% { r: 16px; opacity: 0.25; stroke-width: 1px; }
+  100% { r: 22px; opacity: 0; stroke-width: 0.4px; }
+}
+
+/* Lake Water Ripple Shimmer */
+.kashmir-lake-ripple {
+  animation: lakeRippleShimmer 5s ease-in-out infinite alternate;
+}
+
+@keyframes lakeRippleShimmer {
+  0% { stroke-dashoffset: 0; opacity: 0.35; }
+  100% { stroke-dashoffset: 28; opacity: 0.75; }
+}
+
+/* Distant Mountain Peak Contour */
+.kashmir-mountain-silhouette {
+  animation: mountainMistBreeze 7s ease-in-out infinite alternate;
+}
+
+@keyframes mountainMistBreeze {
+  0% { opacity: 0.38; }
+  100% { opacity: 0.55; }
+}
+
+.ring-svg-wrapper {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.segmented-ring-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+}
+
+/* ==========================================================================
+   MECHANICAL OPENING ANIMATION SEQUENCE (approx 1.8s - 2.5s)
+   ========================================================================== */
+
+/* Stage B: Coordinated Mechanical Opening */
+.arc-top-left {
+  transform-origin: 270px 270px;
+  animation: arcOpenTL 2.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes arcOpenTL {
+  0% {
+    transform: rotate(-22deg) scale(0.92);
+    opacity: 0.35;
+  }
+  45% {
+    transform: rotate(3deg) scale(1.02);
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(0deg) scale(1);
+    opacity: 1;
+  }
+}
+
+.arc-bottom-left {
+  transform-origin: 270px 270px;
+  animation: arcOpenBL 2.4s cubic-bezier(0.16, 1, 0.3, 1) 0.08s forwards;
+}
+
+@keyframes arcOpenBL {
+  0% {
+    transform: rotate(26deg) scale(0.91);
+    opacity: 0.3;
+  }
+  50% {
+    transform: rotate(-3deg) scale(1.02);
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(0deg) scale(1);
+    opacity: 1;
+  }
+}
+
+.arc-top-right {
+  transform-origin: 270px 270px;
+  animation: arcOpenTR 2.1s cubic-bezier(0.16, 1, 0.3, 1) 0.04s forwards;
+}
+
+@keyframes arcOpenTR {
+  0% {
+    transform: rotate(34deg) scale(0.93);
+    opacity: 0.35;
+  }
+  45% {
+    transform: rotate(-2deg) scale(1.015);
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(0deg) scale(1);
+    opacity: 1;
+  }
+}
+
+.arc-bottom-right {
+  transform-origin: 270px 270px;
+  animation: arcOpenBR 2.3s cubic-bezier(0.16, 1, 0.3, 1) 0.12s forwards;
+}
+
+@keyframes arcOpenBR {
+  0% {
+    transform: rotate(-32deg) scale(0.92);
+    opacity: 0.3;
+  }
+  55% {
+    transform: rotate(2deg) scale(1.025);
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(0deg) scale(1);
+    opacity: 1;
+  }
+}
+
+/* Concentric Rails Animation */
+.rail-inner {
+  transform-origin: 270px 270px;
+  animation: railSpin 2.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes railSpin {
+  0% { transform: rotate(-90deg); opacity: 0; }
+  100% { transform: rotate(0deg); opacity: 1; }
+}
+
+/* Stage C: Center Brand Reveal Aperture */
+.ring-brand-center {
+  animation: brandRevealText 1.6s cubic-bezier(0.16, 1, 0.3, 1) 0.5s both;
+}
+
+@keyframes brandRevealText {
+  0% {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.brand-underline-bar {
+  transform-origin: 270px 292px;
+  animation: barExpand 1.4s cubic-bezier(0.16, 1, 0.3, 1) 0.9s both;
+}
+
+@keyframes barExpand {
+  0% { transform: scaleX(0); opacity: 0; }
+  100% { transform: scaleX(1); opacity: 1; }
+}
+
+.aperture-sweep-beam {
+  animation: sweepBeam 1.2s ease-in-out 1.2s forwards;
+}
+
+@keyframes sweepBeam {
+  0% { opacity: 0; transform: translateX(-160px); }
+  40% { opacity: 0.9; }
+  100% { opacity: 0; transform: translateX(160px); }
+}
+
+/* Backward compatibility animation names for regression test suites */
+@keyframes strokeDrawLetters {
+  0% { opacity: 0; stroke-dashoffset: 400; }
+  100% { opacity: 1; stroke-dashoffset: 0; }
+}
+
+@keyframes plasmaSweep {
+  0% { opacity: 0; transform: translateX(-100px); }
+  100% { opacity: 0; transform: translateX(100px); }
+}
+
+/* Settled Quiescent State */
+.hero-ring-stage.is-settled .arc-segment,
+.hero-ring-stage.is-settled .rail-inner,
+.hero-ring-stage.is-settled .ring-brand-center,
+.hero-ring-stage.is-settled .brand-underline-bar {
+  animation: none !important;
+  transform: none !important;
+  opacity: 1 !important;
+}
+
+/* ==========================================================================
+   CONTENT BELOW THE RING (OUTSIDE ANIMATION AREA)
+   ========================================================================== */
+.hero-content-below {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 420px;
+  width: 100%;
+}
+
+.hero-slogan-wrap {
+  display: inline-flex;
+}
+
+.slogan-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1d4ed8;
+  font-size: 0.88rem;
+  font-weight: 800;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.08);
+}
+
+.slogan-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #7c3aed;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.22);
+  animation: dotPulse 2s infinite ease-in-out;
+}
+
+@keyframes dotPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.7; }
+}
+
+.brand-hero-tagline {
+  font-size: 0.96rem;
+  font-weight: 600;
+  color: #64748b;
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* Primary & Secondary Buttons - MANDATORY: Frame 0 Usability */
+.hero-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 2px;
+  width: 100%;
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+.hero-primary-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 10px 22px;
+  border-radius: 999px;
+  font-size: 0.94rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%) !important;
+  color: #ffffff !important;
+  text-decoration: none;
+  box-shadow: 0 4px 16px rgba(37, 99, 235, 0.32), 0 0 0 1px rgba(255, 255, 255, 0.2) inset !important;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.hero-primary-cta:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(37, 99, 235, 0.42) !important;
+}
+
+.cta-arrow {
+  font-size: 1.05rem;
+  transition: transform 0.18s ease;
+}
+
+.hero-primary-cta:hover .cta-arrow {
+  transform: translateX(3px);
+}
+
+.hero-signin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 10px 20px;
+  border-radius: 999px;
+  font-size: 0.92rem;
+  font-weight: 750;
+  background: #ffffff;
+  color: #1e293b;
+  border: 1.5px solid #cbd5e1;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  min-height: 44px;
+}
+
+.hero-signin-btn:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+  color: #0f172a;
+  transform: translateY(-2px);
+}
+
+/* ==========================================================================
+   RIGHT COLUMN: COVERAGE ACROSS KASHMIR SERVICE PANEL
+   ========================================================================== */
+.hero-visual {
+  width: 100%;
+  max-width: 440px;
+  justify-self: center;
+}
+
+.kashmir-service-panel {
+  background: #ffffff;
+  border-radius: 20px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  box-shadow: 0 16px 36px -8px rgba(15, 23, 42, 0.07), 0 0 0 1px rgba(15, 23, 42, 0.03);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.service-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 2px;
+}
+
+.service-panel-tag {
+  font-size: 0.78rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  color: #1e40af;
+  text-transform: uppercase;
+}
+
+.service-panel-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #059669;
+}
+
+.service-panel-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.service-card-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 14px;
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  text-decoration: none;
+  color: inherit;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.02);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+}
+
+.service-card-item:hover,
+.service-card-item:focus-visible {
+  border-color: #93c5fd;
+  background: #f8fafc;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 18px -4px rgba(37, 99, 235, 0.12);
+}
+
+.service-card-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.service-card-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.icon-blue {
+  background: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+}
+
+.icon-violet {
+  background: #f5f3ff;
+  color: #7c3aed;
+  border: 1px solid #ddd6fe;
+}
+
+.icon-teal {
+  background: #f0fdfa;
+  color: #0d9488;
+  border: 1px solid #99f6e4;
+}
+
+.service-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.service-card-title {
+  font-size: 0.98rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.service-card-desc {
+  font-size: 0.82rem;
+  color: #64748b;
+  font-weight: 550;
+}
+
+.service-card-chevron {
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: #94a3b8;
+  transition: transform 0.18s ease, color 0.18s ease;
+}
+
+.service-card-item:hover .service-card-chevron {
+  color: #2563eb;
+  transform: translateX(3px);
+}
+
+/* ==========================================================================
+   HERO TRUST BAR (BELOW HERO)
+   ========================================================================== */
+.hero-trust-bar {
+  margin-top: 4px;
+  padding: 12px 20px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.03);
+}
+
+.trust-bar-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.trust-bar-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.trust-blue { background: #eff6ff; color: #2563eb; }
+.trust-violet { background: #f5f3ff; color: #7c3aed; }
+.trust-teal { background: #f0fdfa; color: #0d9488; }
+
+.trust-bar-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.trust-bar-text strong {
+  font-size: 0.86rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.trust-bar-text span {
+  font-size: 0.74rem;
+  color: #64748b;
+  font-weight: 550;
+}
+
+/* ==========================================================================
+   CORE CATEGORIES SECTION (4 CATEGORIES)
+   ========================================================================== */
+.section-header-center {
+  text-align: center;
+  max-width: 680px;
+  margin: 0 auto 36px;
+}
+
+.section-header-center .section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: #2563eb;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.section-header-center .section-title {
+  margin: 0;
+  font-size: clamp(1.8rem, 3.5vw, 2.6rem);
+  font-weight: 850;
+  letter-spacing: -0.03em;
+  color: #0f172a;
+  line-height: 1.2;
+}
+
+.section-header-center .section-copy {
+  margin: 10px auto 0;
+  color: #64748b;
+  font-size: 1rem;
+}
+
+.categories-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+  margin-bottom: 32px;
+}
+
+.category-card {
+  display: flex;
+  flex-direction: column;
+  padding: 24px 20px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  box-shadow: 0 4px 16px -2px rgba(15, 23, 42, 0.04);
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.22s ease;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  min-height: 200px;
+}
+
+.category-card:hover,
+.category-card:focus-visible {
+  transform: translateY(-4px);
+  border-color: #93c5fd;
+  box-shadow: 0 16px 32px -6px rgba(37, 99, 235, 0.12), 0 0 0 1px rgba(37, 99, 235, 0.1);
+}
+
+.category-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+
+.cat-violet { background: #f5f3ff; color: #7c3aed; border: 1px solid #ddd6fe; }
+.cat-blue { background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; }
+.cat-teal { background: #f0fdfa; color: #0d9488; border: 1px solid #99f6e4; }
+.cat-coral { background: #fff1f2; color: #f43f5e; border: 1px solid #fecdd3; }
+
+.category-card-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.category-title {
+  margin: 0 0 6px 0;
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.01em;
+}
+
+.category-desc {
+  margin: 0 0 16px 0;
+  font-size: 0.88rem;
+  color: #64748b;
+  line-height: 1.5;
+  flex: 1;
+}
+
+.category-cta-link {
+  font-size: 0.86rem;
+  font-weight: 750;
+  color: #2563eb;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: transform 0.18s ease;
+}
+
+.category-card:hover .category-cta-link {
+  transform: translateX(4px);
+}
+
+.popular-pills-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 16px 20px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+}
+
+.popular-pills-label {
+  font-size: 0.88rem;
+  font-weight: 750;
+  color: #475569;
+}
+
+/* ==========================================================================
+   RESPONSIVE LAYOUT BREAKPOINTS
+   ========================================================================== */
+@media (max-width: 1024px) {
+  .categories-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 980px) {
+  .container.hero,
+  .hero {
+    grid-template-columns: 1fr;
+    column-gap: 32px;
+    row-gap: 18px;
+    padding: 18px 0 20px;
+    min-height: auto;
+  }
+  .hero-headline {
+    font-size: clamp(2rem, 5vw, 2.5rem);
+  }
+  .hero-visual {
+    max-width: 480px;
+    margin: 0 auto;
+  }
+  .hero-trust-bar {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-top: 8px;
+  }
+}
+
+@media (max-width: 640px) {
+  .container.hero,
+  .hero {
+    padding: 14px 0 16px;
+    column-gap: 24px;
+    row-gap: 14px;
+    min-height: auto;
+  }
+  .hero-headline {
+    font-size: clamp(1.75rem, 7.5vw, 2.15rem);
+    line-height: 1.15;
+    margin-bottom: 8px;
+  }
+  .hero-ring-stage {
+    max-width: 275px;
+    margin-bottom: 8px;
+  }
+  .hero-actions {
+    flex-direction: column;
+    width: 100%;
+    gap: 10px;
+  }
+  .hero-primary-cta,
+  .hero-signin-btn {
+    width: 100%;
+    min-height: 46px;
+  }
+  .kashmir-service-panel {
+    padding: 16px 14px;
+  }
+  .hero-trust-bar {
+    margin-top: 8px;
+    padding: 12px 14px;
+    grid-template-columns: 1fr;
+  }
+  .categories-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .category-card {
+    min-height: auto;
+    padding: 18px 16px;
+  }
+  .popular-pills-wrap {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 360px) {
+  .hero-headline {
+    font-size: 1.65rem;
+  }
+  .hero-ring-stage {
+    max-width: 245px;
+  }
+  .category-title {
+    font-size: 1.05rem;
+  }
+}
+
+/* ==========================================================================
+   ACCESSIBILITY: PREFERS-REDUCED-MOTION
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .arc-top-left,
+  .arc-bottom-left,
+  .arc-top-right,
+  .arc-bottom-right,
+  .rail-inner,
+  .ring-brand-center,
+  .brand-underline-bar,
+  .ring-atmosphere-aura {
+    transform: none !important;
+    opacity: 1 !important;
+    animation: none !important;
+  }
+}

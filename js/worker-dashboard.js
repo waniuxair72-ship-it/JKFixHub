@@ -10,7 +10,9 @@ import {
   getWorkerCustomerRequests,
   getWorkers,
   isWorker,
-  setWorkerDemoProfile
+  setWorkerDemoProfile,
+  saveApplicationProfile,
+  setCurrentUser
 } from "./store.js";
 import {
   getWorkerFirestoreRequests,
@@ -23,8 +25,18 @@ import {
   recordSecurityEvent,
   setTextContent,
   validatePersonName,
-  validateText
+  validateEmail,
+  validatePhone,
+  validateText,
+  SUPPORTED_SERVICES,
+  validateService
 } from "./security.js";
+import {
+  initializeFirebaseClient,
+  getFirebaseAuthMethods,
+  initializeFirestoreClient,
+  getFirestoreMethods
+} from "./firebase-config.js";
 
 const statDefinitions = [
   ["Total Requests", "total"],
@@ -307,13 +319,22 @@ function renderDashboard(worker) {
   view.dataset.workerId = String(worker.id);
 }
 
+const ALL_DISTRICTS = Object.freeze([
+  "Shopian", "Srinagar", "Anantnag", "Pulwama", "Kulgam", "Baramulla", "Budgam",
+  "Kupwara", "Ganderbal", "Bandipora", "Jammu", "Kathua", "Udhampur", "Rajouri",
+  "Poonch", "Doda", "Ramban", "Kishtwar", "Reasi", "Samba"
+]);
+
 function populateProfileOptions() {
-  const services = [...new Set(getWorkers().map((worker) => worker.service))];
-  const districts = [...new Set(getWorkers().map((worker) => worker.district))];
+  const existingServices = getWorkers().map((worker) => worker.service).filter(Boolean);
+  const services = [...new Set([...SUPPORTED_SERVICES, ...existingServices])];
+  const existingDistricts = getWorkers().map((worker) => worker.district).filter(Boolean);
+  const districts = [...new Set([...ALL_DISTRICTS, ...existingDistricts])];
   const serviceSelect = document.getElementById("editWorkerService");
   const districtSelect = document.getElementById("editWorkerDistrict");
 
   for (const [select, values] of [[serviceSelect, services], [districtSelect, districts]]) {
+    if (!select) continue;
     const options = values.map((value) => {
       const option = document.createElement("option");
       option.value = value;
@@ -330,69 +351,253 @@ function setEditError(field, message, errorElement) {
   field.setAttribute("aria-invalid", String(Boolean(message)));
 }
 
-function openProfileEditor() {
+let editProfileOrigin = "dashboard";
+
+export function openProfileEditor(origin = "dashboard") {
+  editProfileOrigin = typeof origin === "string" ? origin : "dashboard";
   const worker = getActiveWorker();
   if (!worker) return;
+  const user = getCurrentUser();
 
   const form = document.getElementById("workerProfileEditForm");
+  if (!form) return;
   form.reset();
   populateProfileOptions();
-  document.getElementById("editWorkerName").value = worker.name;
-  document.getElementById("editWorkerService").value = worker.service;
-  document.getElementById("editWorkerDistrict").value = worker.district;
-  document.getElementById("editWorkerExperience").value = worker.experience;
-  document.getElementById("editWorkerAvailability").value =
-    ["Available", "Busy", "Offline"].includes(worker.availability) ? worker.availability : "Busy";
-  form.querySelectorAll("[data-profile-error]").forEach((error) => {
+
+  const nameInput = document.getElementById("editWorkerName");
+  const emailInput = document.getElementById("editWorkerEmail");
+  const phoneInput = document.getElementById("editWorkerPhone");
+  const serviceInput = document.getElementById("editWorkerService");
+  const districtInput = document.getElementById("editWorkerDistrict");
+  const expInput = document.getElementById("editWorkerExperience");
+  const availInput = document.getElementById("editWorkerAvailability");
+  const feedback = document.getElementById("workerProfileEditFeedback");
+  const successFeedback = document.getElementById("workerProfileEditSuccessFeedback");
+
+  if (feedback) {
+    feedback.hidden = true;
+    setTextContent(feedback, "");
+  }
+  if (successFeedback) {
+    successFeedback.hidden = true;
+    setTextContent(successFeedback, "");
+  }
+
+  form.querySelectorAll("[data-profile-error], .request-error").forEach((error) => {
     setTextContent(error, "");
     error.hidden = true;
   });
   form.querySelectorAll("[aria-invalid]").forEach((field) => field.removeAttribute("aria-invalid"));
+
+  if (nameInput) nameInput.value = worker.name || user?.name || "";
+  if (emailInput) emailInput.value = user?.email || "";
+  if (phoneInput) phoneInput.value = user?.phone || "";
+  if (serviceInput) serviceInput.value = worker.service || user?.service || "";
+  if (districtInput) districtInput.value = worker.district || user?.district || "";
+  if (expInput) expInput.value = worker.experience || user?.experience || "";
+  if (availInput) {
+    availInput.value = ["Available", "Busy", "Offline"].includes(worker.availability) ? worker.availability : "Busy";
+  }
+
   closeModal("authModal");
   openModal("workerProfileEditModal");
 }
 
-function handleProfileSave(event) {
+async function handleProfileSave(event) {
   event.preventDefault();
   const worker = getActiveWorker();
   if (!worker) return;
+  const user = getCurrentUser();
+
+  const form = document.getElementById("workerProfileEditForm");
+  const feedback = document.getElementById("workerProfileEditFeedback");
+  const successFeedback = document.getElementById("workerProfileEditSuccessFeedback");
+
+  function setFeedback(msg, isErr = true) {
+    if (feedback && isErr) {
+      setTextContent(feedback, msg);
+      feedback.hidden = !msg;
+    }
+    if (successFeedback && !isErr) {
+      setTextContent(successFeedback, msg);
+      successFeedback.hidden = !msg;
+    }
+    if (isErr && successFeedback) successFeedback.hidden = true;
+    if (!isErr && feedback) feedback.hidden = true;
+  }
+
+  setFeedback("", true);
 
   const name = document.getElementById("editWorkerName");
+  const email = document.getElementById("editWorkerEmail");
+  const phone = document.getElementById("editWorkerPhone");
   const service = document.getElementById("editWorkerService");
   const district = document.getElementById("editWorkerDistrict");
   const experience = document.getElementById("editWorkerExperience");
   const availability = document.getElementById("editWorkerAvailability");
-  const nameValid = validatePersonName(name.value);
-  const serviceValid = getWorkers().some((item) => item.service === service.value);
-  const districtValid = getWorkers().some((item) => item.district === district.value);
-  const experienceValid = validateText(experience.value, { minLength: 1, maxLength: 40 }) &&
+
+  const nameValid = validatePersonName(name ? name.value : "");
+  const emailValid = email ? validateEmail(email.value) : true;
+  const phoneValid = phone ? validatePhone(phone.value) : true;
+  const serviceValid = service ? (validateService(service.value) || getWorkers().some((item) => item.service === service.value)) : false;
+  const districtValid = district ? (ALL_DISTRICTS.includes(district.value) || getWorkers().some((item) => item.district === district.value)) : false;
+  const experienceValid = experience && validateText(experience.value, { minLength: 1, maxLength: 40 }) &&
     /^\d{1,2} years?$/.test(experience.value.trim());
-  const availabilityValid = ["Available", "Busy", "Offline"].includes(availability.value);
+  const availabilityValid = availability && ["Available", "Busy", "Offline"].includes(availability.value);
 
   setEditError(name, nameValid ? "" : getSafeErrorMessage("invalidName"), document.getElementById("editWorkerNameError"));
+  if (email) setEditError(email, emailValid ? "" : getSafeErrorMessage("invalidEmail"), document.getElementById("editWorkerEmailError"));
+  if (phone) setEditError(phone, phoneValid ? "" : getSafeErrorMessage("invalidPhone"), document.getElementById("editWorkerPhoneError"));
   setEditError(service, serviceValid ? "" : getSafeErrorMessage("invalidService"), document.getElementById("editWorkerServiceError"));
-  setEditError(district, districtValid ? "" : "Choose a demo district.", document.getElementById("editWorkerDistrictError"));
+  setEditError(district, districtValid ? "" : "Choose a valid district.", document.getElementById("editWorkerDistrictError"));
   setEditError(experience, experienceValid ? "" : "Enter experience like “6 years”.", document.getElementById("editWorkerExperienceError"));
   setEditError(availability, availabilityValid ? "" : "Choose an availability option.", document.getElementById("editWorkerAvailabilityError"));
 
-  if (!nameValid || !serviceValid || !districtValid || !experienceValid || !availabilityValid) {
+  if (!nameValid || !emailValid || !phoneValid || !serviceValid || !districtValid || !experienceValid || !availabilityValid) {
     recordSecurityEvent("VALIDATION_FAILURE", "worker");
-    if (!nameValid && /[<>]/.test(name.value)) recordSecurityEvent("SUSPICIOUS_INPUT", "worker");
+    if (!nameValid && /[<>]/.test(name?.value || "")) recordSecurityEvent("SUSPICIOUS_INPUT", "worker");
     document.querySelector("#workerProfileEditForm [aria-invalid='true']")?.focus();
     return;
   }
 
-  const updated = setWorkerDemoProfile(worker.id, {
-    name: name.value,
-    service: service.value,
-    district: district.value,
-    experience: experience.value,
-    availability: availability.value
+  const trimmedName = name.value.trim();
+  const trimmedEmail = email ? email.value.trim() : (user?.email || "");
+  const trimmedPhone = phone ? phone.value.trim() : (user?.phone || "");
+  const selectedService = service.value;
+  const selectedDistrict = district.value;
+  const selectedExperience = experience.value.trim();
+  const selectedAvailability = availability.value;
+
+  // Firebase auth & firestore sync
+  if (user?.authProvider === "firebase" && user.id) {
+    try {
+      const { auth } = await initializeFirebaseClient();
+      const methods = await getFirebaseAuthMethods();
+
+      // Check if email changed
+      if (auth?.currentUser && trimmedEmail !== user.email) {
+        try {
+          if (typeof methods?.verifyBeforeUpdateEmail === "function") {
+            await methods.verifyBeforeUpdateEmail(auth.currentUser, trimmedEmail);
+          } else if (typeof methods?.updateEmail === "function") {
+            await methods.updateEmail(auth.currentUser, trimmedEmail);
+          }
+        } catch (emailErr) {
+          recordSecurityEvent("EMAIL_UPDATE_ERROR", "worker");
+          let safeMsg = "Failed to update email address.";
+          if (emailErr.code === "auth/requires-recent-login") {
+            safeMsg = "Updating your email requires recent authentication. Please sign out and sign in again before changing your email.";
+          } else if (emailErr.code === "auth/email-already-in-use") {
+            safeMsg = "That email address is already in use by another account.";
+          } else if (emailErr.code === "auth/invalid-email") {
+            safeMsg = "The email address format is invalid.";
+          }
+          setFeedback(safeMsg, true);
+          return;
+        }
+      }
+
+      // Update displayName
+      if (auth?.currentUser && typeof methods?.updateProfile === "function" && trimmedName !== user.name) {
+        try {
+          await methods.updateProfile(auth.currentUser, { displayName: trimmedName });
+        } catch (nameErr) {
+          console.warn("[JKFixHub Worker Dashboard] updateProfile notice:", nameErr?.message || nameErr);
+        }
+      }
+
+      // Sync Firestore
+      try {
+        const { db } = await initializeFirestoreClient();
+        const firestoreMethods = await getFirestoreMethods();
+        if (db && firestoreMethods && typeof firestoreMethods.updateDoc === "function") {
+          // 1. users/{uid}: private details (phone, email, name, district)
+          const userDocRef = firestoreMethods.doc(db, "users", user.id);
+          await firestoreMethods.updateDoc(userDocRef, {
+            name: trimmedName,
+            email: trimmedEmail,
+            phone: trimmedPhone,
+            district: selectedDistrict,
+            updatedAt: new Date().toISOString()
+          });
+
+          // 2. workers/{uid}: public details ONLY (NO phone, NO email! Preserves isVerified and status)
+          const workerDocRef = firestoreMethods.doc(db, "workers", user.id);
+          await firestoreMethods.updateDoc(workerDocRef, {
+            name: trimmedName,
+            service: selectedService,
+            district: selectedDistrict,
+            experience: selectedExperience,
+            availability: selectedAvailability,
+            updatedAt: new Date().toISOString()
+          });
+        }
+      } catch (firestoreErr) {
+        console.warn("[JKFixHub Worker Dashboard] Firestore update error:", firestoreErr?.message || firestoreErr);
+        setFeedback("Failed to update profile in database.", true);
+        return;
+      }
+    } catch (firebaseErr) {
+      console.warn("[JKFixHub Worker Dashboard] Firebase save notice:", firebaseErr?.message || firebaseErr);
+      setFeedback("Failed to save profile changes.", true);
+      return;
+    }
+  }
+
+  // Update in-memory user & worker state
+  const updatedUser = {
+    ...user,
+    name: trimmedName,
+    email: trimmedEmail,
+    phone: trimmedPhone,
+    service: selectedService,
+    district: selectedDistrict,
+    experience: selectedExperience,
+    availability: selectedAvailability
+  };
+  setCurrentUser(updatedUser);
+  saveApplicationProfile(user?.id || worker.id, {
+    ...updatedUser,
+    role: "worker"
   });
+
+  let updatedWorker = {
+    ...worker,
+    name: trimmedName,
+    service: selectedService,
+    district: selectedDistrict,
+    experience: selectedExperience,
+    availability: selectedAvailability
+  };
+
+  try {
+    const res = setWorkerDemoProfile(worker.id, {
+      name: trimmedName,
+      service: selectedService,
+      district: selectedDistrict,
+      experience: selectedExperience,
+      availability: selectedAvailability
+    });
+    if (res) updatedWorker = res;
+  } catch (_) {}
+
+  recordSecurityEvent("PROFILE_UPDATED", "worker");
   closeModal("workerProfileEditModal");
-  openModal("authModal");
-  renderDashboard(updated);
-  setTextContent(document.getElementById("workerDashboardFeedback"), "Worker profile updated successfully.");
+  renderDashboard(updatedWorker);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("profile:updated"));
+  }
+
+  const feedbackEl = document.getElementById("workerDashboardFeedback");
+  if (feedbackEl) setTextContent(feedbackEl, "Worker profile updated successfully.");
+
+  if (editProfileOrigin === "account") {
+    openModal("authModal");
+  } else {
+    openModal("authModal");
+    openWorkerDashboard();
+  }
 }
 
 export function openWorkerDashboard() {
@@ -421,16 +626,6 @@ export function initializeWorkerDashboard() {
 
   document.getElementById("editWorkerProfileButton").addEventListener("click", openProfileEditor);
   form.addEventListener("submit", handleProfileSave);
-  editModal.addEventListener("click", (event) => {
-    if (event.target === editModal || (event.target instanceof Element && event.target.closest('[data-close="workerProfileEditModal"]'))) {
-      window.setTimeout(() => {
-        if (!editModal.classList.contains("open") && isWorker()) {
-          openModal("authModal");
-          openWorkerDashboard();
-        }
-      }, 0);
-    }
-  });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !editModal.classList.contains("open") && isWorker() &&
       !document.getElementById("authModal").classList.contains("open")) {

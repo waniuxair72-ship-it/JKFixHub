@@ -12,7 +12,8 @@
 // 5. Admin remains completely invisible in normal customer/worker registration & login.
 
 import { closeModal, openModal } from "./modals.js";
-import { openWorkerDashboard } from "./worker-dashboard.js";
+import { openWorkerDashboard, openProfileEditor } from "./worker-dashboard.js";
+import { openCustomerRequests } from "./customer-requests.js";
 import {
   clearRequestState,
   clearCurrentUser,
@@ -37,7 +38,8 @@ import {
   validatePassword,
   validatePhone,
   mapFirebaseAuthError,
-  getSafeErrorMessage
+  getSafeErrorMessage,
+  validateService
 } from "./security.js";
 import {
   initializeFirebaseClient,
@@ -505,8 +507,7 @@ export async function registerWorker({ name, email, phone, district, service, ex
     return { success: false, error: getSafeErrorMessage("invalidDistrict") };
   }
 
-  const allowedServices = ["Electrician", "Washing Machine Repair", "Refrigerator Repair", "Heater Repair", "TV / Electronics Repair"];
-  if (!service || !allowedServices.includes(service)) {
+  if (!service || !validateService(service)) {
     setFieldError("authWorkerService", "authWorkerServiceError", "Please select a valid primary service.");
     return { success: false, error: "Please select a valid primary service." };
   }
@@ -991,6 +992,179 @@ export function demoLogout() {
 }
 
 /**
+ * Helper to build accessible JK menu item buttons.
+ */
+function createJkMenuItem(icon, text, action, variant = "") {
+  if (typeof document === "undefined") return null;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `jk-menu-item${variant ? ` jk-menu-item-${variant}` : ""}`;
+  btn.setAttribute("data-jk-action", action);
+  if (btn.dataset) {
+    btn.dataset.jkAction = action;
+  }
+
+  const iconSpan = document.createElement("span");
+  iconSpan.className = "jk-item-icon";
+  iconSpan.setAttribute("aria-hidden", "true");
+  setTextContent(iconSpan, icon);
+
+  const textSpan = document.createElement("span");
+  textSpan.className = "jk-item-text";
+  setTextContent(textSpan, text);
+
+  if (typeof btn.append === "function") {
+    btn.append(iconSpan, textSpan);
+  } else if (typeof btn.appendChild === "function") {
+    btn.appendChild(iconSpan);
+    btn.appendChild(textSpan);
+  } else if (Array.isArray(btn.children)) {
+    btn.children.push(iconSpan, textSpan);
+  }
+  return btn;
+}
+
+/**
+ * Synchronizes the top-right JK logo/button and its role-aware menu.
+ */
+export function updateJkMenu() {
+  if (typeof document === "undefined") return;
+  try {
+    const menuBtn = document.getElementById("jkMenuButton");
+    const badgeEl = document.getElementById("jkBadge");
+    const labelEl = document.getElementById("jkLabel");
+    const userNameEl = document.getElementById("jkDropdownUserName");
+    const userRoleEl = document.getElementById("jkDropdownUserRole");
+    const itemsContainer = document.getElementById("jkDropdownItems");
+    if (!menuBtn || !itemsContainer) return;
+
+    const user = getCurrentUser();
+    const role = getUserRole();
+    const authed = isAuthenticated();
+    const worker = role === "worker" && user?.workerId ? getWorkerById(user.workerId) : null;
+    const displayName = worker?.name || user?.name || "";
+    const firstName = displayName ? displayName.split(" ")[0] : "";
+
+    if (authed) {
+      if (labelEl) setTextContent(labelEl, firstName || (role === "worker" ? "Worker" : "Account"));
+      if (badgeEl) {
+        const initials = (worker?.initials || (displayName ? displayName.slice(0, 2).toUpperCase() : "JK"));
+        setTextContent(badgeEl, initials);
+      }
+      menuBtn.setAttribute("aria-label", `${displayName || "User"} account menu`);
+    } else {
+      if (labelEl) setTextContent(labelEl, "Sign In");
+      if (badgeEl) setTextContent(badgeEl, "JK");
+      menuBtn.setAttribute("aria-label", "Open JK FixHub menu");
+    }
+
+    if (userNameEl) {
+      setTextContent(userNameEl, authed ? (displayName || "My Account") : "Welcome to JK FixHub");
+    }
+    if (userRoleEl) {
+      if (!authed) {
+        setTextContent(userRoleEl, "Find & book local services in Kashmir");
+      } else if (role === "worker") {
+        setTextContent(userRoleEl, `Worker • ${worker?.service || "Technician"}`);
+      } else {
+        setTextContent(userRoleEl, `Customer Account • ${user?.district || "J&K"}`);
+      }
+    }
+
+    if (typeof itemsContainer.replaceChildren === "function") {
+      itemsContainer.replaceChildren();
+    } else if ("innerHTML" in itemsContainer) {
+      itemsContainer.innerHTML = "";
+    } else if (Array.isArray(itemsContainer.children)) {
+      itemsContainer.children = [];
+    }
+
+    function addItem(item) {
+      if (!item) return;
+      if (typeof itemsContainer.appendChild === "function") {
+        itemsContainer.appendChild(item);
+      } else if (Array.isArray(itemsContainer.children)) {
+        itemsContainer.children.push(item);
+      }
+    }
+
+    function addDivider() {
+      const divider = document.createElement("div");
+      divider.className = "jk-dropdown-divider";
+      addItem(divider);
+    }
+
+    if (!authed) {
+      addItem(createJkMenuItem("🔑", "Sign In", "sign-in", "primary"));
+      addItem(createJkMenuItem("🔧", "Join as a Worker", "join-worker"));
+      addItem(createJkMenuItem("👤", "Create Customer Account", "create-customer"));
+    } else if (role === "worker") {
+      addItem(createJkMenuItem("👤", "Profile", "profile"));
+      addItem(createJkMenuItem("✏️", "Edit Profile", "edit-profile"));
+      addItem(createJkMenuItem("🛠️", "Worker Dashboard", "worker-dashboard", "highlight"));
+      addItem(createJkMenuItem("📋", "My Requests", "my-requests"));
+      addDivider();
+      addItem(createJkMenuItem("🚪", "Sign Out", "sign-out", "danger"));
+    } else {
+      // Customer
+      addItem(createJkMenuItem("👤", "Profile", "profile"));
+      addItem(createJkMenuItem("✏️", "Edit Profile", "edit-profile"));
+      addItem(createJkMenuItem("📋", "My Requests", "my-requests"));
+      addDivider();
+      addItem(createJkMenuItem("🚪", "Sign Out", "sign-out", "danger"));
+    }
+  } catch (_) {
+    // Non-blocking in headless/testing environments with partial mock DOM
+  }
+}
+
+/**
+ * Handles action triggers from the top-right JK menu.
+ */
+export function handleJkMenuAction(action) {
+  const dropdown = document.getElementById("jkDropdownMenu");
+  const menuBtn = document.getElementById("jkMenuButton");
+  if (dropdown) dropdown.hidden = true;
+  if (menuBtn) menuBtn.setAttribute("aria-expanded", "false");
+
+  if (action === "sign-in") {
+    showSignIn();
+    openModal("authModal");
+  } else if (action === "join-worker") {
+    showWorkerRegister();
+    openModal("authModal");
+  } else if (action === "create-customer") {
+    showCustomerRegister();
+    openModal("authModal");
+  } else if (action === "profile") {
+    showAccountView();
+    openModal("authModal");
+  } else if (action === "edit-profile") {
+    const role = getUserRole();
+    if (role === "worker") {
+      openProfileEditor("account");
+      openModal("workerProfileEditModal");
+    } else {
+      openCustomerProfileEditor();
+      openModal("customerProfileEditModal");
+    }
+  } else if (action === "worker-dashboard") {
+    openModal("authModal");
+    openWorkerDashboard();
+  } else if (action === "my-requests") {
+    const role = getUserRole();
+    if (role === "worker") {
+      openModal("authModal");
+      openWorkerDashboard();
+    } else {
+      openCustomerRequests();
+    }
+  } else if (action === "sign-out") {
+    signOutUser();
+  }
+}
+
+/**
  * Synchronizes header navigation and account buttons.
  */
 export function updateAccountControls() {
@@ -1012,6 +1186,7 @@ export function updateAccountControls() {
     );
   }
   if (dashboardButton) dashboardButton.hidden = role !== "worker";
+  updateJkMenu();
 }
 
 /**
@@ -1059,14 +1234,41 @@ export function showSignedOutView(preserveActiveTab = true) {
 }
 
 /**
+ * Sets feedback message inside authenticated profile view.
+ */
+export function setAccountFeedback(message, isError = false) {
+  if (typeof document === "undefined") return;
+  const errorEl = document.getElementById("authAccountFeedback");
+  const successEl = document.getElementById("authAccountSuccessFeedback");
+
+  if (isError) {
+    if (errorEl) {
+      setTextContent(errorEl, message);
+      errorEl.hidden = !message;
+    }
+    if (successEl) successEl.hidden = true;
+  } else {
+    if (successEl) {
+      setTextContent(successEl, message);
+      successEl.hidden = !message;
+    }
+    if (errorEl) errorEl.hidden = true;
+  }
+}
+
+/**
  * Displays authenticated account view in auth modal.
  */
-export function showAccountView() {
+export function showAccountView(preserveFeedback = false) {
   if (typeof document === "undefined") return;
   const user = getCurrentUser();
   if (!user) {
     showSignedOutView(false);
     return;
+  }
+
+  if (!preserveFeedback) {
+    setAccountFeedback("", false);
   }
 
   activeAuthTab = "account";
@@ -1086,7 +1288,15 @@ export function showAccountView() {
   if (dashboardView) dashboardView.hidden = true;
 
   const worker = user.role === "worker" && user.workerId ? getWorkerById(user.workerId) : null;
-  setTextContent(document.getElementById("authUserName"), worker?.name || user.name);
+  const displayName = worker?.name || user.name || "User";
+  setTextContent(document.getElementById("authUserName"), displayName);
+
+  // Avatar initials
+  const avatarEl = document.getElementById("authAccountAvatar");
+  if (avatarEl) {
+    const initials = worker?.initials || (displayName ? displayName.slice(0, 2).toUpperCase() : "JK");
+    setTextContent(avatarEl, initials);
+  }
 
   // Email display
   const emailEl = document.getElementById("authUserEmail");
@@ -1098,6 +1308,42 @@ export function showAccountView() {
       setTextContent(emailEl, "(Managed preview account)");
       emailEl.hidden = false;
     }
+  }
+
+  // Phone display
+  const phoneEl = document.getElementById("authUserPhone");
+  if (phoneEl) {
+    setTextContent(phoneEl, user.phone || "Not provided");
+  }
+
+  // District display
+  const districtEl = document.getElementById("authUserDistrict");
+  if (districtEl) {
+    setTextContent(districtEl, user.district || "Jammu & Kashmir");
+  }
+
+  // Worker-only fields
+  const isWrk = user.role === "worker";
+  const sField = document.getElementById("authWorkerServiceField");
+  const eField = document.getElementById("authWorkerExperienceField");
+  const aField = document.getElementById("authWorkerAvailabilityField");
+  const rField = document.getElementById("authWorkerRatingField");
+
+  if (sField) {
+    sField.hidden = !isWrk;
+    if (isWrk) setTextContent(document.getElementById("authWorkerServiceValue"), user.service || worker?.service || "Technician");
+  }
+  if (eField) {
+    eField.hidden = !isWrk;
+    if (isWrk) setTextContent(document.getElementById("authWorkerExperienceValue"), user.experience || worker?.experience || "N/A");
+  }
+  if (aField) {
+    aField.hidden = !isWrk;
+    if (isWrk) setTextContent(document.getElementById("authWorkerAvailabilityValue"), user.availability || worker?.availability || "Available");
+  }
+  if (rField) {
+    rField.hidden = !isWrk;
+    if (isWrk) setTextContent(document.getElementById("authWorkerRatingValue"), `${worker?.rating || user.rating || "5.0"} ★`);
   }
 
   // Role chip
@@ -1123,7 +1369,6 @@ export function showAccountView() {
         setTextContent(verifiedBadge, "Email Unverified");
         verifiedBadge.className = "auth-verification-badge unverified";
         verifiedBadge.hidden = false;
-        // In MVP, email verification is non-blocking and optional
         if (verificationNotice) verificationNotice.hidden = true;
       }
     } else {
@@ -1150,6 +1395,237 @@ export function showAccountView() {
   // Dashboard buttons
   const workerBtn = document.getElementById("openWorkerDashboard");
   if (workerBtn) workerBtn.hidden = user.role !== "worker";
+}
+
+/**
+ * Opens customer profile editor modal and pre-fills current customer data.
+ */
+export function openCustomerProfileEditor() {
+  if (typeof document === "undefined") return;
+  const user = getCurrentUser();
+  if (!user || user.role !== "customer") return;
+
+  const form = document.getElementById("customerProfileEditForm");
+  if (!form) return;
+  form.reset();
+
+  const nameInput = document.getElementById("editCustomerName");
+  const emailInput = document.getElementById("editCustomerEmail");
+  const phoneInput = document.getElementById("editCustomerPhone");
+  const districtSelect = document.getElementById("editCustomerDistrict");
+  const feedback = document.getElementById("customerProfileEditFeedback");
+  const successFeedback = document.getElementById("customerProfileEditSuccessFeedback");
+
+  if (feedback) {
+    feedback.hidden = true;
+    setTextContent(feedback, "");
+  }
+  if (successFeedback) {
+    successFeedback.hidden = true;
+    setTextContent(successFeedback, "");
+  }
+  form.querySelectorAll(".request-error").forEach((el) => {
+    el.hidden = true;
+    setTextContent(el, "");
+  });
+
+  if (nameInput) nameInput.value = user.name || "";
+  if (emailInput) emailInput.value = user.email || "";
+  if (phoneInput) phoneInput.value = user.phone || "";
+  if (districtSelect && user.district) districtSelect.value = user.district;
+
+  closeModal("authModal");
+  openModal("customerProfileEditModal");
+}
+
+/**
+ * Validates, saves, and syncs updated customer profile data.
+ * Updates Firebase Auth (email verification/update, displayName),
+ * Cloud Firestore /users/{uid}, and local state.
+ * Never displays success if save fails.
+ */
+export async function saveCustomerProfile({ name, email, phone, district }) {
+  const form = document.getElementById("customerProfileEditForm");
+  const feedback = document.getElementById("customerProfileEditFeedback");
+  const successFeedback = document.getElementById("customerProfileEditSuccessFeedback");
+
+  function setFeedback(msg, isErr = true) {
+    if (feedback && isErr) {
+      setTextContent(feedback, msg);
+      feedback.hidden = !msg;
+    }
+    if (successFeedback && !isErr) {
+      setTextContent(successFeedback, msg);
+      successFeedback.hidden = !msg;
+    }
+    if (isErr && successFeedback) successFeedback.hidden = true;
+    if (!isErr && feedback) feedback.hidden = true;
+  }
+
+  setFeedback("", true);
+  if (form) {
+    form.querySelectorAll(".request-error").forEach((el) => {
+      el.hidden = true;
+      setTextContent(el, "");
+    });
+  }
+
+  const user = getCurrentUser();
+  if (!user || user.role !== "customer") {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || null);
+    setFeedback("Only signed-in customers can edit customer profiles.", true);
+    return { success: false, error: "Unauthorized" };
+  }
+
+  const isNameValid = validatePersonName(name);
+  if (!isNameValid) {
+    setFieldError("editCustomerName", "editCustomerNameError", getSafeErrorMessage("invalidName"));
+    return { success: false, error: getSafeErrorMessage("invalidName") };
+  }
+
+  const isEmailValid = validateEmail(email);
+  if (!isEmailValid) {
+    setFieldError("editCustomerEmail", "editCustomerEmailError", getSafeErrorMessage("invalidEmail"));
+    return { success: false, error: getSafeErrorMessage("invalidEmail") };
+  }
+
+  const isPhoneValid = validatePhone(phone);
+  if (!isPhoneValid) {
+    setFieldError("editCustomerPhone", "editCustomerPhoneError", getSafeErrorMessage("invalidPhone"));
+    return { success: false, error: getSafeErrorMessage("invalidPhone") };
+  }
+
+  if (!district || !ALLOWED_DISTRICTS.includes(district)) {
+    setFieldError("editCustomerDistrict", "editCustomerDistrictError", getSafeErrorMessage("invalidDistrict"));
+    return { success: false, error: getSafeErrorMessage("invalidDistrict") };
+  }
+
+  const trimmedName = name.trim();
+  const trimmedEmail = email.trim();
+  const trimmedPhone = phone.trim();
+
+  // If Firebase-authenticated user
+  if (user.authProvider === "firebase" && user.id) {
+    try {
+      const { auth } = await initializeFirebaseClient();
+      const methods = await getFirebaseAuthMethods();
+
+      // Check if email changed
+      if (auth?.currentUser && trimmedEmail !== user.email) {
+        try {
+          if (typeof methods?.verifyBeforeUpdateEmail === "function") {
+            await methods.verifyBeforeUpdateEmail(auth.currentUser, trimmedEmail);
+          } else if (typeof methods?.updateEmail === "function") {
+            await methods.updateEmail(auth.currentUser, trimmedEmail);
+          }
+        } catch (emailErr) {
+          recordSecurityEvent("EMAIL_UPDATE_ERROR", "customer");
+          let safeMsg = "Failed to update email address.";
+          if (emailErr.code === "auth/requires-recent-login") {
+            safeMsg = "Updating your email requires recent authentication. Please sign out and sign in again before changing your email.";
+          } else if (emailErr.code === "auth/email-already-in-use") {
+            safeMsg = "That email address is already in use by another account.";
+          } else if (emailErr.code === "auth/invalid-email") {
+            safeMsg = "The email address format is invalid.";
+          }
+          setFeedback(safeMsg, true);
+          return { success: false, error: safeMsg };
+        }
+      }
+
+      // Update displayName
+      if (auth?.currentUser && typeof methods?.updateProfile === "function" && trimmedName !== user.name) {
+        try {
+          await methods.updateProfile(auth.currentUser, { displayName: trimmedName });
+        } catch (nameErr) {
+          console.warn("[JKFixHub Auth] updateProfile notice:", nameErr?.message || nameErr);
+        }
+      }
+
+      // Sync Firestore /users/{uid}
+      try {
+        const { db } = await initializeFirestoreClient();
+        const firestoreMethods = await getFirestoreMethods();
+        if (db && firestoreMethods && typeof firestoreMethods.updateDoc === "function") {
+          const userDocRef = firestoreMethods.doc(db, "users", user.id);
+          await firestoreMethods.updateDoc(userDocRef, {
+            name: trimmedName,
+            email: trimmedEmail,
+            phone: trimmedPhone,
+            district,
+            updatedAt: new Date().toISOString()
+          });
+        }
+      } catch (firestoreErr) {
+        console.warn("[JKFixHub Auth] Firestore user profile sync error:", firestoreErr?.message || firestoreErr);
+        setFeedback("Failed to update profile in database.", true);
+        return { success: false, error: "Database update failed." };
+      }
+
+      // Update state
+      saveApplicationProfile(user.id, {
+        role: "customer",
+        name: trimmedName,
+        email: trimmedEmail,
+        phone: trimmedPhone,
+        district,
+        emailVerified: user.emailVerified,
+        isVerified: false,
+        authProvider: "firebase",
+        createdAt: user.createdAt
+      });
+
+      setCurrentUser({
+        ...user,
+        name: trimmedName,
+        email: trimmedEmail,
+        phone: trimmedPhone,
+        district
+      });
+
+      recordSecurityEvent("PROFILE_UPDATED", "customer");
+      updateAccountControls();
+      closeModal("customerProfileEditModal");
+      showAccountView(true);
+      setAccountFeedback("Profile updated successfully!", false);
+      openModal("authModal");
+      return { success: true };
+    } catch (err) {
+      recordSecurityEvent("FIREBASE_AUTH_ERROR", "customer");
+      const safeMessage = mapFirebaseAuthError(err);
+      setFeedback(safeMessage, true);
+      return { success: false, error: safeMessage };
+    }
+  }
+
+  // Session / Demo mode fallback
+  saveApplicationProfile(user.id, {
+    role: "customer",
+    name: trimmedName,
+    email: trimmedEmail,
+    phone: trimmedPhone,
+    district,
+    emailVerified: Boolean(user.emailVerified),
+    isVerified: false,
+    authProvider: user.authProvider || "demo",
+    createdAt: user.createdAt || new Date().toISOString()
+  });
+
+  setCurrentUser({
+    ...user,
+    name: trimmedName,
+    email: trimmedEmail,
+    phone: trimmedPhone,
+    district
+  });
+
+  recordSecurityEvent("PROFILE_UPDATED", "customer");
+  updateAccountControls();
+  closeModal("customerProfileEditModal");
+  showAccountView(true);
+  setAccountFeedback("Profile updated successfully!", false);
+  openModal("authModal");
+  return { success: true };
 }
 
 /**
@@ -1202,6 +1678,18 @@ export function initializeAuth() {
       const password = document.getElementById("authWorkerPassword")?.value || "";
       const confirmPassword = document.getElementById("authWorkerConfirmPassword")?.value || "";
       await registerWorker({ name, email, phone, district, service, experience, availability, password, confirmPassword });
+    });
+  }
+
+  const customerProfileEditForm = document.getElementById("customerProfileEditForm");
+  if (customerProfileEditForm) {
+    customerProfileEditForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = document.getElementById("editCustomerName")?.value || "";
+      const email = document.getElementById("editCustomerEmail")?.value || "";
+      const phone = document.getElementById("editCustomerPhone")?.value || "";
+      const district = document.getElementById("editCustomerDistrict")?.value || "";
+      await saveCustomerProfile({ name, email, phone, district });
     });
   }
 
@@ -1284,6 +1772,16 @@ export function initializeAuth() {
       showAccountView();
     } else if (target.closest("#authBackToRoles")) {
       showSignedOutView(false);
+    } else if (target.closest("#authEditProfileBtn")) {
+      const role = getUserRole();
+      if (role === "worker") {
+        openProfileEditor("account");
+      } else {
+        openCustomerProfileEditor();
+      }
+    } else if (target.closest("[data-jk-action]")) {
+      const actionBtn = target.closest("[data-jk-action]");
+      handleJkMenuAction(actionBtn.dataset.jkAction);
     }
   });
 
@@ -1294,6 +1792,15 @@ export function initializeAuth() {
   // Clear auth hash when modal is closed
   modal.addEventListener("modal:close", () => {
     clearAuthHash();
+  });
+
+  // Reactive UI update on profile update
+  window.addEventListener("profile:updated", () => {
+    updateAccountControls();
+    if (activeAuthTab === "account") {
+      showAccountView(true);
+      setAccountFeedback("Profile updated successfully!", false);
+    }
   });
 
   // Initialize Firebase client in background without blocking UI

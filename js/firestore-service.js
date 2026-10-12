@@ -859,14 +859,18 @@ export async function getAdminAuditLogs() {
  * Filters out suspended or inactive accounts.
  * @returns {Promise<Array<object>>}
  */
-export async function getPublicWorkers() {
+export async function getPublicWorkers({ throwOnError = false } = {}) {
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
-    if (!db || !methods || typeof methods.getDocs !== "function" || typeof methods.collection !== "function") return [];
+    if (!db || !methods || typeof methods.getDocs !== "function" || typeof methods.collection !== "function") {
+      if (throwOnError) throw new Error("Firestore client or methods unavailable.");
+      return [];
+    }
 
     if (typeof methods.query !== "function" || typeof methods.where !== "function") {
       console.warn("[JKFixHub Discovery] Query constraints unavailable. Public discovery deferred.");
+      if (throwOnError) throw new Error("Query constraints unavailable.");
       return [];
     }
 
@@ -933,6 +937,7 @@ export async function getPublicWorkers() {
     return workers;
   } catch (err) {
     console.warn("[JKFixHub Discovery] Real workers fetch notice:", err?.message || err);
+    if (throwOnError) throw err;
     return [];
   }
 }
