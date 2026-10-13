@@ -10,7 +10,6 @@
 import { closeModal, openModal } from "./modals.js";
 import {
   clearRequestState,
-  createCustomerRequest,
   getCurrentUser,
   getCurrentRequest,
   getUserRole,
@@ -105,6 +104,10 @@ function startRequestSuccessSubscription(requestId) {
       }
     }
   }).then((unsub) => {
+    if (typeof document === "undefined" || !document?.getElementById) {
+      if (typeof unsub === "function") unsub();
+      return;
+    }
     const modal = document.getElementById("requestModal");
     if (!modal || !modal.classList.contains("open") || listeningRequestId !== requestId) {
       if (typeof unsub === "function") unsub();
@@ -114,17 +117,59 @@ function startRequestSuccessSubscription(requestId) {
   });
 }
 
+let isSubmitting = false;
+let savedDraft = null;
+
+function setRequestFeedback(message, isError = true, showAuthActions = false) {
+  const feedback = document.getElementById("requestFeedback");
+  if (!feedback) return;
+
+  const msgSpan = document.getElementById("requestFeedbackMessage");
+  const actionsEl = document.getElementById("requestAuthPromptActions");
+
+  if (!message) {
+    feedback.hidden = true;
+    if (msgSpan) setTextContent(msgSpan, "");
+    else setTextContent(feedback, "");
+    if (actionsEl) actionsEl.hidden = true;
+    return;
+  }
+
+  feedback.className = isError ? "auth-feedback" : "auth-success-feedback";
+  feedback.hidden = false;
+
+  if (msgSpan) {
+    setTextContent(msgSpan, message);
+  } else {
+    setTextContent(feedback, message);
+  }
+
+  if (actionsEl) {
+    actionsEl.hidden = !showAuthActions;
+  }
+}
+
 function setFieldError(field, message, errorElement) {
   setTextContent(errorElement, message);
   errorElement.hidden = !message;
   field.setAttribute("aria-invalid", String(Boolean(message)));
 }
 
-function resetRequestForm(form) {
+function resetRequestForm(form, preserveDraft = false) {
   stopRequestSuccessSubscription();
   form.reset();
   form.hidden = false;
   clearRequestState();
+  if (!preserveDraft) {
+    savedDraft = null;
+  }
+  isSubmitting = false;
+  setRequestFeedback("");
+  const submitBtn = form.querySelector('button[type="submit"]');
+  if (submitBtn) {
+    submitBtn.disabled = false;
+    setTextContent(submitBtn, "Send Request");
+  }
   const chatBtn = document.getElementById("requestSuccessChatBtn");
   if (chatBtn) chatBtn.hidden = true;
   document.getElementById("requestFormView").hidden = false;
@@ -218,7 +263,7 @@ export function initializeRequestFlow() {
     }
 
     closeModal("profileModal");
-    resetRequestForm(form);
+    resetRequestForm(form, true);
     setSelectedWorker(worker.id);
     const selectedWorker = getSelectedWorker();
     const requestServiceSelect = document.getElementById("requestService");
@@ -253,11 +298,52 @@ export function initializeRequestFlow() {
       }
     }
 
+    if (savedDraft) {
+      const descField = document.getElementById("requestDescription");
+      const locField = document.getElementById("requestLocation");
+      const prefField = document.getElementById("preferredTime");
+      if (descField && !descField.value && savedDraft.description) {
+        descField.value = savedDraft.description;
+      }
+      if (locField && !locField.value && savedDraft.location) {
+        locField.value = savedDraft.location;
+      }
+      if (prefField && savedDraft.preferredTime) {
+        prefField.value = savedDraft.preferredTime;
+      }
+    }
+
     openModal("requestModal");
   });
 
+  const signInPromptBtn = document.getElementById("requestSignInPromptBtn");
+  if (signInPromptBtn) {
+    signInPromptBtn.addEventListener("click", async () => {
+      closeModal("requestModal");
+      try {
+        const { showSignIn } = await import("./auth.js");
+        showSignIn();
+      } catch (_) {}
+      openModal("authModal");
+    });
+  }
+
+  const registerPromptBtn = document.getElementById("requestRegisterPromptBtn");
+  if (registerPromptBtn) {
+    registerPromptBtn.addEventListener("click", async () => {
+      closeModal("requestModal");
+      try {
+        const { showCustomerRegister } = await import("./auth.js");
+        showCustomerRegister();
+      } catch (_) {}
+      openModal("authModal");
+    });
+  }
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+
+    if (isSubmitting) return;
 
     const customerName = document.getElementById("customerName");
     const requestService = document.getElementById("requestService");
@@ -311,14 +397,46 @@ export function initializeRequestFlow() {
 
     const currentUser = getCurrentUser();
     const customerId = currentUser ? (currentUser.firebaseUid || currentUser.id) : null;
-    const workerUid = worker.workerUid || worker.uid || String(worker.id);
-    const createdAt = new Date().toISOString();
+    const isCustomerUser = currentUser && (currentUser.role === "customer" || !currentUser.role);
 
+    if (!currentUser || !customerId) {
+      recordSecurityEvent("UNAUTHORIZED_UI_ACTION", null);
+      savedDraft = {
+        name: nameValue,
+        service: serviceValue,
+        description: descriptionValue,
+        location: locationValue,
+        preferredTime: preferredTimeValue,
+        workerId: worker.id
+      };
+      setRequestFeedback(
+        "Please sign in or create a customer account to submit your request. Your details have been preserved.",
+        true,
+        true
+      );
+      return;
+    }
+
+    if (!isCustomerUser) {
+      recordSecurityEvent("UNAUTHORIZED_UI_ACTION", currentUser.role);
+      setRequestFeedback(
+        "Only customer accounts can submit service requests. Please switch to a customer account.",
+        true,
+        false
+      );
+      return;
+    }
+
+    isSubmitting = true;
     const submitBtn = form.querySelector('button[type="submit"]');
     if (submitBtn) {
       submitBtn.disabled = true;
       setTextContent(submitBtn, "Sending Request...");
     }
+    setRequestFeedback("");
+
+    const workerUid = worker.workerUid || worker.uid || String(worker.id);
+    const createdAt = new Date().toISOString();
 
     try {
       const result = await createFirestoreServiceRequest({
@@ -336,37 +454,30 @@ export function initializeRequestFlow() {
         createdAt
       });
 
-      const submittedRequest = (result && result.request) ? {
+      if (!result || !result.success || !result.request) {
+        const errorMsg = result?.error || "Failed to submit request. Please try again.";
+        setRequestFeedback(errorMsg, true, false);
+        setFieldError(requestDescription, errorMsg, descriptionError);
+        return;
+      }
+
+      const submittedRequest = {
         ...result.request,
         submittedAt: result.request.submittedAt || result.request.createdAt || createdAt
-      } : {
-        id: result?.requestId || `req-${Date.now().toString(36)}`,
-        requestId: result?.requestId,
-        customerId,
-        workerId: workerUid,
-        workerUid,
-        workerName: worker.name,
-        service: serviceValue,
-        district: worker.district,
-        customerName: nameValue,
-        description: descriptionValue,
-        problemDescription: descriptionValue,
-        location: locationValue,
-        customerLocation: locationValue,
-        preferredTime: preferredTimeValue,
-        status: "Pending",
-        createdAt,
-        submittedAt: createdAt
       };
 
+      savedDraft = null;
       setCurrentRequest(submittedRequest);
       upsertStoredCustomerRequest(submittedRequest);
       refreshCustomerRequestSummary();
       showRequestSuccess(submittedRequest);
     } catch (err) {
       console.error("[JKFixHub Request] Error creating request:", err);
-      setFieldError(requestDescription, "Failed to send request. Please try again.", descriptionError);
+      const errMsg = "Failed to send request. Please try again.";
+      setRequestFeedback(errMsg, true, false);
+      setFieldError(requestDescription, errMsg, descriptionError);
     } finally {
+      isSubmitting = false;
       if (submitBtn) {
         submitBtn.disabled = false;
         setTextContent(submitBtn, "Send Request");

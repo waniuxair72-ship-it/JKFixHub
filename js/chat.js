@@ -42,7 +42,10 @@ const WORKER_QUICK_MESSAGES = [
 ];
 
 function setChatFeedback(message) {
-  setTextContent(document.getElementById("chatFeedback"), message);
+  const feedbackEl = document.getElementById("chatFeedback");
+  if (feedbackEl) {
+    setTextContent(feedbackEl, message);
+  }
 }
 
 function getChatError() {
@@ -52,10 +55,13 @@ function getChatError() {
 function updateMessageCounter() {
   const input = document.getElementById("chatMessageInput");
   if (!input) return;
-  setTextContent(
-    document.getElementById("chatCharacterCount"),
-    `${input.value.length}/${MAX_MESSAGE_LENGTH}`
-  );
+  const countEl = document.getElementById("chatCharacterCount");
+  if (countEl) {
+    setTextContent(
+      countEl,
+      `${input.value.length}/${MAX_MESSAGE_LENGTH}`
+    );
+  }
 }
 
 function renderQuickMessages(role) {

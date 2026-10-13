@@ -1023,6 +1023,13 @@ export async function createFirestoreServiceRequest(requestData) {
         error: null
       };
     }
+
+    return {
+      success: false,
+      requestId: null,
+      request: null,
+      error: "Service request database is unavailable. Please check your connection and try again."
+    };
   } catch (err) {
     console.warn("[JKFixHub Request] Direct Firestore write encountered:", err?.message || err);
     if (err?.code === "permission-denied") {
@@ -1033,15 +1040,13 @@ export async function createFirestoreServiceRequest(requestData) {
         error: "Permission denied. Ensure you are authenticated as a customer."
       };
     }
+    return {
+      success: false,
+      requestId: null,
+      request: null,
+      error: err?.message || "Failed to submit service request. Please try again."
+    };
   }
-
-  // Safe fallback (offline / mock environment)
-  return {
-    success: true,
-    requestId: finalRequestId,
-    request: docPayload,
-    error: null
-  };
 }
 
 /**
@@ -1143,12 +1148,12 @@ export async function getCustomerFirestoreRequests(customerUid) {
 /**
  * Updates the status of a service request in Cloud Firestore.
  * Enforces strict finite-state machine transitions:
- * - Worker: Pending -> Accepted, Pending -> Rejected
+ * - Worker: Pending -> Accepted, Pending -> Rejected, Accepted -> Completed
  * - Customer: Pending -> Cancelled
  * Rejects invalid jumps or replaying already resolved requests.
  *
  * @param {string} requestId - Request document ID.
- * @param {"Accepted"|"Rejected"|"Cancelled"} newStatus - Target status.
+ * @param {"Accepted"|"Rejected"|"Cancelled"|"Completed"} newStatus - Target status.
  * @param {string} actorUid - Authenticated UID of the actor.
  * @returns {Promise<{ success: boolean, requestId: string, status: string|null, error: string|null }>}
  */
@@ -1157,7 +1162,7 @@ export async function updateFirestoreRequestStatus(requestId, newStatus, actorUi
     return { success: false, requestId, status: null, error: "Missing required parameters." };
   }
 
-  if (!["Accepted", "Rejected", "Cancelled"].includes(newStatus)) {
+  if (!["Accepted", "Rejected", "Cancelled", "Completed"].includes(newStatus)) {
     return { success: false, requestId, status: null, error: `Invalid status transition to ${newStatus}.` };
   }
 
@@ -1179,7 +1184,7 @@ export async function updateFirestoreRequestStatus(requestId, newStatus, actorUi
     const currentData = docSnap.data();
 
     // Authorization checks
-    if (newStatus === "Accepted" || newStatus === "Rejected") {
+    if (newStatus === "Accepted" || newStatus === "Rejected" || newStatus === "Completed") {
       if (currentData.workerUid !== actorUid) {
         return {
           success: false,
@@ -1204,20 +1209,43 @@ export async function updateFirestoreRequestStatus(requestId, newStatus, actorUi
       return { success: true, requestId, status: newStatus, error: null };
     }
 
-    // State machine guard: Can only transition from "Pending"
-    if (currentData.status !== "Pending") {
-      return {
-        success: false,
-        requestId,
-        status: currentData.status,
-        error: `Cannot transition request from "${currentData.status}" to "${newStatus}". Only Pending requests can be accepted or rejected.`
-      };
+    // State machine guard:
+    // - Worker completing must transition from "Accepted"
+    // - Worker accepting/rejecting or customer cancelling must transition from "Pending"
+    if (newStatus === "Completed") {
+      if (currentData.status !== "Accepted") {
+        return {
+          success: false,
+          requestId,
+          status: currentData.status,
+          error: `Cannot complete request in "${currentData.status}" status. Request must be "Accepted" before completion.`
+        };
+      }
+    } else {
+      if (currentData.status !== "Pending") {
+        return {
+          success: false,
+          requestId,
+          status: currentData.status,
+          error: `Cannot transition request from "${currentData.status}" to "${newStatus}". Only Pending requests can be updated.`
+        };
+      }
     }
 
+    const nowIso = new Date().toISOString();
     const updatePayload = {
       status: newStatus,
-      updatedAt: new Date().toISOString()
+      updatedAt: nowIso
     };
+    if (newStatus === "Accepted") {
+      updatePayload.acceptedAt = nowIso;
+    } else if (newStatus === "Rejected") {
+      updatePayload.rejectedAt = nowIso;
+    } else if (newStatus === "Completed") {
+      updatePayload.completedAt = nowIso;
+    } else if (newStatus === "Cancelled") {
+      updatePayload.cancelledAt = nowIso;
+    }
 
     await methods.updateDoc(docRef, updatePayload);
 
@@ -1229,6 +1257,22 @@ export async function updateFirestoreRequestStatus(requestId, newStatus, actorUi
     };
   } catch (err) {
     console.warn("[JKFixHub Request Lifecycle] Status update error:", err?.message || err);
+    if (err?.code === "permission-denied") {
+      let friendlyError = "Permission denied. You are not authorized to update this request.";
+      if (newStatus === "Cancelled") {
+        friendlyError = "Unable to cancel request. It may have already been accepted or is no longer pending.";
+      } else if (newStatus === "Accepted" || newStatus === "Rejected") {
+        friendlyError = "Unable to update request. It may have already been cancelled or is not assigned to you.";
+      } else if (newStatus === "Completed") {
+        friendlyError = "Unable to complete request. Only the assigned professional can complete an accepted request.";
+      }
+      return {
+        success: false,
+        requestId,
+        status: null,
+        error: friendlyError
+      };
+    }
     return {
       success: false,
       requestId,
@@ -1244,13 +1288,14 @@ export async function updateFirestoreRequestStatus(requestId, newStatus, actorUi
 
 const activeRequestSubscriptions = new Map();
 const activeChatSubscriptions = new Map();
+const activeWorkerSubscriptions = new Map();
 
 /**
- * Returns total count of active real-time listeners across requests and chats.
+ * Returns total count of active real-time listeners across requests, chats, and worker dashboards.
  * @returns {number}
  */
 export function getActiveFirestoreListenersCount() {
-  return activeRequestSubscriptions.size + activeChatSubscriptions.size;
+  return activeRequestSubscriptions.size + activeChatSubscriptions.size + activeWorkerSubscriptions.size;
 }
 
 /**
@@ -1337,6 +1382,126 @@ export async function subscribeToFirestoreRequest(requestId, onUpdate, onError) 
     return unsubWrapper;
   } catch (err) {
     console.warn(`[JKFixHub Realtime] Failed to subscribe to request ${requestId}:`, err?.message || err);
+    return () => {};
+  }
+}
+
+/**
+ * Stops and clears any active Firestore subscription for a specific worker.
+ * @param {string} workerUid
+ */
+export function unsubscribeWorkerFirestoreRequests(workerUid) {
+  if (!workerUid) return;
+  const workerKey = String(workerUid);
+  if (activeWorkerSubscriptions.has(workerKey)) {
+    try {
+      const unsub = activeWorkerSubscriptions.get(workerKey);
+      if (typeof unsub === "function") unsub();
+    } catch (err) {
+      console.warn(`[JKFixHub Worker Realtime] Error stopping listener for ${workerKey}:`, err);
+    }
+    activeWorkerSubscriptions.delete(workerKey);
+  }
+}
+
+/**
+ * Subscribes to real-time updates for service requests assigned to an authenticated worker.
+ * Queries Firestore /requests where workerUid == workerUid.
+ * Deduplicates active listeners for the worker and returns an unsubscribe function.
+ *
+ * @param {string} workerUid - Authenticated worker UID.
+ * @param {Function} onUpdate - Callback invoked with Array<object> of updated requests.
+ * @param {Function} [onError] - Optional callback invoked on listener errors or permission failures.
+ * @returns {Promise<Function>} Resolves to an unsubscribe function.
+ */
+export async function subscribeToWorkerFirestoreRequests(workerUid, onUpdate, onError) {
+  if (!workerUid || typeof onUpdate !== "function") {
+    return () => {};
+  }
+
+  const workerKey = String(workerUid);
+
+  // Deduplicate: Clean up existing listener for this worker if any
+  unsubscribeWorkerFirestoreRequests(workerKey);
+
+  let isCleanedUp = false;
+
+  const cleanup = (actualUnsubscribe) => {
+    if (isCleanedUp) return;
+    isCleanedUp = true;
+    activeWorkerSubscriptions.delete(workerKey);
+    if (typeof actualUnsubscribe === "function") {
+      try {
+        actualUnsubscribe();
+      } catch (err) {
+        console.warn(`[JKFixHub Worker Realtime] Error during unsubscribe for ${workerKey}:`, err);
+      }
+    }
+  };
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (
+      !db ||
+      !methods ||
+      typeof methods.collection !== "function" ||
+      typeof methods.query !== "function" ||
+      typeof methods.where !== "function" ||
+      typeof methods.onSnapshot !== "function"
+    ) {
+      console.warn("[JKFixHub Worker Realtime] Firestore onSnapshot or query methods unavailable.");
+      if (typeof onError === "function") {
+        onError(new Error("Real-time requests service is currently unavailable."));
+      }
+      return () => {};
+    }
+
+    const colRef = methods.collection(db, "requests");
+    const q = methods.query(colRef, methods.where("workerUid", "==", workerKey));
+
+    const actualUnsubscribe = methods.onSnapshot(
+      q,
+      (snapshot) => {
+        if (isCleanedUp || !snapshot) return;
+        const requests = [];
+        if (typeof snapshot.forEach === "function") {
+          snapshot.forEach((doc) => {
+            const data = typeof doc.data === "function" ? doc.data() : doc;
+            if (!data) return;
+            requests.push({
+              id: doc.id,
+              requestId: data.requestId || doc.id,
+              ...data
+            });
+          });
+        }
+        requests.sort((a, b) => {
+          if (a.status === "Pending" && b.status !== "Pending") return -1;
+          if (a.status !== "Pending" && b.status === "Pending") return 1;
+          return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+        });
+        onUpdate(requests);
+      },
+      (err) => {
+        console.warn(`[JKFixHub Worker Realtime] Error listening to requests for worker ${workerKey}:`, err?.message || err);
+        if (typeof onError === "function") onError(err);
+      }
+    );
+
+    const unsubWrapper = () => cleanup(actualUnsubscribe);
+
+    if (isCleanedUp) {
+      if (typeof actualUnsubscribe === "function") actualUnsubscribe();
+      return () => {};
+    }
+
+    activeWorkerSubscriptions.set(workerKey, unsubWrapper);
+    return unsubWrapper;
+  } catch (err) {
+    console.warn(`[JKFixHub Worker Realtime] Failed to subscribe to worker ${workerKey}:`, err?.message || err);
+    if (typeof onError === "function") onError(err);
     return () => {};
   }
 }
@@ -1632,4 +1797,353 @@ export function unsubscribeAllFirestoreListeners() {
     }
   }
   activeChatSubscriptions.clear();
+
+  for (const [id, unsub] of activeWorkerSubscriptions.entries()) {
+    try {
+      if (typeof unsub === "function") unsub();
+    } catch (err) {
+      console.warn(`[JKFixHub Worker Realtime] Error cleaning up worker listener for ${id}:`, err);
+    }
+  }
+  activeWorkerSubscriptions.clear();
+}
+
+// ==========================================
+// #SAFETY_REPORTS_PERSISTENCE
+// ==========================================
+
+/**
+ * Creates and persists a Trust & Safety report in Cloud Firestore /reports collection.
+ * Validates reporter identity, target type, and sanitized report content.
+ *
+ * @param {object} reportData
+ * @param {string} reportData.reporterUid - Authenticated reporter UID.
+ * @param {string} reportData.targetType - "worker" | "customer" | "review" | "message"
+ * @param {string} reportData.targetId - ID of the reported entity
+ * @param {string} reportData.reason - Incident reason code
+ * @param {string} reportData.description - Detailed incident explanation
+ * @returns {Promise<{ success: boolean, reportId: string|null, report: object|null, error: string|null }>}
+ */
+export async function createFirestoreReport(reportData) {
+  const reporterUid = reportData?.reporterUid || reportData?.reporterId;
+  const targetType = reportData?.targetType;
+  const targetId = reportData?.targetId;
+  const reason = reportData?.reason;
+  const description = reportData?.description;
+
+  if (!reporterUid || !targetType || !targetId || !reason || !description) {
+    return {
+      success: false,
+      reportId: null,
+      report: null,
+      error: "Missing required safety report fields."
+    };
+  }
+
+  const allowedTargetTypes = ["worker", "customer", "review", "message"];
+  if (!allowedTargetTypes.includes(targetType)) {
+    return {
+      success: false,
+      reportId: null,
+      report: null,
+      error: "Invalid report target type."
+    };
+  }
+
+  const cleanDescription = String(description).trim();
+  if (cleanDescription.length < 5 || cleanDescription.length > 2000) {
+    return {
+      success: false,
+      reportId: null,
+      report: null,
+      error: "Report description must be between 5 and 2,000 characters."
+    };
+  }
+
+  const generateId = () => `rep-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+  const finalReportId = reportData.id || reportData.reportId || generateId();
+
+  const docPayload = {
+    id: finalReportId,
+    reportId: finalReportId,
+    reporterUid: String(reporterUid),
+    reporterId: String(reporterUid),
+    targetType: String(targetType),
+    targetId: String(targetId).trim(),
+    reason: String(reason).trim(),
+    description: cleanDescription,
+    status: "open",
+    createdAt: new Date().toISOString(),
+    resolvedAt: null,
+    resolvedBy: null
+  };
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (db && methods && typeof methods.collection === "function" && typeof methods.setDoc === "function") {
+      const docRef = methods.doc(db, "reports", finalReportId);
+      await methods.setDoc(docRef, docPayload);
+
+      return {
+        success: true,
+        reportId: finalReportId,
+        report: docPayload,
+        error: null
+      };
+    }
+
+    return {
+      success: false,
+      reportId: null,
+      report: null,
+      error: "Trust & Safety database is unavailable. Please check your connection and try again."
+    };
+  } catch (err) {
+    console.warn("[JKFixHub Report] Direct Firestore write encountered:", err?.message || err);
+    if (err?.code === "permission-denied") {
+      return {
+        success: false,
+        reportId: null,
+        report: null,
+        error: "Permission denied. Ensure you are signed in to submit a safety report."
+      };
+    }
+    return {
+      success: false,
+      reportId: null,
+      report: null,
+      error: err?.message || "Failed to submit safety report. Please try again."
+    };
+  }
+}
+
+// ==========================================
+// #CUSTOMER_REVIEWS_PERSISTENCE
+// ==========================================
+
+/**
+ * Creates and persists a customer review in Cloud Firestore /reviews collection.
+ * Enforces that:
+ * - Reviewer is the authenticated customer who created the request.
+ * - Underlying service request authoritatively has status "Completed".
+ * - Exactly one review per request (idempotent / duplicate prevention).
+ * - Rating is strictly bounded between 1 and 5.
+ *
+ * @param {object} reviewData
+ * @param {string} reviewData.customerId - Authenticated customer UID.
+ * @param {string} reviewData.requestId - ID of the completed service request.
+ * @param {number} reviewData.rating - Integer rating 1 to 5.
+ * @param {string} reviewData.text - Review commentary.
+ * @returns {Promise<{ success: boolean, reviewId: string|null, review: object|null, error: string|null }>}
+ */
+export async function createFirestoreReview(reviewData) {
+  const customerId = reviewData?.customerId || reviewData?.customerUid;
+  const requestId = reviewData?.requestId;
+  const rating = Number(reviewData?.rating);
+  const text = typeof reviewData?.text === "string" ? reviewData.text.trim() : "";
+
+  if (!customerId || !requestId || !Number.isInteger(rating) || rating < 1 || rating > 5 || !text) {
+    return {
+      success: false,
+      reviewId: null,
+      review: null,
+      error: "Missing or invalid review fields (rating must be an integer between 1 and 5)."
+    };
+  }
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (!db || !methods || typeof methods.doc !== "function" || typeof methods.getDoc !== "function" || typeof methods.setDoc !== "function") {
+      return {
+        success: false,
+        reviewId: null,
+        review: null,
+        error: "Reviews database is unavailable. Please check your connection and try again."
+      };
+    }
+
+    // 1. Authoritatively fetch the underlying service request from Firestore
+    const reqRef = methods.doc(db, "requests", requestId);
+    const reqSnap = await methods.getDoc(reqRef);
+
+    if (!reqSnap.exists()) {
+      return {
+        success: false,
+        reviewId: null,
+        review: null,
+        error: `Service request #${requestId} not found.`
+      };
+    }
+
+    const requestDoc = reqSnap.data();
+
+    // 2. Ownership check: caller must be the customer on the request
+    if (requestDoc.customerId !== customerId) {
+      return {
+        success: false,
+        reviewId: null,
+        review: null,
+        error: "Unauthorized: You can only submit reviews for your own service requests."
+      };
+    }
+
+    // 3. Completion check: request must be Completed
+    if (requestDoc.status !== "Completed") {
+      return {
+        success: false,
+        reviewId: null,
+        review: null,
+        error: `Reviews can only be submitted for completed service requests. Current status: "${requestDoc.status}".`
+      };
+    }
+
+    // 4. Duplicate check: verify no review exists for this request
+    const finalReviewId = reviewData.reviewId || reviewData.id || requestId;
+    const reviewRef = methods.doc(db, "reviews", finalReviewId);
+    const existingSnap = await methods.getDoc(reviewRef);
+
+    if (existingSnap.exists()) {
+      return {
+        success: false,
+        reviewId: finalReviewId,
+        review: existingSnap.data(),
+        error: "A review has already been submitted for this service request."
+      };
+    }
+
+    const workerId = requestDoc.workerUid || requestDoc.workerId || reviewData.workerId || null;
+    const workerName = requestDoc.workerName || reviewData.workerName || "Service Professional";
+    const customerName = requestDoc.customerName || reviewData.customerName || "Customer";
+
+    const docPayload = {
+      id: finalReviewId,
+      reviewId: finalReviewId,
+      requestId,
+      customerId: String(customerId),
+      customerName: String(customerName).trim(),
+      workerUid: String(workerId),
+      workerId: String(workerId),
+      workerName: String(workerName).trim(),
+      rating,
+      text,
+      status: "published",
+      createdAt: new Date().toISOString(),
+      updatedAt: null,
+      workerReply: null,
+      workerReplyAt: null
+    };
+
+    await methods.setDoc(reviewRef, docPayload);
+
+    return {
+      success: true,
+      reviewId: finalReviewId,
+      review: docPayload,
+      error: null
+    };
+  } catch (err) {
+    console.warn("[JKFixHub Review] Direct Firestore write encountered:", err?.message || err);
+    if (err?.code === "permission-denied") {
+      return {
+        success: false,
+        reviewId: null,
+        review: null,
+        error: "Permission denied. Reviews may only be submitted by the verified customer for completed requests."
+      };
+    }
+    return {
+      success: false,
+      reviewId: null,
+      review: null,
+      error: err?.message || "Failed to submit review. Please try again."
+    };
+  }
+}
+
+/**
+ * Loads published customer reviews for a given worker from Cloud Firestore.
+ * @param {string|number} workerId
+ * @returns {Promise<Array<object>>}
+ */
+export async function getWorkerFirestoreReviews(workerId) {
+  if (!workerId) return [];
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (!db || !methods || typeof methods.collection !== "function") return [];
+
+    const colRef = methods.collection(db, "reviews");
+    let snapshot;
+    if (typeof methods.query === "function" && typeof methods.where === "function") {
+      const q = methods.query(
+        colRef,
+        methods.where("workerUid", "==", String(workerId)),
+        methods.where("status", "==", "published")
+      );
+      snapshot = await methods.getDocs(q);
+    } else {
+      snapshot = await methods.getDocs(colRef);
+    }
+
+    const reviews = [];
+    if (snapshot && typeof snapshot.forEach === "function") {
+      snapshot.forEach((doc) => {
+        const data = typeof doc.data === "function" ? doc.data() : doc;
+        if (!data) return;
+        if (String(data.workerUid) === String(workerId) || String(data.workerId) === String(workerId)) {
+          if (data.status === "published") {
+            reviews.push({ id: doc.id, ...data });
+          }
+        }
+      });
+    }
+
+    reviews.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    return reviews;
+  } catch (err) {
+    console.warn("[JKFixHub Review] Worker reviews fetch error:", err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * Adds or updates a worker reply to a customer review in Cloud Firestore.
+ * @param {string} reviewId
+ * @param {string} replyText
+ * @param {string} workerUid
+ * @returns {Promise<{ success: boolean, error: string|null }>}
+ */
+export async function addFirestoreWorkerReviewReply(reviewId, replyText, workerUid) {
+  if (!reviewId || !replyText || !workerUid) {
+    return { success: false, error: "Missing required parameters." };
+  }
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (!db || !methods || typeof methods.doc !== "function" || typeof methods.updateDoc !== "function") {
+      return { success: false, error: "Reviews database unavailable." };
+    }
+
+    const reviewRef = methods.doc(db, "reviews", String(reviewId));
+    const nowIso = new Date().toISOString();
+
+    await methods.updateDoc(reviewRef, {
+      workerReply: String(replyText).trim(),
+      workerReplyAt: nowIso,
+      updatedAt: nowIso
+    });
+
+    return { success: true, error: null };
+  } catch (err) {
+    console.warn("[JKFixHub Review] Worker reply update error:", err?.message || err);
+    return { success: false, error: err?.message || "Failed to update review reply." };
+  }
 }

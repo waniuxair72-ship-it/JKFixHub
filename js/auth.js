@@ -12,7 +12,7 @@
 // 5. Admin remains completely invisible in normal customer/worker registration & login.
 
 import { closeModal, openModal } from "./modals.js";
-import { openWorkerDashboard, openProfileEditor } from "./worker-dashboard.js";
+import { openWorkerDashboard, openProfileEditor, stopWorkerDashboardSubscription } from "./worker-dashboard.js";
 import { openCustomerRequests } from "./customer-requests.js";
 import {
   clearRequestState,
@@ -985,6 +985,7 @@ export function demoLogout() {
   closeChat(false);
   stopRequestSuccessSubscription();
   stopCustomerDetailsSubscription();
+  stopWorkerDashboardSubscription();
   unsubscribeAllFirestoreListeners();
   resetDemoChatState();
   clearCurrentUser();
@@ -1216,6 +1217,7 @@ export function showSignedOutView(preserveActiveTab = true) {
     modal.classList.remove("worker-dashboard-open");
     modal.setAttribute("aria-labelledby", "authModalTitle");
   }
+  stopWorkerDashboardSubscription();
   const signedOutView = document.getElementById("authSignedOutView");
   const accountView = document.getElementById("authAccountView");
   const dashboardView = document.getElementById("workerDashboardView");
@@ -1280,6 +1282,7 @@ export function showAccountView(preserveFeedback = false) {
     modal.setAttribute("aria-labelledby", "authAccountTitle");
   }
 
+  stopWorkerDashboardSubscription();
   const signedOutView = document.getElementById("authSignedOutView");
   const accountView = document.getElementById("authAccountView");
   const dashboardView = document.getElementById("workerDashboardView");
@@ -1789,8 +1792,9 @@ export function initializeAuth() {
   window.addEventListener("hashchange", handleAuthHashNavigation);
   handleAuthHashNavigation();
 
-  // Clear auth hash when modal is closed
+  // Clear auth hash and stop active subscriptions when modal is closed
   modal.addEventListener("modal:close", () => {
+    stopWorkerDashboardSubscription();
     clearAuthHash();
   });
 

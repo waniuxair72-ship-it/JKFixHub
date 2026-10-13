@@ -16,7 +16,9 @@ import {
 } from "./store.js";
 import {
   getWorkerFirestoreRequests,
-  updateFirestoreRequestStatus
+  updateFirestoreRequestStatus,
+  subscribeToWorkerFirestoreRequests,
+  unsubscribeWorkerFirestoreRequests
 } from "./firestore-service.js";
 import { renderWorkerReviews } from "./reviews.js";
 import {
@@ -42,6 +44,7 @@ const statDefinitions = [
   ["Total Requests", "total"],
   ["Pending", "pending"],
   ["Accepted", "accepted"],
+  ["Completed", "completed"],
   ["Rejected", "rejected"],
   ["Rating", "rating"]
 ];
@@ -84,12 +87,13 @@ function getActiveWorker() {
 
   const user = getCurrentUser();
   if (!user) return null;
-  const workerLookup = (user.workerId && getWorkerById(user.workerId)) || getWorkerById(user.id);
+  const effectiveUid = user.firebaseUid || user.uid || user.id;
+  const workerLookup = (user.workerId && getWorkerById(user.workerId)) || (effectiveUid && getWorkerById(effectiveUid));
   if (workerLookup) {
     return {
       ...workerLookup,
-      id: user.id || workerLookup.id,
-      workerUid: user.id || workerLookup.id
+      id: effectiveUid || workerLookup.id,
+      workerUid: effectiveUid || workerLookup.id
     };
   }
 
@@ -102,8 +106,8 @@ function getActiveWorker() {
     .toUpperCase() || "WK";
 
   return {
-    id: user.id,
-    workerUid: user.id,
+    id: effectiveUid,
+    workerUid: effectiveUid,
     name: user.name || "Worker",
     service: user.service || "Electrician",
     district: user.district || "Srinagar",
@@ -199,13 +203,20 @@ function buildRequestCard(request) {
     const actions = document.createElement("div");
     actions.className = "dashboard-request-actions";
 
+    const completeBtn = document.createElement("button");
+    completeBtn.type = "button";
+    completeBtn.className = "button primary btn-complete-request";
+    completeBtn.dataset.workerAction = "complete";
+    completeBtn.dataset.requestId = request.id;
+    setTextContent(completeBtn, "Complete Work");
+
     const chatBtn = document.createElement("button");
     chatBtn.type = "button";
-    chatBtn.className = "button primary btn-chat-request";
+    chatBtn.className = "button subtle btn-chat-request";
     chatBtn.dataset.openWorkerChat = request.id;
     setTextContent(chatBtn, "Chat with Customer");
 
-    actions.append(chatBtn);
+    actions.append(completeBtn, chatBtn);
     aside.append(actions);
   }
 
@@ -213,36 +224,89 @@ function buildRequestCard(request) {
   return card;
 }
 
-async function loadAndRenderWorkerRequests(worker) {
+let workerDashboardUnsubscribe = null;
+let activeListeningWorkerId = null;
+
+export function stopWorkerDashboardSubscription() {
+  const previousWorkerId = activeListeningWorkerId;
+  activeListeningWorkerId = null;
+
+  if (typeof workerDashboardUnsubscribe === "function") {
+    try {
+      workerDashboardUnsubscribe();
+    } catch (err) {
+      console.warn("[JKFixHub Worker Dashboard] Error stopping listener:", err);
+    }
+    workerDashboardUnsubscribe = null;
+  }
+
+  if (previousWorkerId) {
+    unsubscribeWorkerFirestoreRequests(previousWorkerId);
+  }
+}
+
+function renderWorkerRequestsLoading() {
+  const requestsContainer = document.getElementById("workerDashboardRequests");
+  if (!requestsContainer) return;
+  const loading = document.createElement("div");
+  loading.className = "worker-dashboard-loading";
+  loading.id = "workerDashboardLoading";
+  const spinner = document.createElement("div");
+  spinner.className = "spinner";
+  spinner.setAttribute("aria-hidden", "true");
+  const text = document.createElement("p");
+  setTextContent(text, "Connecting to live requests...");
+  loading.append(spinner, text);
+  requestsContainer.replaceChildren(loading);
+}
+
+function renderWorkerRequestsError(err, worker) {
   const requestsContainer = document.getElementById("workerDashboardRequests");
   if (!requestsContainer) return;
 
-  let requests = [];
-  try {
-    requests = await getWorkerFirestoreRequests(worker.id);
-  } catch (err) {
-    console.warn("[JKFixHub Worker Dashboard] Requests fetch notice:", err);
-  }
+  const errorWrap = document.createElement("div");
+  errorWrap.className = "worker-dashboard-error";
+  errorWrap.id = "workerDashboardError";
 
-  if ((!requests || requests.length === 0) && isWorker()) {
-    const fallbackMem = getWorkerCustomerRequests();
-    if (fallbackMem && fallbackMem.length) {
-      requests = fallbackMem;
-    }
-  }
+  const errorMsg = document.createElement("p");
+  errorMsg.id = "workerDashboardErrorMessage";
+  const message = err?.code === "permission-denied"
+    ? "Session expired or permission denied. Please sign in again."
+    : err?.message || "Failed to load live requests. Please check your connection.";
+  setTextContent(errorMsg, message);
+
+  const retryBtn = document.createElement("button");
+  retryBtn.type = "button";
+  retryBtn.className = "button subtle";
+  retryBtn.id = "workerDashboardRetryBtn";
+  setTextContent(retryBtn, "Retry Connection");
+  retryBtn.onclick = () => {
+    stopWorkerDashboardSubscription();
+    startWorkerDashboardSubscription(worker);
+  };
+
+  errorWrap.append(errorMsg, retryBtn);
+  requestsContainer.replaceChildren(errorWrap);
+}
+
+export function renderWorkerRequestsList(requests, worker) {
+  const requestsContainer = document.getElementById("workerDashboardRequests");
+  if (!requestsContainer) return;
 
   const statistics = document.getElementById("workerDashboardStatistics");
   if (statistics) {
     const total = requests.length;
     const pending = requests.filter((r) => r.status === "Pending").length;
     const accepted = requests.filter((r) => r.status === "Accepted").length;
+    const completed = requests.filter((r) => r.status === "Completed").length;
     const rejected = requests.filter((r) => r.status === "Rejected").length;
     const stats = {
       total,
       pending,
       accepted,
+      completed,
       rejected,
-      rating: `${worker.rating || "5.0"} ★`
+      rating: `${worker?.rating || "5.0"} ★`
     };
     statistics.replaceChildren(...statDefinitions.map(([label, key]) => buildStatCard(label, stats[key], key)));
   }
@@ -264,12 +328,63 @@ async function loadAndRenderWorkerRequests(worker) {
   requestsContainer.replaceChildren(...requests.map(buildRequestCard));
 }
 
+export function startWorkerDashboardSubscription(worker) {
+  if (!worker) return Promise.resolve(() => {});
+  const workerUid = worker.workerUid || worker.uid || worker.id;
+  if (!workerUid) return Promise.resolve(() => {});
+
+  // Prevent duplicate listeners if already listening or connecting for the same worker
+  if (activeListeningWorkerId === workerUid) {
+    return Promise.resolve(workerDashboardUnsubscribe || (() => {}));
+  }
+
+  stopWorkerDashboardSubscription();
+  activeListeningWorkerId = workerUid;
+
+  renderWorkerRequestsLoading();
+
+  return subscribeToWorkerFirestoreRequests(
+    workerUid,
+    (requests) => {
+      if (activeListeningWorkerId !== workerUid) return;
+      renderWorkerRequestsList(requests, worker);
+    },
+    (err) => {
+      if (activeListeningWorkerId !== workerUid) return;
+      renderWorkerRequestsError(err, worker);
+    }
+  ).then((unsub) => {
+    if (activeListeningWorkerId !== workerUid) {
+      if (typeof unsub === "function") unsub();
+      return () => {};
+    }
+    workerDashboardUnsubscribe = unsub;
+    return unsub;
+  });
+}
+
+export async function loadAndRenderWorkerRequests(worker) {
+  const requestsContainer = document.getElementById("workerDashboardRequests");
+  if (!requestsContainer) return;
+
+  let requests = [];
+  try {
+    const workerUid = worker.workerUid || worker.uid || worker.id;
+    requests = await getWorkerFirestoreRequests(workerUid);
+  } catch (err) {
+    console.warn("[JKFixHub Worker Dashboard] Requests fetch notice:", err);
+  }
+
+  renderWorkerRequestsList(requests, worker);
+}
+
 async function handleWorkerRequestAction(requestId, newStatus, worker) {
   const feedbackEl = document.getElementById("workerDashboardFeedback");
   if (feedbackEl) setTextContent(feedbackEl, `Updating request to ${newStatus}...`);
 
   try {
-    const res = await updateFirestoreRequestStatus(requestId, newStatus, worker.id);
+    const workerUid = worker.workerUid || worker.uid || worker.id;
+    const res = await updateFirestoreRequestStatus(requestId, newStatus, workerUid);
     if (res.success) {
       if (feedbackEl) {
         setTextContent(feedbackEl, `Request #${requestId} status updated to ${newStatus}.`);
@@ -309,7 +424,7 @@ function renderDashboard(worker) {
   document.getElementById("workerDashboardAvailability").value =
     ["Available", "Busy", "Offline"].includes(worker.availability) ? worker.availability : "Busy";
 
-  loadAndRenderWorkerRequests(worker);
+  startWorkerDashboardSubscription(worker);
 
   const reviewsContainer = document.getElementById("workerDashboardReviews");
   if (reviewsContainer) {
@@ -641,9 +756,20 @@ export function initializeWorkerDashboard() {
     setTextContent(document.getElementById("workerDashboardFeedback"), "Availability updated for this session only.");
   });
 
+  const authModal = document.getElementById("authModal");
+  if (authModal) {
+    authModal.addEventListener("modal:close", () => {
+      stopWorkerDashboardSubscription();
+    });
+  }
+
   view.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
+
+    if (target.closest("#authLogoutFromDashboard, #backToAccount")) {
+      stopWorkerDashboardSubscription();
+    }
 
     const workerActionButton = target.closest("[data-worker-action]");
     if (workerActionButton) {
@@ -653,7 +779,13 @@ export function initializeWorkerDashboard() {
       const requestId = workerActionButton.dataset.requestId;
       if (!requestId || !action) return;
 
-      const newStatus = action === "accept" ? "Accepted" : action === "reject" ? "Rejected" : null;
+      const newStatus = action === "accept"
+        ? "Accepted"
+        : action === "reject"
+        ? "Rejected"
+        : action === "complete"
+        ? "Completed"
+        : null;
       if (!newStatus) return;
 
       workerActionButton.disabled = true;
@@ -678,14 +810,9 @@ export function initializeWorkerDashboard() {
     if (completeButton) {
       const requestId = completeButton.dataset.demoCompleteRequest;
       const worker = getActiveWorker();
-      if (worker) {
-        updateFirestoreRequestStatus(requestId, "Completed", worker.id).then(() => {
-          renderDashboard(worker);
-          setTextContent(
-            document.getElementById("workerDashboardFeedback"),
-            "Request marked Completed."
-          );
-        });
+      if (worker && requestId) {
+        completeButton.disabled = true;
+        handleWorkerRequestAction(requestId, "Completed", worker);
       }
     }
   });

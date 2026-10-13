@@ -50,6 +50,142 @@ service cloud.firestore {
         );
     }
 
+    // Core Service Request Protection:
+    // Guarantees immutable core identity, assignment, and service details upon update.
+    function requestCoreFieldsUnchanged() {
+      return request.resource.data.customerId == resource.data.customerId &&
+        request.resource.data.workerUid == resource.data.workerUid &&
+        (!('service' in resource.data) || request.resource.data['service'] == resource.data['service']) &&
+        (!('id' in resource.data) || request.resource.data.id == resource.data.id) &&
+        (!('requestId' in resource.data) || request.resource.data.requestId == resource.data.requestId) &&
+        (!('customerName' in resource.data) || request.resource.data.customerName == resource.data.customerName) &&
+        (!('workerId' in resource.data) || request.resource.data.workerId == resource.data.workerId) &&
+        (!('workerName' in resource.data) || request.resource.data.workerName == resource.data.workerName) &&
+        (!('district' in resource.data) || request.resource.data.district == resource.data.district) &&
+        (!('problemDescription' in resource.data) || request.resource.data.problemDescription == resource.data.problemDescription) &&
+        (!('description' in resource.data) || request.resource.data.description == resource.data.description) &&
+        (!('customerLocation' in resource.data) || request.resource.data.customerLocation == resource.data.customerLocation) &&
+        (!('location' in resource.data) || request.resource.data.location == resource.data.location) &&
+        (!('preferredTime' in resource.data) || request.resource.data.preferredTime == resource.data.preferredTime) &&
+        (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
+        (!('submittedAt' in resource.data) || request.resource.data.submittedAt == resource.data.submittedAt);
+    }
+
+    // Customer Request Cancellation:
+    // Requesting customer may cancel ONLY their own eligible Pending request.
+    function isValidCustomerRequestCancellation() {
+      return isAuthenticated() &&
+        resource.data.customerId == request.auth.uid &&
+        resource.data.status == "Pending" &&
+        request.resource.data.status == "Cancelled" &&
+        requestCoreFieldsUnchanged() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'updatedAt', 'cancelledAt', 'cancelReason'
+        ]);
+    }
+
+    // Worker Request Lifecycle:
+    // Assigned worker can transition:
+    // - Pending -> Accepted
+    // - Pending -> Rejected
+    // - Accepted -> Completed
+    function isValidWorkerRequestUpdate() {
+      return isAuthenticated() &&
+        resource.data.workerUid == request.auth.uid &&
+        requestCoreFieldsUnchanged() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'updatedAt', 'acceptedAt', 'rejectedAt', 'rejectReason', 'completedAt'
+        ]) &&
+        (
+          (resource.data.status == "Pending" && request.resource.data.status in ["Accepted", "Rejected"]) ||
+          (resource.data.status == "Accepted" && request.resource.data.status == "Completed")
+        );
+    }
+
+    // Client Security Signal Validation:
+    // Restricts client-originated security events to authenticated users, their own actorUid,
+    // and safe, non-privileged event types.
+    function isValidClientSecurityEvent() {
+      return isAuthenticated() &&
+        request.resource.data.actorUid == request.auth.uid &&
+        request.resource.data.type in [
+          "UNAUTHORIZED_UI_ACTION",
+          "VALIDATION_FAILURE",
+          "SUSPICIOUS_INPUT",
+          "INVALID_REQUEST",
+          "ABUSE_SIGNAL_TRIGGERED",
+          "CHAT_RATE_LIMITED",
+          "CHAT_ACCESS_DENIED",
+          "CHAT_MESSAGE_REJECTED",
+          "LOGIN_ATTEMPT",
+          "LOGOUT",
+          "AUTH_STATE_CHANGED"
+        ] &&
+        (!('role' in request.resource.data) || request.resource.data.role in ['customer', 'worker']) &&
+        (!('severity' in request.resource.data) || request.resource.data.severity in ['Low', 'Medium', 'High', 'Critical']) &&
+        (!('actor' in request.resource.data) || request.resource.data.actor == request.auth.uid);
+    }
+
+    // Customer Review Creation Validation:
+    // 1. Reviewer is authenticated and matches request customerId.
+    // 2. Underlying service request exists, is Completed, and belongs to caller.
+    // 3. Rating is integer 1 to 5.
+    // 4. Text is valid string.
+    // 5. Initial status is published (client cannot set moderation flags).
+    // 6. Worker reply cannot be forged at creation.
+    // 7. Review ID matches requestId or rev-<requestId> (ensures 1 review per request).
+    function isValidReviewCreation(reviewId) {
+      return isAuthenticated() &&
+        request.resource.data.customerId == request.auth.uid &&
+        (reviewId == request.resource.data.requestId || reviewId == "rev-" + request.resource.data.requestId) &&
+        exists(/databases/$(database)/documents/requests/$(request.resource.data.requestId)) &&
+        get(/databases/$(database)/documents/requests/$(request.resource.data.requestId)).data.status == "Completed" &&
+        get(/databases/$(database)/documents/requests/$(request.resource.data.requestId)).data.customerId == request.auth.uid &&
+        request.resource.data.rating is int &&
+        request.resource.data.rating >= 1 &&
+        request.resource.data.rating <= 5 &&
+        request.resource.data.text is string &&
+        request.resource.data.status == "published" &&
+        (!('workerReply' in request.resource.data) || request.resource.data.workerReply == null);
+    }
+
+    // Worker Review Reply Validation:
+    // 1. Worker is authenticated and is the assigned worker on the review.
+    // 2. Customer, rating, text, requestId, and status remain immutable.
+    // 3. Worker reply must be a string and only reply fields can be updated.
+    function isValidWorkerReviewReply() {
+      return isAuthenticated() &&
+        resource.data.workerUid == request.auth.uid &&
+        request.resource.data.customerId == resource.data.customerId &&
+        request.resource.data.workerUid == resource.data.workerUid &&
+        request.resource.data.requestId == resource.data.requestId &&
+        request.resource.data.rating == resource.data.rating &&
+        request.resource.data.text == resource.data.text &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.workerReply is string &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'workerReply', 'workerReplyAt', 'updatedAt'
+        ]);
+    }
+
+    // Trust & Safety Report Creation Validation:
+    // 1. Reporter must be authenticated and matches reporterUid.
+    // 2. Target type is whitelisted.
+    // 3. Target ID, reason, and description are strings.
+    // 4. Status must be "open".
+    // 5. Privileged resolution fields cannot be set at creation.
+    function isValidReportCreation() {
+      return isAuthenticated() &&
+        request.resource.data.reporterUid == request.auth.uid &&
+        request.resource.data.targetType in ['worker', 'customer', 'review', 'message'] &&
+        request.resource.data.targetId is string &&
+        request.resource.data.reason is string &&
+        request.resource.data.description is string &&
+        request.resource.data.status == "open" &&
+        (!('resolvedAt' in request.resource.data) || request.resource.data.resolvedAt == null) &&
+        (!('resolvedBy' in request.resource.data) || request.resource.data.resolvedBy == null);
+    }
+
     // ------------------------------------------------------------------------
     // 1. Admin Membership Collection: /admins/{uid}
     // ------------------------------------------------------------------------
@@ -118,10 +254,13 @@ service cloud.firestore {
     // ------------------------------------------------------------------------
     // 4. Service Requests: /requests/{requestId}
     // ------------------------------------------------------------------------
-    // - Customers can create requests where customerId matches their auth UID.
+    // - Customers can create requests where customerId matches their auth UID and status is "Pending".
     // - Private read: only the requesting customer, assigned worker, or admin.
-    // - Customer can cancel their own pending request.
-    // - Assigned worker can accept / complete assigned requests.
+    // - Customer can cancel their own pending request (Pending -> Cancelled).
+    // - Assigned worker can accept/reject pending requests (Pending -> Accepted/Rejected).
+    // - Assigned worker can complete accepted requests (Accepted -> Completed).
+    // - Core request fields are immutable upon update.
+    // - Admin has inspection, moderation, and cleanup privileges.
     // ------------------------------------------------------------------------
     match /requests/{requestId} {
       allow read: if isAuthenticated() && (
@@ -129,13 +268,14 @@ service cloud.firestore {
         resource.data.workerUid == request.auth.uid ||
         isAdmin()
       );
-      allow create: if isAuthenticated() &&
-                    request.resource.data.customerId == request.auth.uid;
-      allow update: if isAuthenticated() && (
-        (resource.data.customerId == request.auth.uid && request.resource.data.customerId == resource.data.customerId) ||
-        (resource.data.workerUid == request.auth.uid && request.resource.data.customerId == resource.data.customerId) ||
-        isAdmin()
-      );
+      allow create: if (isAuthenticated() &&
+                    request.resource.data.customerId == request.auth.uid &&
+                    request.resource.data.status == "Pending" &&
+                    request.resource.data.workerUid is string &&
+                    request.resource.data.workerUid.size() > 0) || isAdmin();
+      allow update: if isValidCustomerRequestCancellation() ||
+                       isValidWorkerRequestUpdate() ||
+                       isAdmin();
       allow delete: if isAdmin();
     }
 
@@ -143,34 +283,33 @@ service cloud.firestore {
     // 5. Customer Reviews: /reviews/{reviewId}
     // ------------------------------------------------------------------------
     // - Published reviews are public for transparency.
-    // - Customers can create reviews where customerId matches their auth UID.
-    // - Workers can reply to reviews on their profile (status cannot be changed).
-    // - Admins can moderate reviews (publish, hide, flag).
+    // - Author customer, assigned worker, and admins can view non-published reviews.
+    // - Customers can create reviews ONLY for their own authoritatively Completed requests.
+    // - Duplicate reviews are prevented by tying reviewId to requestId.
+    // - Workers can only reply to reviews on their own profile without altering ratings/text.
+    // - Admins can moderate reviews (publish, hide, flag) or delete.
     // ------------------------------------------------------------------------
     match /reviews/{reviewId} {
       allow read: if resource.data.status == "published" ||
                   isAdmin() ||
-                  (isAuthenticated() && resource.data.customerId == request.auth.uid);
-      allow create: if isAuthenticated() &&
-                    request.resource.data.customerId == request.auth.uid;
-      allow update: if (isAuthenticated() &&
-                       resource.data.workerUid == request.auth.uid &&
-                       request.resource.data.customerId == resource.data.customerId &&
-                       request.resource.data.status == resource.data.status) || isAdmin();
+                  (isAuthenticated() && (resource.data.customerId == request.auth.uid || resource.data.workerUid == request.auth.uid));
+      allow create: if isValidReviewCreation(reviewId) || isAdmin();
+      allow update: if isValidWorkerReviewReply() || isAdmin();
       allow delete: if isAdmin();
     }
 
     // ------------------------------------------------------------------------
     // 6. Trust & Safety Reports: /reports/{reportId}
     // ------------------------------------------------------------------------
-    // - Authenticated users can submit reports (reporterUid must match auth UID).
-    // - ONLY administrators can read, update status, resolve, or dismiss reports.
-    // - Normal customers/workers cannot list or view reports.
+    // - Authenticated users can submit validated reports for legitimate targets.
+    // - Reporter can inspect their own submitted report.
+    // - ONLY administrators can read the queue, update status, resolve, or dismiss reports.
+    // - Normal customers/workers cannot list, modify, or delete reports.
     // ------------------------------------------------------------------------
     match /reports/{reportId} {
-      allow create: if isAuthenticated() &&
-                    request.resource.data.reporterUid == request.auth.uid;
-      allow read, update, delete: if isAdmin();
+      allow create: if isValidReportCreation() || isAdmin();
+      allow read: if (isAuthenticated() && resource.data.reporterUid == request.auth.uid) || isAdmin();
+      allow update, delete: if isAdmin();
     }
 
     // ------------------------------------------------------------------------
@@ -209,12 +348,14 @@ service cloud.firestore {
     // ------------------------------------------------------------------------
     // 8. Security Events: /securityEvents/{eventId}
     // ------------------------------------------------------------------------
-    // - App clients can write security signals (create-only).
+    // - Unauthenticated creation is strictly DENIED.
+    // - Authenticated clients can write validated client security signals.
+    // - Privileged security signals (admin actions) cannot be logged by normal users.
     // - ONLY administrators can read security event logs.
     // - Modifying or deleting security events is forbidden (immutable log).
     // ------------------------------------------------------------------------
     match /securityEvents/{eventId} {
-      allow create: if true;
+      allow create: if isValidClientSecurityEvent() || isAdmin();
       allow read: if isAdmin();
       allow update, delete: if false;
     }

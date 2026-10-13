@@ -21,6 +21,7 @@ import {
   setTextContent,
   validateReport
 } from "./security.js";
+import { createFirestoreReport } from "./firestore-service.js";
 
 const markupPattern = /<\s*\/?\s*[a-z!][^>]*>/i;
 const MAX_REPORT_LENGTH = 2000;
@@ -89,7 +90,7 @@ export function openReportModal({ targetType, targetId, targetLabel = "" }) {
   return true;
 }
 
-function handleReportSubmit(event) {
+async function handleReportSubmit(event) {
   event.preventDefault();
   if (!activeTarget) return;
 
@@ -115,23 +116,66 @@ function handleReportSubmit(event) {
     return;
   }
 
+  const user = getCurrentUser();
+  const reporterUid = user?.firebaseUid || user?.uid || user?.id;
+  if (!reporterUid) {
+    setReportError("Please sign in to submit a safety report.");
+    return;
+  }
+
+  const submitBtn = event.target?.querySelector('button[type="submit"]');
+  const originalBtnText = submitBtn ? submitBtn.textContent : "Submit Report";
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Submitting Report...";
+  }
+
   try {
-    createReport({
+    const res = await createFirestoreReport({
+      reporterUid,
       targetType: activeTarget.targetType,
       targetId: activeTarget.targetId,
       reason,
       description
     });
+
+    if (!res.success) {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalBtnText;
+      }
+      setReportError(res.error || "Failed to submit safety report. Please try again.");
+      return;
+    }
+
+    try {
+      createReport({
+        targetType: activeTarget.targetType,
+        targetId: activeTarget.targetId,
+        reason,
+        description
+      });
+    } catch {
+      // Local sync non-fatal
+    }
+
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalBtnText;
+    }
+
+    activeTarget = null;
+    closeModal("reportModal");
+
+    if (toastHandler) {
+      toastHandler("Report received. Our moderation team will review the submitted details.");
+    }
   } catch (err) {
-    setReportError(err.message || getSafeErrorMessage("invalidRequest"));
-    return;
-  }
-
-  activeTarget = null;
-  closeModal("reportModal");
-
-  if (toastHandler) {
-    toastHandler("Report received. Our moderation team will review the submitted details.");
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalBtnText;
+    }
+    setReportError(err?.message || getSafeErrorMessage("invalidRequest"));
   }
 }
 

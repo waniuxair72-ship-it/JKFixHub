@@ -25,6 +25,11 @@ import {
   validateReview,
   validateText
 } from "./security.js";
+import {
+  createFirestoreReview,
+  addFirestoreWorkerReviewReply,
+  getWorkerFirestoreReviews
+} from "./firestore-service.js";
 
 const markupPattern = /<\s*\/?\s*[a-z!][^>]*>/i;
 const MAX_REVIEW_LENGTH = 1200;
@@ -263,7 +268,7 @@ export function renderWorkerReviews(workerId, container) {
   container.replaceChildren(...reviews.map((rev) => buildReviewCard(rev, isCurrentWorker)));
 }
 
-function handleReviewFormSubmit(event) {
+async function handleReviewFormSubmit(event) {
   event.preventDefault();
   if (!activeReviewRequestId) return;
 
@@ -288,24 +293,67 @@ function handleReviewFormSubmit(event) {
     return;
   }
 
-  try {
-    createCustomerReview({
-      requestId: activeReviewRequestId,
-      rating,
-      text
-    });
-  } catch (err) {
-    setReviewError(err.message || getSafeErrorMessage("invalidRequest"));
+  const user = getCurrentUser();
+  const customerId = user?.firebaseUid || user?.uid || user?.id;
+  if (!customerId) {
+    setReviewError("Please sign in to submit a review.");
     return;
   }
 
+  const submitBtn = event.target?.querySelector('button[type="submit"]');
+  const originalBtnText = submitBtn ? submitBtn.textContent : "Submit Review";
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Submitting Review...";
+  }
+
   const finishedRequestId = activeReviewRequestId;
-  activeReviewRequestId = null;
-  closeModal("reviewModal");
-  openViewReviewModal(finishedRequestId);
+
+  try {
+    const res = await createFirestoreReview({
+      customerId,
+      requestId: finishedRequestId,
+      rating,
+      text
+    });
+
+    if (!res.success) {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalBtnText;
+      }
+      setReviewError(res.error || "Failed to submit review. Please try again.");
+      return;
+    }
+
+    try {
+      createCustomerReview({
+        requestId: finishedRequestId,
+        rating,
+        text
+      });
+    } catch {
+      // Local sync non-fatal
+    }
+
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalBtnText;
+    }
+
+    activeReviewRequestId = null;
+    closeModal("reviewModal");
+    openViewReviewModal(finishedRequestId);
+  } catch (err) {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalBtnText;
+    }
+    setReviewError(err?.message || getSafeErrorMessage("invalidRequest"));
+  }
 }
 
-function handleWorkerReplyFormSubmit(event) {
+async function handleWorkerReplyFormSubmit(event) {
   event.preventDefault();
   if (!activeReplyReviewId) return;
 
@@ -322,24 +370,61 @@ function handleWorkerReplyFormSubmit(event) {
     return;
   }
 
-  try {
-    addWorkerReviewReply(activeReplyReviewId, replyText);
-  } catch (err) {
-    setReplyError(err.message || getSafeErrorMessage("invalidRequest"));
+  const user = getCurrentUser();
+  const workerUid = user?.firebaseUid || user?.uid || user?.id;
+  if (!workerUid) {
+    setReplyError("Worker sign-in required.");
     return;
   }
 
-  activeReplyReviewId = null;
-  closeModal("workerReplyModal");
-  openModal("authModal");
+  const submitBtn = event.target?.querySelector('button[type="submit"]');
+  const originalBtnText = submitBtn ? submitBtn.textContent : "Submit Reply";
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Saving Reply...";
+  }
 
-  // Re-render worker reviews section if open
-  const user = getCurrentUser();
-  if (user?.role === "worker" && user.workerId) {
-    const reviewsContainer = document.getElementById("workerDashboardReviews");
-    if (reviewsContainer) {
-      renderWorkerReviews(user.workerId, reviewsContainer);
+  const reviewIdToReply = activeReplyReviewId;
+
+  try {
+    const res = await addFirestoreWorkerReviewReply(reviewIdToReply, replyText, workerUid);
+    if (!res.success) {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalBtnText;
+      }
+      setReplyError(res.error || "Failed to save reply.");
+      return;
     }
+
+    try {
+      addWorkerReviewReply(reviewIdToReply, replyText);
+    } catch {
+      // Local sync non-fatal
+    }
+
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalBtnText;
+    }
+
+    activeReplyReviewId = null;
+    closeModal("workerReplyModal");
+    openModal("authModal");
+
+    // Re-render worker reviews section if open
+    if (user?.role === "worker" && user.workerId) {
+      const reviewsContainer = document.getElementById("workerDashboardReviews");
+      if (reviewsContainer) {
+        renderWorkerReviews(user.workerId, reviewsContainer);
+      }
+    }
+  } catch (err) {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalBtnText;
+    }
+    setReplyError(err?.message || getSafeErrorMessage("invalidRequest"));
   }
 }
 

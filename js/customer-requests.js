@@ -16,7 +16,8 @@ import {
 } from "./store.js";
 import {
   getCustomerFirestoreRequests,
-  subscribeToFirestoreRequest
+  subscribeToFirestoreRequest,
+  updateFirestoreRequestStatus
 } from "./firestore-service.js";
 import { hasCapability, recordSecurityEvent, setTextContent } from "./security.js";
 
@@ -133,6 +134,7 @@ function installCustomerEntryPoints() {
 }
 
 function renderCustomerSummary() {
+  if (typeof document === "undefined") return;
   const summary = document.getElementById("customerAccountRequestSummary");
   const statistics = document.getElementById("customerAccountRequestStatistics");
   const navButton = document.getElementById("myRequestsButton");
@@ -149,7 +151,8 @@ function renderCustomerSummary() {
     ["Total", requests.length],
     ["Pending", requests.filter((request) => request.status === "Pending").length],
     ["Accepted", requests.filter((request) => request.status === "Accepted").length],
-    ["Rejected", requests.filter((request) => request.status === "Rejected").length]
+    ["Completed", requests.filter((request) => request.status === "Completed").length],
+    ["Cancelled", requests.filter((request) => request.status === "Cancelled").length]
   ];
   statistics.replaceChildren(...counts.map(([label, value]) => buildSummaryCard(label, value)));
   summary.hidden = false;
@@ -376,19 +379,64 @@ function showCancellationConfirmation(id) {
   openModal("cancelCustomerRequestModal");
 }
 
-function confirmCancellation() {
+async function confirmCancellation() {
   stopCustomerDetailsSubscription();
   if (!canViewCustomerRequests() || !pendingCancellationId) {
     pendingCancellationId = null;
     return;
   }
 
-  const cancelled = cancelCustomerRequest(pendingCancellationId);
-  pendingCancellationId = null;
-  closeModal("cancelCustomerRequestModal");
-  showCustomerRequestsAgain(cancelled
-    ? "Request cancelled for this session only."
-    : "This request can no longer be cancelled.");
+  const reqId = pendingCancellationId;
+  const currentUser = getCurrentUser();
+  const customerUid = currentUser?.firebaseUid || currentUser?.id || currentUser?.uid;
+
+  if (!customerUid) {
+    pendingCancellationId = null;
+    closeModal("cancelCustomerRequestModal");
+    showCustomerRequestsAgain("Sign-in required to cancel requests.");
+    return;
+  }
+
+  const confirmBtn = document.getElementById("confirmCustomerRequestCancel");
+  const originalText = confirmBtn ? confirmBtn.textContent : "Confirm Cancellation";
+  if (confirmBtn) {
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "Cancelling...";
+  }
+
+  try {
+    const res = await updateFirestoreRequestStatus(reqId, "Cancelled", customerUid);
+    if (!res.success) {
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = originalText;
+      }
+      pendingCancellationId = null;
+      closeModal("cancelCustomerRequestModal");
+      await syncCustomerRequestsFromFirestore();
+      showCustomerRequestsAgain(res.error || "Unable to cancel request. It may have already been accepted.");
+      return;
+    }
+
+    cancelCustomerRequest(reqId);
+    pendingCancellationId = null;
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = originalText;
+    }
+    closeModal("cancelCustomerRequestModal");
+    await syncCustomerRequestsFromFirestore();
+    showCustomerRequestsAgain("Request cancelled successfully.");
+  } catch (err) {
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = originalText;
+    }
+    pendingCancellationId = null;
+    closeModal("cancelCustomerRequestModal");
+    await syncCustomerRequestsFromFirestore();
+    showCustomerRequestsAgain(err?.message || "Failed to cancel request. Please try again.");
+  }
 }
 
 function handleCustomerRequestClick(event) {
