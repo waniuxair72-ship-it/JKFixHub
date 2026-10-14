@@ -428,7 +428,8 @@ function renderDashboard(worker) {
 
   const reviewsContainer = document.getElementById("workerDashboardReviews");
   if (reviewsContainer) {
-    renderWorkerReviews(worker.id, reviewsContainer);
+    const workerUid = worker.workerUid || worker.uid || worker.id;
+    renderWorkerReviews(workerUid, reviewsContainer);
   }
 
   view.dataset.workerId = String(worker.id);

@@ -15,7 +15,9 @@ import {
   getReviewByRequestId,
   getReviewsForWorker,
   isCustomer,
-  isWorker
+  isWorker,
+  upsertStoredReview,
+  setStoredReviews
 } from "./store.js";
 import {
   getSafeErrorMessage,
@@ -28,8 +30,37 @@ import {
 import {
   createFirestoreReview,
   addFirestoreWorkerReviewReply,
-  getWorkerFirestoreReviews
+  getWorkerFirestoreReviews,
+  getFirestoreReviewById,
+  getFirestoreReviewByRequestId
 } from "./firestore-service.js";
+
+/**
+ * Authoritatively determines if a given review belongs to the authenticated worker.
+ * Supports both real Firebase UIDs and legacy/demo numeric IDs.
+ *
+ * @param {object} review
+ * @param {object} user
+ * @returns {boolean}
+ */
+export function isReviewForWorker(review, user) {
+  if (!review || !user || user.role !== "worker") return false;
+  const userWorkerUids = [
+    user.workerUid,
+    user.firebaseUid,
+    user.uid,
+    user.id,
+    user.workerId != null ? String(user.workerId) : null,
+    user.id && user.id.startsWith("demo-worker-") ? user.id.replace("demo-worker-", "") : null
+  ].filter(Boolean).map(String);
+
+  const reviewWorkerUids = [
+    review.workerUid,
+    review.workerId != null ? String(review.workerId) : null
+  ].filter(Boolean).map(String);
+
+  return userWorkerUids.some((uid) => reviewWorkerUids.includes(uid));
+}
 
 const markupPattern = /<\s*\/?\s*[a-z!][^>]*>/i;
 const MAX_REVIEW_LENGTH = 1200;
@@ -76,7 +107,7 @@ function setReplyError(message) {
   }
 }
 
-export function openLeaveReviewModal(requestId) {
+export async function openLeaveReviewModal(requestId) {
   if (!isCustomer() || !hasCapability("customer", "submitReview")) {
     recordSecurityEvent("UNAUTHORIZED_UI_ACTION", getCurrentUser()?.role || null);
     return false;
@@ -88,9 +119,20 @@ export function openLeaveReviewModal(requestId) {
     return false;
   }
 
-  const existingReview = getReviewByRequestId(requestId);
+  let existingReview = getReviewByRequestId(requestId);
+  if (!existingReview) {
+    try {
+      existingReview = await getFirestoreReviewByRequestId(requestId);
+      if (existingReview) {
+        upsertStoredReview(existingReview);
+      }
+    } catch {
+      // Best-effort lookup
+    }
+  }
+
   if (existingReview) {
-    openViewReviewModal(requestId);
+    await openViewReviewModal(requestId);
     return true;
   }
 
@@ -117,11 +159,21 @@ export function openLeaveReviewModal(requestId) {
   return true;
 }
 
-export function openViewReviewModal(requestId) {
-  const review = getReviewByRequestId(requestId);
+export async function openViewReviewModal(requestId) {
+  let review = getReviewByRequestId(requestId);
+  if (!review) {
+    try {
+      review = await getFirestoreReviewByRequestId(requestId);
+      if (review) {
+        upsertStoredReview(review);
+      }
+    } catch {
+      // Best-effort lookup
+    }
+  }
   if (!review) return false;
 
-  setTextContent(document.getElementById("viewReviewWorker"), review.workerName);
+  setTextContent(document.getElementById("viewReviewWorker"), review.workerName || "Service Professional");
   setTextContent(document.getElementById("viewReviewRating"), `${review.rating} ★ (${renderStarSymbols(review.rating)})`);
   setTextContent(document.getElementById("viewReviewDate"), new Date(review.createdAt).toLocaleDateString());
   setTextContent(document.getElementById("viewReviewText"), review.text);
@@ -146,15 +198,26 @@ export function openViewReviewModal(requestId) {
   return true;
 }
 
-export function openWorkerReplyModal(reviewId) {
+export async function openWorkerReplyModal(reviewId) {
   if (!isWorker() || !hasCapability("worker", "manageOwnProfile")) {
     recordSecurityEvent("UNAUTHORIZED_UI_ACTION", getCurrentUser()?.role || null);
     return false;
   }
 
-  const review = getReviewById(reviewId);
+  let review = getReviewById(reviewId);
+  if (!review) {
+    try {
+      review = await getFirestoreReviewById(reviewId);
+      if (review) {
+        upsertStoredReview(review);
+      }
+    } catch {
+      // Best-effort lookup
+    }
+  }
+
   const user = getCurrentUser();
-  if (!review || review.workerId !== user?.workerId) {
+  if (!review || !isReviewForWorker(review, user)) {
     recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || null);
     return false;
   }
@@ -164,7 +227,7 @@ export function openWorkerReplyModal(reviewId) {
   if (form) form.reset();
 
   setReplyError("");
-  setTextContent(document.getElementById("replyTargetCustomer"), review.customerName);
+  setTextContent(document.getElementById("replyTargetCustomer"), review.customerName || "Customer");
   setTextContent(document.getElementById("replyTargetRating"), `${review.rating} ★`);
   setTextContent(document.getElementById("replyTargetReviewText"), review.text);
 
@@ -251,13 +314,10 @@ export function buildReviewCard(review, isCurrentWorker = false) {
   return card;
 }
 
-export function renderWorkerReviews(workerId, container) {
+export async function renderWorkerReviews(workerId, container) {
   if (!container) return;
-  const reviews = getReviewsForWorker(workerId);
-  const user = getCurrentUser();
-  const isCurrentWorker = user?.role === "worker" && user?.workerId === workerId;
 
-  if (reviews.length === 0) {
+  if (!workerId) {
     const empty = document.createElement("p");
     empty.className = "worker-dashboard-empty";
     setTextContent(empty, "No reviews received yet for this worker.");
@@ -265,7 +325,64 @@ export function renderWorkerReviews(workerId, container) {
     return;
   }
 
-  container.replaceChildren(...reviews.map((rev) => buildReviewCard(rev, isCurrentWorker)));
+  const loading = document.createElement("div");
+  loading.className = "worker-dashboard-loading";
+  loading.id = "workerReviewsLoading";
+  const spinner = document.createElement("div");
+  spinner.className = "spinner";
+  spinner.setAttribute("aria-hidden", "true");
+  const loadingText = document.createElement("p");
+  setTextContent(loadingText, "Loading customer reviews...");
+  loading.append(spinner, loadingText);
+  container.replaceChildren(loading);
+
+  let firestoreReviews = [];
+  let fetchFailed = false;
+
+  try {
+    firestoreReviews = await getWorkerFirestoreReviews(workerId);
+    if (firestoreReviews && firestoreReviews.length) {
+      setStoredReviews(firestoreReviews);
+    }
+  } catch (err) {
+    console.warn("[JKFixHub Review] Reviews fetch notice:", err);
+    fetchFailed = true;
+  }
+
+  const storedReviews = getReviewsForWorker(workerId);
+  const reviewsMap = new Map();
+  storedReviews.forEach((r) => { if (r && r.id) reviewsMap.set(r.id, r); });
+  firestoreReviews.forEach((r) => { if (r && r.id) reviewsMap.set(r.id, r); });
+
+  const allReviews = Array.from(reviewsMap.values());
+  allReviews.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+  if (allReviews.length === 0) {
+    if (fetchFailed) {
+      const errorWrap = document.createElement("div");
+      errorWrap.className = "worker-dashboard-error";
+      errorWrap.id = "workerReviewsError";
+      const errorMsg = document.createElement("p");
+      setTextContent(errorMsg, "Unable to load reviews. Please check your connection.");
+      const retryBtn = document.createElement("button");
+      retryBtn.type = "button";
+      retryBtn.className = "button subtle";
+      setTextContent(retryBtn, "Retry");
+      retryBtn.onclick = () => renderWorkerReviews(workerId, container);
+      errorWrap.append(errorMsg, retryBtn);
+      container.replaceChildren(errorWrap);
+      return;
+    }
+
+    const empty = document.createElement("p");
+    empty.className = "worker-dashboard-empty";
+    setTextContent(empty, "No reviews received yet for this worker.");
+    container.replaceChildren(empty);
+    return;
+  }
+
+  const user = getCurrentUser();
+  container.replaceChildren(...allReviews.map((rev) => buildReviewCard(rev, isReviewForWorker(rev, user))));
 }
 
 async function handleReviewFormSubmit(event) {
@@ -413,10 +530,10 @@ async function handleWorkerReplyFormSubmit(event) {
     openModal("authModal");
 
     // Re-render worker reviews section if open
-    if (user?.role === "worker" && user.workerId) {
+    if (user?.role === "worker") {
       const reviewsContainer = document.getElementById("workerDashboardReviews");
       if (reviewsContainer) {
-        renderWorkerReviews(user.workerId, reviewsContainer);
+        renderWorkerReviews(workerUid, reviewsContainer);
       }
     }
   } catch (err) {
@@ -448,19 +565,25 @@ export function initializeReviews() {
 
     const leaveBtn = target.closest("[data-leave-review]");
     if (leaveBtn) {
-      openLeaveReviewModal(leaveBtn.dataset.leaveReview);
+      openLeaveReviewModal(leaveBtn.dataset.leaveReview).catch((err) => {
+        console.warn("[JKFixHub Review] openLeaveReviewModal error:", err);
+      });
       return;
     }
 
     const viewBtn = target.closest("[data-view-review]");
     if (viewBtn) {
-      openViewReviewModal(viewBtn.dataset.viewReview);
+      openViewReviewModal(viewBtn.dataset.viewReview).catch((err) => {
+        console.warn("[JKFixHub Review] openViewReviewModal error:", err);
+      });
       return;
     }
 
     const replyBtn = target.closest("[data-reply-review]");
     if (replyBtn) {
-      openWorkerReplyModal(replyBtn.dataset.replyReview);
+      openWorkerReplyModal(replyBtn.dataset.replyReview).catch((err) => {
+        console.warn("[JKFixHub Review] openWorkerReplyModal error:", err);
+      });
       return;
     }
 

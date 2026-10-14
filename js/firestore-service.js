@@ -2108,7 +2108,7 @@ export async function getWorkerFirestoreReviews(workerId) {
     return reviews;
   } catch (err) {
     console.warn("[JKFixHub Review] Worker reviews fetch error:", err?.message || err);
-    return [];
+    throw err;
   }
 }
 
@@ -2145,5 +2145,142 @@ export async function addFirestoreWorkerReviewReply(reviewId, replyText, workerU
   } catch (err) {
     console.warn("[JKFixHub Review] Worker reply update error:", err?.message || err);
     return { success: false, error: err?.message || "Failed to update review reply." };
+  }
+}
+
+/**
+ * Fetches a single review by its review document ID from Cloud Firestore.
+ * @param {string} reviewId
+ * @returns {Promise<object|null>}
+ */
+export async function getFirestoreReviewById(reviewId) {
+  if (!reviewId) return null;
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (!db || !methods || typeof methods.doc !== "function" || typeof methods.getDoc !== "function") {
+      return null;
+    }
+
+    const reviewRef = methods.doc(db, "reviews", String(reviewId));
+    const snap = await methods.getDoc(reviewRef);
+    if (!snap.exists()) return null;
+
+    const data = typeof snap.data === "function" ? snap.data() : snap;
+    return { id: snap.id, ...data };
+  } catch (err) {
+    console.warn("[JKFixHub Review] Fetch review by ID error:", err?.message || err);
+    return null;
+  }
+}
+
+/**
+ * Fetches a review associated with a service request ID from Cloud Firestore.
+ * Checks direct ID matches (requestId, rev-<requestId>) and queries by requestId field.
+ * @param {string} requestId
+ * @returns {Promise<object|null>}
+ */
+export async function getFirestoreReviewByRequestId(requestId) {
+  if (!requestId) return null;
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (!db || !methods) return null;
+
+    // 1. Direct document lookups (common ID patterns)
+    if (typeof methods.doc === "function" && typeof methods.getDoc === "function") {
+      const directRef = methods.doc(db, "reviews", String(requestId));
+      const directSnap = await methods.getDoc(directRef);
+      if (directSnap.exists()) {
+        const data = typeof directSnap.data === "function" ? directSnap.data() : directSnap;
+        return { id: directSnap.id, ...data };
+      }
+
+      const revRef = methods.doc(db, "reviews", `rev-${requestId}`);
+      const revSnap = await methods.getDoc(revRef);
+      if (revSnap.exists()) {
+        const data = typeof revSnap.data === "function" ? revSnap.data() : revSnap;
+        return { id: revSnap.id, ...data };
+      }
+    }
+
+    // 2. Query by requestId field fallback
+    if (typeof methods.collection === "function" && typeof methods.getDocs === "function") {
+      const colRef = methods.collection(db, "reviews");
+      let snapshot;
+      if (typeof methods.query === "function" && typeof methods.where === "function") {
+        const q = methods.query(colRef, methods.where("requestId", "==", String(requestId)));
+        snapshot = await methods.getDocs(q);
+      } else {
+        snapshot = await methods.getDocs(colRef);
+      }
+
+      let match = null;
+      if (snapshot && typeof snapshot.forEach === "function") {
+        snapshot.forEach((doc) => {
+          if (!match) {
+            const data = typeof doc.data === "function" ? doc.data() : doc;
+            if (data && String(data.requestId) === String(requestId)) {
+              match = { id: doc.id, ...data };
+            }
+          }
+        });
+      }
+      if (match) return match;
+    }
+
+    return null;
+  } catch (err) {
+    console.warn("[JKFixHub Review] Fetch review by requestId error:", err?.message || err);
+    return null;
+  }
+}
+
+/**
+ * Loads reviews submitted by a given customer from Cloud Firestore.
+ * @param {string} customerUid
+ * @returns {Promise<Array<object>>}
+ */
+export async function getCustomerFirestoreReviews(customerUid) {
+  if (!customerUid) return [];
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+
+    if (!db || !methods || typeof methods.collection !== "function") return [];
+
+    const colRef = methods.collection(db, "reviews");
+    let snapshot;
+    if (typeof methods.query === "function" && typeof methods.where === "function") {
+      const q = methods.query(
+        colRef,
+        methods.where("customerId", "==", String(customerUid))
+      );
+      snapshot = await methods.getDocs(q);
+    } else {
+      snapshot = await methods.getDocs(colRef);
+    }
+
+    const reviews = [];
+    if (snapshot && typeof snapshot.forEach === "function") {
+      snapshot.forEach((doc) => {
+        const data = typeof doc.data === "function" ? doc.data() : doc;
+        if (!data) return;
+        if (String(data.customerId) === String(customerUid)) {
+          reviews.push({ id: doc.id, ...data });
+        }
+      });
+    }
+
+    reviews.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    return reviews;
+  } catch (err) {
+    console.warn("[JKFixHub Review] Customer reviews fetch error:", err?.message || err);
+    return [];
   }
 }

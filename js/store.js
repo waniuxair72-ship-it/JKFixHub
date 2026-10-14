@@ -100,7 +100,7 @@ const customerRequestInputFields = Object.freeze([
 ]);
 const customerIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$/;
 const customerRequestIdPattern = /^[A-Za-z0-9_-]{8,128}$/;
-const reviewIdPattern = /^rev-[a-z0-9-]{8,80}$/;
+const reviewIdPattern = /^[A-Za-z0-9_-]{8,128}$/;
 const reportIdPattern = /^rep-[a-z0-9-]{8,80}$/;
 const markupPattern = /<\s*\/?\s*[a-z!][^>]*>/i;
 const allowedReportTargetTypes = Object.freeze(["worker", "customer", "review", "message"]);
@@ -1085,17 +1085,62 @@ export function getReviewByRequestId(requestId) {
 }
 
 export function getReviewsForWorker(workerId) {
-  const normalizedId = Number(workerId);
-  if (!Number.isSafeInteger(normalizedId)) return [];
+  if (!workerId) return [];
+  const targetStr = String(workerId);
+  const normalizedNum = Number(workerId);
+  const isNum = Number.isSafeInteger(normalizedNum);
+
   return state.reviews
-    .filter((item) => item.workerId === normalizedId)
+    .filter((item) => {
+      if (item.workerUid && String(item.workerUid) === targetStr) return true;
+      if (String(item.workerId) === targetStr) return true;
+      if (isNum && item.workerId === normalizedNum) return true;
+      return false;
+    })
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
     .map(copyReview);
+}
+
+export function upsertStoredReview(review) {
+  if (!review || !review.id) return null;
+  const idx = state.reviews.findIndex(
+    (r) => r.id === review.id || (review.requestId && r.requestId === review.requestId)
+  );
+  const normalized = {
+    id: String(review.id),
+    requestId: review.requestId || null,
+    customerId: review.customerId ? String(review.customerId) : null,
+    customerName: review.customerName || "Customer",
+    workerUid: review.workerUid ? String(review.workerUid) : (review.workerId ? String(review.workerId) : null),
+    workerId: review.workerId != null ? review.workerId : (review.workerUid || null),
+    workerName: review.workerName || "Service Professional",
+    rating: Number(review.rating) || 5,
+    text: String(review.text || ""),
+    createdAt: review.createdAt || new Date().toISOString(),
+    updatedAt: review.updatedAt || null,
+    workerReply: review.workerReply || null,
+    workerReplyAt: review.workerReplyAt || null,
+    status: review.status || "published"
+  };
+  if (idx >= 0) {
+    state.reviews[idx] = { ...state.reviews[idx], ...normalized };
+    return copyReview(state.reviews[idx]);
+  } else {
+    state.reviews.push(normalized);
+    return copyReview(normalized);
+  }
+}
+
+export function setStoredReviews(reviews) {
+  if (!Array.isArray(reviews)) return;
+  reviews.forEach((rev) => upsertStoredReview(rev));
 }
 
 export function getReviewsForCustomer(customerId) {
   if (!customerId || typeof customerId !== "string" || !customerIdPattern.test(customerId)) return [];
   return state.reviews
     .filter((item) => item.customerId === customerId)
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
     .map(copyReview);
 }
 
@@ -1122,7 +1167,11 @@ export function addWorkerReviewReply(reviewId, replyText) {
     throw new Error("Review not found.");
   }
 
-  if (review.workerId !== user.workerId || user.id !== `demo-worker-${user.workerId}`) {
+  const isDemoMatch = review.workerId != null && review.workerId === user.workerId && user.id === `demo-worker-${user.workerId}`;
+  const effectiveUid = user.firebaseUid || user.uid || user.id;
+  const isRealMatch = Boolean(effectiveUid && (String(review.workerUid) === String(effectiveUid) || String(review.workerId) === String(effectiveUid)));
+
+  if (!isDemoMatch && !isRealMatch) {
     recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user.role);
     throw new Error("You can only reply to reviews on your own profile.");
   }

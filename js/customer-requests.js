@@ -12,12 +12,16 @@ import {
   getReviewByRequestId,
   isCustomer,
   setStoredCustomerRequests,
-  upsertStoredCustomerRequest
+  upsertStoredCustomerRequest,
+  setStoredReviews,
+  upsertStoredReview
 } from "./store.js";
 import {
   getCustomerFirestoreRequests,
   subscribeToFirestoreRequest,
-  updateFirestoreRequestStatus
+  updateFirestoreRequestStatus,
+  getCustomerFirestoreReviews,
+  getFirestoreReviewByRequestId
 } from "./firestore-service.js";
 import { hasCapability, recordSecurityEvent, setTextContent } from "./security.js";
 
@@ -174,6 +178,15 @@ async function syncCustomerRequestsFromFirestore() {
     }
   } catch (err) {
     console.warn("[JKFixHub Customer] Firestore requests sync notice:", err);
+  }
+
+  try {
+    const firestoreReviews = await getCustomerFirestoreReviews(customerUid);
+    if (firestoreReviews && firestoreReviews.length) {
+      setStoredReviews(firestoreReviews);
+    }
+  } catch (err) {
+    console.warn("[JKFixHub Customer] Firestore reviews sync notice:", err);
   }
 }
 
@@ -345,6 +358,17 @@ function showRequestDetails(id) {
         reviewButton.dataset.leaveReview = request.id;
         delete reviewButton.dataset.viewReview;
         setTextContent(reviewButton, "Leave a Review");
+
+        // Async check against Firestore if review hasn't been cached yet
+        getFirestoreReviewByRequestId(request.id).then((freshReview) => {
+          if (freshReview && activeDetailsRequestId === id) {
+            upsertStoredReview(freshReview);
+            reviewButton.className = "button subtle";
+            reviewButton.dataset.viewReview = request.id;
+            delete reviewButton.dataset.leaveReview;
+            setTextContent(reviewButton, "View Your Review");
+          }
+        }).catch(() => {});
       }
     } else {
       reviewButton.hidden = true;
