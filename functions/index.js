@@ -12,7 +12,9 @@
 
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
+const { getAuth } = require("firebase-admin/auth");
 const { onCall } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 
 // Initialize Admin SDK
 initializeApp();
@@ -28,6 +30,11 @@ const {
 
 const { submitReview } = require("./review-logic");
 const { submitReport } = require("./report-logic");
+const {
+  deleteUserAccount,
+  reconcileStaleDeletionJobs,
+  adminReconcileDeletionJobs
+} = require("./account-lifecycle");
 
 const {
   adminUpdateWorkerStatus,
@@ -112,4 +119,29 @@ exports.adminModerateReport = onCall(async (request) => {
  */
 exports.adminModerateReview = onCall(async (request) => {
   return await adminModerateReview(db, request);
+});
+
+// ----------------------------------------------------------------------------
+// Account Lifecycle & Privacy Callable Functions
+// ----------------------------------------------------------------------------
+
+/**
+ * Authenticated user triggers deletion of their own account and personal data minimization.
+ */
+exports.deleteUserAccount = onCall(async (request) => {
+  return await deleteUserAccount(db, request, getAuth());
+});
+
+/**
+ * Scheduled recovery worker that reconciles orphaned account deletion jobs every 30 minutes.
+ */
+exports.reconcileDeletionJobs = onSchedule("every 30 minutes", async () => {
+  return await reconcileStaleDeletionJobs(db, getAuth());
+});
+
+/**
+ * Admin on-demand trigger to reconcile orphaned account deletion jobs.
+ */
+exports.adminReconcileDeletionJobs = onCall(async (request) => {
+  return await adminReconcileDeletionJobs(db, request, getAuth());
 });

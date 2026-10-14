@@ -53,6 +53,7 @@ function sanitizeLogPayload(value) {
  * @returns {Promise<boolean>}
  */
 async function recordAuditEvent(db, {
+  auditId = null,
   actorUid,
   action,
   targetType = "general",
@@ -75,7 +76,11 @@ async function recordAuditEvent(db, {
       timestamp: FieldValue.serverTimestamp()
     };
 
-    await db.collection("auditLogs").add(auditRecord);
+    if (auditId && typeof auditId === "string") {
+      await db.collection("auditLogs").doc(auditId).set(auditRecord);
+    } else {
+      await db.collection("auditLogs").add(auditRecord);
+    }
     return true;
   } catch (err) {
     console.warn("[JKFixHub Audit] Failed to record audit log:", err?.message || err);
