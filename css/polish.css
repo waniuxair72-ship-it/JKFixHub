@@ -220,6 +220,7 @@ body #webgl-background {
 .brand-wordmark-jk {
   background: linear-gradient(135deg, #2563eb, #7c3aed);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
   font-weight: 900;
 }
@@ -4265,6 +4266,22 @@ body #webgl-background {
 
 .auth-link-btn:hover {
   color: var(--color-primary-hover, #1d4ed8);
+}
+
+.auth-field-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2px;
+}
+
+.auth-forgot-password-link {
+  font-size: 0.82rem;
+  font-weight: 550;
+  min-height: 28px;
+  padding: 0 4px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 /* 5. FEEDBACK & NOTICES (HIGH-CONTRAST ACCESSIBLE) */
