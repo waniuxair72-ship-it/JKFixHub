@@ -81,6 +81,36 @@ const ALLOWED_DISTRICTS = Object.freeze([
 
 let initialized = false;
 let activeAuthTab = "signin";
+let pendingRegistrationUid = null;
+let pendingRegistrationEmail = null;
+
+/**
+ * Returns the UID currently undergoing registration/recovery, if any.
+ */
+export function getPendingRegistrationUid() {
+  return pendingRegistrationUid;
+}
+
+/**
+ * Test helper to simulate pending registration UID.
+ */
+export function setPendingRegistrationUidForTesting(uid) {
+  pendingRegistrationUid = uid;
+}
+
+/**
+ * Returns the email currently undergoing registration/recovery, if any.
+ */
+export function getPendingRegistrationEmail() {
+  return pendingRegistrationEmail;
+}
+
+/**
+ * Test helper to simulate pending registration email.
+ */
+export function setPendingRegistrationEmailForTesting(email) {
+  pendingRegistrationEmail = email;
+}
 
 /**
  * Returns allowed Jammu & Kashmir districts for worker registration.
@@ -437,31 +467,49 @@ export async function registerCustomer({ name, email, phone, district, password,
 
   if (firebaseReady && methods && auth) {
     let createdUser = null;
+    let isRecoveredAccount = false;
+    const normalizedEmail = email.toLowerCase().trim();
+    pendingRegistrationEmail = normalizedEmail;
+
     try {
       setAuthStatus(AUTH_STATUS.LOADING);
-      const userCredential = await methods.createUserWithEmailAndPassword(auth, email, password);
-      createdUser = userCredential.user;
-
-      if (typeof methods.sendEmailVerification === "function") {
-        try {
-          await methods.sendEmailVerification(createdUser);
-          recordSecurityEvent("EMAIL_VERIFICATION_SENT", "customer");
-        } catch (verificationErr) {
-          console.warn("[JKFixHub Auth] Customer email verification dispatch notice:", verificationErr?.message || verificationErr);
+      try {
+        const userCredential = await methods.createUserWithEmailAndPassword(auth, email, password);
+        createdUser = userCredential.user;
+      } catch (authErr) {
+        if (authErr?.code === "auth/email-already-in-use" && typeof methods.signInWithEmailAndPassword === "function") {
+          try {
+            const recoveryCredential = await methods.signInWithEmailAndPassword(auth, email, password);
+            const candidateUser = recoveryCredential.user;
+            const { db } = await initializeFirestoreClient();
+            const firestoreMethods = await getFirestoreMethods();
+            if (db && firestoreMethods && typeof firestoreMethods.getDoc === "function") {
+              const existingDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "users", candidateUser.uid));
+              if (!existingDoc.exists()) {
+                // Orphaned Auth user without Firestore profile: recover and complete profile setup
+                createdUser = candidateUser;
+                isRecoveredAccount = true;
+              } else {
+                if (typeof methods.signOut === "function") {
+                  try { await methods.signOut(auth); } catch (_) {}
+                }
+                throw authErr;
+              }
+            } else {
+              throw authErr;
+            }
+          } catch (recoveryErr) {
+            throw authErr;
+          }
+        } else {
+          throw authErr;
         }
       }
 
-      if (typeof methods.updateProfile === "function") {
-        try {
-          await methods.updateProfile(createdUser, { displayName: name });
-        } catch {
-          // Non-blocking metadata update
-        }
-      }
-
+      pendingRegistrationUid = createdUser.uid;
       const createdAt = new Date().toISOString();
 
-      // Required profile creation in Firestore /users/{uid}
+      // Required profile creation in Firestore /users/{uid} FIRST before non-blocking calls
       const { db } = await initializeFirestoreClient();
       const firestoreMethods = await getFirestoreMethods();
       if (!db || !firestoreMethods || typeof firestoreMethods.setDoc !== "function") {
@@ -506,11 +554,31 @@ export async function registerCustomer({ name, email, phone, district, password,
         createdAt
       });
 
+      // Non-blocking metadata and verification operations after database record is secured
+      if (!isRecoveredAccount || !createdUser.displayName) {
+        if (typeof methods.updateProfile === "function") {
+          try {
+            await methods.updateProfile(createdUser, { displayName: name });
+          } catch {
+            // Non-blocking metadata update
+          }
+        }
+      }
+
+      if (!createdUser.emailVerified && typeof methods.sendEmailVerification === "function") {
+        try {
+          await methods.sendEmailVerification(createdUser);
+          recordSecurityEvent("EMAIL_VERIFICATION_SENT", "customer");
+        } catch (verificationErr) {
+          console.warn("[JKFixHub Auth] Customer email verification dispatch notice:", verificationErr?.message || verificationErr);
+        }
+      }
+
       recordSecurityEvent("REGISTER_SUCCESS", "customer");
       updateAccountControls();
       showAccountView();
       setAuthFeedback("Account created! A verification link has been sent to your email. Please verify your email before requesting services.", false);
-      return { success: true };
+      return { success: true, recovered: isRecoveredAccount };
     } catch (error) {
       recordSecurityEvent("FIREBASE_AUTH_ERROR");
       setAuthStatus(AUTH_STATUS.ERROR, error?.code || "auth-error");
@@ -532,6 +600,13 @@ export async function registerCustomer({ name, email, phone, district, password,
       const safeMessage = mapFirebaseAuthError(error);
       setAuthFeedback(safeMessage, true);
       return { success: false, error: safeMessage };
+    } finally {
+      if (pendingRegistrationUid === createdUser?.uid) {
+        pendingRegistrationUid = null;
+      }
+      if (pendingRegistrationEmail === normalizedEmail) {
+        pendingRegistrationEmail = null;
+      }
     }
   }
 
@@ -638,31 +713,49 @@ export async function registerWorker({ name, email, phone, district, service, ex
 
   if (firebaseReady && methods && auth) {
     let createdUser = null;
+    let isRecoveredAccount = false;
+    const normalizedEmail = email.toLowerCase().trim();
+    pendingRegistrationEmail = normalizedEmail;
+
     try {
       setAuthStatus(AUTH_STATUS.LOADING);
-      const userCredential = await methods.createUserWithEmailAndPassword(auth, email, password);
-      createdUser = userCredential.user;
-
-      if (typeof methods.sendEmailVerification === "function") {
-        try {
-          await methods.sendEmailVerification(createdUser);
-          recordSecurityEvent("EMAIL_VERIFICATION_SENT", "worker");
-        } catch (verificationErr) {
-          console.warn("[JKFixHub Auth] Worker email verification dispatch notice:", verificationErr?.message || verificationErr);
+      try {
+        const userCredential = await methods.createUserWithEmailAndPassword(auth, email, password);
+        createdUser = userCredential.user;
+      } catch (authErr) {
+        if (authErr?.code === "auth/email-already-in-use" && typeof methods.signInWithEmailAndPassword === "function") {
+          try {
+            const recoveryCredential = await methods.signInWithEmailAndPassword(auth, email, password);
+            const candidateUser = recoveryCredential.user;
+            const { db } = await initializeFirestoreClient();
+            const firestoreMethods = await getFirestoreMethods();
+            if (db && firestoreMethods && typeof firestoreMethods.getDoc === "function") {
+              const existingDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "users", candidateUser.uid));
+              if (!existingDoc.exists()) {
+                // Orphaned Auth user without Firestore profile: recover and complete profile setup
+                createdUser = candidateUser;
+                isRecoveredAccount = true;
+              } else {
+                if (typeof methods.signOut === "function") {
+                  try { await methods.signOut(auth); } catch (_) {}
+                }
+                throw authErr;
+              }
+            } else {
+              throw authErr;
+            }
+          } catch (recoveryErr) {
+            throw authErr;
+          }
+        } else {
+          throw authErr;
         }
       }
 
-      if (typeof methods.updateProfile === "function") {
-        try {
-          await methods.updateProfile(createdUser, { displayName: name });
-        } catch {
-          // Non-blocking
-        }
-      }
-
+      pendingRegistrationUid = createdUser.uid;
       const createdAt = new Date().toISOString();
 
-      // Required profile creation in Firestore /users/{uid} and /workers/{uid}
+      // Required profile creation in Firestore /users/{uid} and /workers/{uid} FIRST before non-blocking calls
       const { db } = await initializeFirestoreClient();
       const firestoreMethods = await getFirestoreMethods();
       if (!db || !firestoreMethods || typeof firestoreMethods.setDoc !== "function") {
@@ -761,11 +854,31 @@ export async function registerWorker({ name, email, phone, district, service, ex
         createdAt
       });
 
+      // Non-blocking metadata and verification operations after database record is secured
+      if (!isRecoveredAccount || !createdUser.displayName) {
+        if (typeof methods.updateProfile === "function") {
+          try {
+            await methods.updateProfile(createdUser, { displayName: name });
+          } catch {
+            // Non-blocking
+          }
+        }
+      }
+
+      if (!createdUser.emailVerified && typeof methods.sendEmailVerification === "function") {
+        try {
+          await methods.sendEmailVerification(createdUser);
+          recordSecurityEvent("EMAIL_VERIFICATION_SENT", "worker");
+        } catch (verificationErr) {
+          console.warn("[JKFixHub Auth] Worker email verification dispatch notice:", verificationErr?.message || verificationErr);
+        }
+      }
+
       recordSecurityEvent("REGISTER_SUCCESS", "worker");
       updateAccountControls();
       showAccountView();
       setAuthFeedback("Worker account created! A verification link has been sent to your email. Your profile is pending administrative verification.", false);
-      return { success: true };
+      return { success: true, recovered: isRecoveredAccount };
     } catch (error) {
       recordSecurityEvent("FIREBASE_AUTH_ERROR");
       setAuthStatus(AUTH_STATUS.ERROR, error?.code || "auth-error");
@@ -787,6 +900,13 @@ export async function registerWorker({ name, email, phone, district, service, ex
       const safeMessage = mapFirebaseAuthError(error);
       setAuthFeedback(safeMessage, true);
       return { success: false, error: safeMessage };
+    } finally {
+      if (pendingRegistrationUid === createdUser?.uid) {
+        pendingRegistrationUid = null;
+      }
+      if (pendingRegistrationEmail === normalizedEmail) {
+        pendingRegistrationEmail = null;
+      }
     }
   }
 
@@ -2213,6 +2333,12 @@ export function initializeAuth() {
           async (firebaseUser) => {
             try {
               if (firebaseUser) {
+                if (
+                  (pendingRegistrationUid && pendingRegistrationUid === firebaseUser.uid) ||
+                  (pendingRegistrationEmail && pendingRegistrationEmail === firebaseUser.email?.toLowerCase().trim())
+                ) {
+                  return;
+                }
                 let existingProfile = getApplicationProfile(firebaseUser.uid);
 
                 try {
