@@ -14,6 +14,7 @@
 import { closeModal, openModal } from "./modals.js";
 import { openWorkerDashboard, openProfileEditor, stopWorkerDashboardSubscription } from "./worker-dashboard.js";
 import { openCustomerRequests } from "./customer-requests.js";
+import { openAdminDashboard } from "./admin-dashboard.js";
 import {
   clearRequestState,
   clearCurrentUser,
@@ -27,7 +28,8 @@ import {
   setAuthStatus,
   AUTH_STATUS,
   saveApplicationProfile,
-  getApplicationProfile
+  getApplicationProfile,
+  canAccessAdmin
 } from "./store.js";
 import {
   isSupportedRole,
@@ -212,6 +214,14 @@ export function handleAuthHashNavigation() {
       showSignIn();
     }
     openModal("authModal");
+  } else if (hash === "#admin" || hash === "#admin-dashboard") {
+    if (canAccessAdmin()) {
+      closeModal("authModal");
+      openAdminDashboard();
+    } else if (!isAuthenticated()) {
+      showSignIn();
+      openModal("authModal");
+    }
   }
 }
 
@@ -900,6 +910,36 @@ export async function signInUser({ email, password }) {
           } else {
             profile = null;
           }
+
+          // Authoritative admin verification against /admins/{uid}
+          if (!profile || profile.role === "admin") {
+            try {
+              const adminDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "admins", user.uid));
+              if (adminDoc.exists()) {
+                const aData = adminDoc.data();
+                if (aData && aData.active === true && aData.role === "admin") {
+                  profile = {
+                    role: "admin",
+                    name: aData.displayName || profile?.name || user.displayName || "Platform Administrator",
+                    email: aData.email || user.email,
+                    phone: aData.phone || profile?.phone || null,
+                    district: aData.district || profile?.district || null,
+                    createdAt: aData.createdAt || profile?.createdAt || new Date().toISOString()
+                  };
+                } else if (profile?.role === "admin") {
+                  // User doc claimed admin role but /admins/{uid} is not active admin
+                  profile = null;
+                }
+              } else if (profile?.role === "admin") {
+                // User doc claimed admin role but no /admins/{uid} record exists
+                profile = null;
+              }
+            } catch (adminErr) {
+              if (profile?.role === "admin") {
+                profile = null;
+              }
+            }
+          }
         }
       } catch (e) {
         // Fallback to local profile cache only if it has a valid supported role
@@ -949,8 +989,14 @@ export async function signInUser({ email, password }) {
       });
 
       updateAccountControls();
-      showAccountView();
-      setAuthFeedback("Signed in successfully.", false);
+      if (profile.role === "admin") {
+        closeModal("authModal");
+        openAdminDashboard();
+        setAuthFeedback("Signed in as Administrator.", false);
+      } else {
+        showAccountView();
+        setAuthFeedback("Signed in successfully.", false);
+      }
       return { success: true };
     } catch (error) {
       recordSecurityEvent("FIREBASE_AUTH_ERROR");
@@ -1379,6 +1425,8 @@ export function updateJkMenu() {
     if (userRoleEl) {
       if (!authed) {
         setTextContent(userRoleEl, "Find & book local services in Kashmir");
+      } else if (role === "admin") {
+        setTextContent(userRoleEl, "Platform Administrator");
       } else if (role === "worker") {
         setTextContent(userRoleEl, `Worker • ${worker?.service || "Technician"}`);
       } else {
@@ -1413,6 +1461,11 @@ export function updateJkMenu() {
       addItem(createJkMenuItem("🔑", "Sign In", "sign-in", "primary"));
       addItem(createJkMenuItem("🔧", "Join as a Worker", "join-worker"));
       addItem(createJkMenuItem("👤", "Create Customer Account", "create-customer"));
+    } else if (role === "admin") {
+      addItem(createJkMenuItem("🛡️", "Platform Administration", "admin-dashboard", "highlight"));
+      addItem(createJkMenuItem("👤", "Profile", "profile"));
+      addDivider();
+      addItem(createJkMenuItem("🚪", "Sign Out", "sign-out", "danger"));
     } else if (role === "worker") {
       addItem(createJkMenuItem("👤", "Profile", "profile"));
       addItem(createJkMenuItem("✏️", "Edit Profile", "edit-profile"));
@@ -1442,7 +1495,9 @@ export function handleJkMenuAction(action) {
   if (dropdown) dropdown.hidden = true;
   if (menuBtn) menuBtn.setAttribute("aria-expanded", "false");
 
-  if (action === "sign-in") {
+  if (action === "admin-dashboard") {
+    openAdminDashboard();
+  } else if (action === "sign-in") {
     showSignIn();
     openModal("authModal");
   } else if (action === "join-worker") {
@@ -1712,6 +1767,10 @@ export function showAccountView(preserveFeedback = false) {
   // Dashboard buttons
   const workerBtn = document.getElementById("openWorkerDashboard");
   if (workerBtn) workerBtn.hidden = user.role !== "worker";
+  const adminBtn = document.getElementById("openAdminDashboardBtn");
+  if (adminBtn) adminBtn.hidden = user.role !== "admin";
+  const editProfileBtn = document.getElementById("authEditProfileBtn");
+  if (editProfileBtn) editProfileBtn.hidden = user.role === "admin";
 }
 
 /**
@@ -2088,7 +2147,7 @@ export function initializeAuth() {
       }
       updateAccountControls();
       showAccountView();
-    } else if (target.closest("#authLogout, #authLogoutFromDashboard")) {
+    } else if (target.closest("#authLogout, #authLogoutFromDashboard, #adminLogoutButton")) {
       signOutUser();
     } else if (target.closest("#authResendVerification")) {
       resendVerificationEmail();
@@ -2098,6 +2157,9 @@ export function initializeAuth() {
       if (openWorkerDashboard()) openModal("authModal");
     } else if (target.closest("#openWorkerDashboard")) {
       openWorkerDashboard();
+    } else if (target.closest("#openAdminDashboardBtn")) {
+      closeModal("authModal");
+      openAdminDashboard();
     } else if (target.closest("#backToAccount")) {
       showAccountView();
     } else if (target.closest("#authBackToRoles")) {
@@ -2132,6 +2194,11 @@ export function initializeAuth() {
       showAccountView(true);
       setAccountFeedback("Profile updated successfully!", false);
     }
+  });
+
+  // Sync sign out when admin dashboard triggers logout
+  window.addEventListener("admin:logout", () => {
+    signOutUser();
   });
 
   // Initialize Firebase client in background without blocking UI
@@ -2186,6 +2253,35 @@ export function initializeAuth() {
                     } else {
                       existingProfile = null;
                     }
+
+                    // Authoritative admin verification against /admins/{uid}
+                    if (!existingProfile || existingProfile.role === "admin") {
+                      try {
+                        const adminDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "admins", firebaseUser.uid));
+                        if (adminDoc.exists()) {
+                          const aData = adminDoc.data();
+                          if (aData && aData.active === true && aData.role === "admin") {
+                            existingProfile = {
+                              ...existingProfile,
+                              role: "admin",
+                              name: aData.displayName || existingProfile?.name || firebaseUser.displayName || "Platform Administrator",
+                              email: aData.email || firebaseUser.email,
+                              phone: aData.phone || existingProfile?.phone || null,
+                              district: aData.district || existingProfile?.district || null,
+                              createdAt: aData.createdAt || existingProfile?.createdAt || new Date().toISOString()
+                            };
+                          } else if (existingProfile?.role === "admin") {
+                            existingProfile = null;
+                          }
+                        } else if (existingProfile?.role === "admin") {
+                          existingProfile = null;
+                        }
+                      } catch (adminErr) {
+                        if (existingProfile?.role === "admin") {
+                          existingProfile = null;
+                        }
+                      }
+                    }
                   }
                 } catch (fetchErr) {
                   console.warn("[JKFixHub Auth] Firestore background profile sync notice:", fetchErr?.message || fetchErr);
@@ -2224,6 +2320,9 @@ export function initializeAuth() {
                 setCurrentUser(currentUser);
                 recordSecurityEvent("AUTH_STATE_CHANGED", currentUser.role);
                 updateAccountControls();
+                if (currentUser.role === "admin" && (window.location.hash === "#admin" || window.location.hash === "#admin-dashboard")) {
+                  openAdminDashboard();
+                }
               } else {
                 const current = getCurrentUser();
                 if (current?.authProvider === "firebase") {

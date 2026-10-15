@@ -233,7 +233,9 @@ export function setCurrentUser(user) {
     throw new TypeError("A current user must have a non-empty ID and name.");
   }
   if (user.role === "admin") {
-    if (user.id !== "demo-admin-primary") {
+    const isDemoAdmin = user.id === "demo-admin-primary";
+    const isRealAdmin = (user.authProvider === "firebase" || Boolean(user.firebaseUid)) && customerIdPattern.test(user.id);
+    if (!isDemoAdmin && !isRealAdmin) {
       recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", "tampered");
       throw new TypeError("Invalid admin credentials.");
     }
@@ -346,7 +348,9 @@ export function canAccessAdmin() {
     recordSecurityEvent("ADMIN_ACCESS_DENIED", user.role);
     return false;
   }
-  if (user.id !== "demo-admin-primary") {
+  const isDemoAdmin = user.id === "demo-admin-primary";
+  const isRealAdmin = (user.authProvider === "firebase" || Boolean(user.firebaseUid)) && customerIdPattern.test(user.id);
+  if (!isDemoAdmin && !isRealAdmin) {
     recordSecurityEvent("ADMIN_ACCESS_DENIED", "tampered");
     recordSecurityEvent("UNAUTHORIZED_ADMIN_ACTION", user.role);
     return false;

@@ -715,6 +715,11 @@ export function logoutAdmin() {
   const continueBtn = document.getElementById("authContinue");
   if (accountBtn) accountBtn.hidden = true;
   if (continueBtn) continueBtn.hidden = false;
+  if (typeof window !== "undefined") {
+    try {
+      window.dispatchEvent(new CustomEvent("admin:logout"));
+    } catch (_) {}
+  }
   if (toastHandler) {
     toastHandler("Logged out from administrator session.");
   }

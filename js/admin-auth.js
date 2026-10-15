@@ -272,6 +272,15 @@ export async function initializeAdminAuth() {
     isVerifyingAuth = true;
     notifySubscribers(null, { isVerifying: true, error: null });
 
+    // Safety timeout to prevent stuck loading state if Firebase auth listener hangs
+    const safetyTimeout = setTimeout(() => {
+      if (isVerifyingAuth) {
+        console.warn("[JKFixHub AdminAuth] Auth observer resolution timed out after 6000ms. Clearing verification state.");
+        isVerifyingAuth = false;
+        notifySubscribers(currentAdminSession, { isVerifying: false, error: null });
+      }
+    }, 6000);
+
     const { auth } = await initializeFirebaseClient();
     const methods = await getFirebaseAuthMethods();
 
@@ -280,6 +289,7 @@ export async function initializeAdminAuth() {
     }
 
     if (!auth || !methods || typeof methods.onAuthStateChanged !== "function") {
+      clearTimeout(safetyTimeout);
       isVerifyingAuth = false;
       currentAdminSession = null;
       notifySubscribers(null, { isVerifying: false, error: null });
@@ -287,6 +297,7 @@ export async function initializeAdminAuth() {
     }
 
     methods.onAuthStateChanged(auth, async (firebaseUser) => {
+      clearTimeout(safetyTimeout);
       if (!firebaseUser) {
         currentAdminSession = null;
         isVerifyingAuth = false;
