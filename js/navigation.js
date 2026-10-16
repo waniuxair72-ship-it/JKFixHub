@@ -8,14 +8,33 @@
 // Navigation is kept separate from the main application
 // logic so the project remains easier to understand
 // and maintain.
+import { openModal } from "./modals.js";
+
+export function setView(viewName) {
+  const homeView = document.getElementById("homeView");
+  const searchView = document.getElementById("searchView");
+  if (!homeView || !searchView) return;
+
+  const isSearch = viewName === "search" || viewName === "find-worker";
+  homeView.hidden = isSearch;
+  searchView.hidden = !isSearch;
+
+  if (typeof window !== "undefined") {
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }
+}
+
 export function initializeNavigation() {
   const nav = document.getElementById("nav");
   const menuButton = document.getElementById("menuButton");
+  const navLinks = document.getElementById("navLinks");
+  const navDrawerClose = document.getElementById("navDrawerClose");
   const header = document.querySelector(".site-header");
 
   function updateMenuState(isOpen) {
     if (!nav || !menuButton) return;
     nav.classList.toggle("open", isOpen);
+    if (header) header.classList.toggle("nav-drawer-open", isOpen);
     menuButton.setAttribute("aria-expanded", String(isOpen));
     menuButton.setAttribute("aria-label", isOpen ? "Close navigation" : "Open navigation");
   }
@@ -24,6 +43,12 @@ export function initializeNavigation() {
     menuButton.addEventListener("click", () => {
       const shouldOpen = !nav || !nav.classList.contains("open");
       updateMenuState(shouldOpen);
+    });
+  }
+
+  if (navDrawerClose) {
+    navDrawerClose.addEventListener("click", () => {
+      updateMenuState(false);
     });
   }
 
@@ -60,9 +85,113 @@ export function initializeNavigation() {
     });
   }
 
-  document.querySelectorAll(".nav-links a").forEach((link) => {
-    link.addEventListener("click", () => updateMenuState(false));
+  // Handle modal routing from navigation and generic data-nav-modal triggers
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+
+    // Route to dedicated Search view
+    const searchTrigger = target.closest('a[href="#find-worker"], [data-view="search"], [data-service], [data-service-select]');
+    if (searchTrigger) {
+      updateMenuState(false);
+      setView("search");
+      if (window.location.hash !== "#find-worker") {
+        if (typeof history.replaceState === "function") {
+          history.replaceState(null, "", "#find-worker");
+        } else {
+          window.location.hash = "#find-worker";
+        }
+      }
+      return;
+    }
+
+    // Route back to Home view
+    const homeTrigger = target.closest('a[href="#home"], #searchBackHomeLink, #navDrawerBrandLink, [data-view="home"]');
+    if (homeTrigger) {
+      event.preventDefault();
+      updateMenuState(false);
+      if (window.location.hash) {
+        if (typeof history.pushState === "function") {
+          history.pushState(null, "", window.location.pathname + window.location.search);
+        } else {
+          window.location.hash = "";
+        }
+      }
+      setView("home");
+      return;
+    }
+
+    const modalTrigger = target.closest("[data-nav-modal]");
+    if (modalTrigger) {
+      const modalId = modalTrigger.dataset.navModal;
+      if (modalId) {
+        updateMenuState(false);
+        openModal(modalId);
+      }
+      return;
+    }
+
+    if (target.closest(".nav-links a, .nav-links [data-jk-action]")) {
+      updateMenuState(false);
+    }
   });
+
+  // Close nav drawer on click outside
+  document.addEventListener("click", (event) => {
+    if (!nav || !nav.classList.contains("open")) return;
+    if (
+      navLinks &&
+      !navLinks.contains(event.target) &&
+      menuButton &&
+      !menuButton.contains(event.target)
+    ) {
+      updateMenuState(false);
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && nav && nav.classList.contains("open")) {
+      updateMenuState(false);
+      menuButton?.focus();
+    }
+  });
+
+  // Hash-based modal and screen destinations
+  const HASH_MODAL_MAP = {
+    "#about": "aboutModal",
+    "#how-it-works": "howItWorksModal",
+    "#services": "servicesModal",
+    "#trust": "trustModal",
+    "#contact": "supportModal",
+    "#support": "supportModal"
+  };
+
+  function handleNavHash() {
+    const hash = (window.location.hash || "").toLowerCase();
+
+    if (hash === "#find-worker" || hash === "#search") {
+      updateMenuState(false);
+      setView("search");
+      return;
+    }
+
+    if (hash === "" || hash === "#" || hash === "#home" || hash === "#top") {
+      updateMenuState(false);
+      setView("home");
+      return;
+    }
+
+    const modalId = HASH_MODAL_MAP[hash];
+    if (modalId) {
+      updateMenuState(false);
+      openModal(modalId);
+    }
+  }
+
+  window.addEventListener("hashchange", handleNavHash);
+  if (typeof window !== "undefined" && window.location?.hash) {
+    handleNavHash();
+  }
 
   window.addEventListener("scroll", () => {
     if (header) {
@@ -70,3 +199,5 @@ export function initializeNavigation() {
     }
   }, { passive: true });
 }
+
+

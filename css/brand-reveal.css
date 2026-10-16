@@ -26,18 +26,20 @@
   z-index: 0;
 }
 
-/* 1. Hero Grid Layout */
+/* 1. Hero Centered Landing Layout */
 .container.hero,
 .hero {
   position: relative;
   z-index: 1;
   min-height: auto;
-  display: grid;
-  grid-template-columns: 1.15fr 0.85fr;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  column-gap: 36px;
-  row-gap: 14px;
-  padding: 18px 0 20px;
+  justify-content: center;
+  text-align: center;
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 18px 16px 24px;
 }
 
 .hero-copy-wrap {
@@ -414,29 +416,54 @@
   transform: translateX(3px);
 }
 
-.hero-signin-btn {
+.hero-signin-btn,
+.hero-worker-cta {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  padding: 10px 20px;
+  gap: 8px;
+  padding: 10px 22px;
   border-radius: 999px;
-  font-size: 0.92rem;
+  font-size: 0.94rem;
   font-weight: 750;
   background: #ffffff;
   color: #1e293b;
-  border: 1.5px solid #cbd5e1;
-  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+  border: 1.5px solid rgba(99, 102, 241, 0.35);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
   cursor: pointer;
   transition: all 0.18s ease;
-  min-height: 44px;
+  min-height: 48px;
 }
 
-.hero-signin-btn:hover {
-  border-color: #94a3b8;
+.hero-signin-btn:hover,
+.hero-worker-cta:hover {
+  border-color: #4f46e5;
   background: #f8fafc;
   color: #0f172a;
   transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(79, 70, 229, 0.15);
+}
+
+.hero-location-coverage {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.coverage-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: #334155;
+  font-size: 0.84rem;
+  font-weight: 650;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
 }
 
 /* ==========================================================================
@@ -816,9 +843,10 @@
     gap: 10px;
   }
   .hero-primary-cta,
-  .hero-signin-btn {
+  .hero-signin-btn,
+  .hero-worker-cta {
     width: 100%;
-    min-height: 46px;
+    min-height: 48px;
   }
   .kashmir-service-panel {
     padding: 16px 14px;

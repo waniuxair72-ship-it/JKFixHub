@@ -22,7 +22,7 @@ export function initializeBrandReveal() {
     const primaryArc = stage.querySelector(".arc-top-left");
     if (primaryArc) {
       primaryArc.addEventListener("animationend", () => {
-        clearTimeout(settTimeout);
+        clearTimeout(settleTimeout);
         stage.classList.add("is-settled");
       }, { once: true });
     }
