@@ -198,6 +198,61 @@ export function initializeNavigation() {
       header.classList.toggle("scrolled", window.scrollY > 10);
     }
   }, { passive: true });
+
+  initializeConnectionMonitor();
 }
+
+/**
+ * Monitors online and offline network status events.
+ * Displays a non-intrusive status banner with accessible live regions.
+ */
+export function initializeConnectionMonitor() {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+
+  const banner = document.getElementById("connectionStatusBanner");
+  const messageEl = document.getElementById("connectionStatusMessage");
+  let hideTimeout = null;
+
+  function updateStatus(isOnline, isInitial = false) {
+    if (!banner) return;
+    if (hideTimeout) {
+      clearTimeout(hideTimeout);
+      hideTimeout = null;
+    }
+
+    if (!isOnline) {
+      banner.hidden = false;
+      banner.classList.remove("is-online");
+      banner.classList.add("is-offline");
+      if (messageEl) {
+        messageEl.textContent = "You are currently offline. Please check your internet connection.";
+      }
+    } else {
+      if (isInitial) {
+        banner.hidden = true;
+        banner.classList.remove("is-offline", "is-online");
+      } else {
+        banner.hidden = false;
+        banner.classList.remove("is-offline");
+        banner.classList.add("is-online");
+        if (messageEl) {
+          messageEl.textContent = "Back online. Your connection has been restored.";
+        }
+        hideTimeout = setTimeout(() => {
+          banner.hidden = true;
+          banner.classList.remove("is-online");
+        }, 3200);
+      }
+    }
+  }
+
+  window.addEventListener("online", () => updateStatus(true, false));
+  window.addEventListener("offline", () => updateStatus(false, false));
+
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    updateStatus(false, true);
+  }
+}
+
 
 

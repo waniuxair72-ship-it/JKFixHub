@@ -41,7 +41,8 @@ import {
   validatePhone,
   mapFirebaseAuthError,
   getSafeErrorMessage,
-  validateService
+  validateService,
+  setButtonLoading
 } from "./security.js";
 import {
   initializeFirebaseClient,
@@ -457,21 +458,32 @@ export async function registerCustomer({ name, email, phone, district, password,
 
   recordSecurityEvent("REGISTER_ATTEMPT", "customer");
 
-  const firebaseReady = isFirebaseConfigured();
-  const methods = await getFirebaseAuthMethods();
-  let auth = getFirebaseAuth();
-  if (!auth && firebaseReady) {
-    const client = await initializeFirebaseClient();
-    auth = client?.auth;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    const errorMsg = "Network connection error. Please check your internet connection and try again.";
+    setAuthFeedback(errorMsg, true);
+    return { success: false, error: errorMsg };
   }
 
-  if (firebaseReady && methods && auth) {
-    let createdUser = null;
-    let isRecoveredAccount = false;
-    const normalizedEmail = email.toLowerCase().trim();
-    pendingRegistrationEmail = normalizedEmail;
+  const submitBtn = typeof document !== "undefined" ? document.getElementById("authCustomerRegisterSubmit") : null;
+  const restoreBtn = setButtonLoading(submitBtn, "Creating account...");
+  setAuthFeedback("Creating your account...", false);
 
-    try {
+  try {
+    const firebaseReady = isFirebaseConfigured();
+    const methods = await getFirebaseAuthMethods();
+    let auth = getFirebaseAuth();
+    if (!auth && firebaseReady) {
+      const client = await initializeFirebaseClient();
+      auth = client?.auth;
+    }
+
+    if (firebaseReady && methods && auth) {
+      let createdUser = null;
+      let isRecoveredAccount = false;
+      const normalizedEmail = email.toLowerCase().trim();
+      pendingRegistrationEmail = normalizedEmail;
+
+      try {
       setAuthStatus(AUTH_STATUS.LOADING);
       try {
         const userCredential = await methods.createUserWithEmailAndPassword(auth, email, password);
@@ -507,6 +519,8 @@ export async function registerCustomer({ name, email, phone, district, password,
       }
 
       pendingRegistrationUid = createdUser.uid;
+      restoreBtn.updateText("Setting up profile...");
+      setAuthFeedback("Setting up your customer profile...", false);
       const createdAt = new Date().toISOString();
 
       // Required profile creation in Firestore /users/{uid} FIRST before non-blocking calls
@@ -644,6 +658,9 @@ export async function registerCustomer({ name, email, phone, district, password,
   showAccountView();
   setAuthFeedback("Account created in session mode.", false);
   return { success: true };
+  } finally {
+    restoreBtn();
+  }
 }
 
 /**
@@ -703,19 +720,30 @@ export async function registerWorker({ name, email, phone, district, service, ex
 
   recordSecurityEvent("REGISTER_ATTEMPT", "worker");
 
-  const firebaseReady = isFirebaseConfigured();
-  const methods = await getFirebaseAuthMethods();
-  let auth = getFirebaseAuth();
-  if (!auth && firebaseReady) {
-    const client = await initializeFirebaseClient();
-    auth = client?.auth;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    const errorMsg = "Network connection error. Please check your internet connection and try again.";
+    setAuthFeedback(errorMsg, true);
+    return { success: false, error: errorMsg };
   }
 
-  if (firebaseReady && methods && auth) {
-    let createdUser = null;
-    let isRecoveredAccount = false;
-    const normalizedEmail = email.toLowerCase().trim();
-    pendingRegistrationEmail = normalizedEmail;
+  const submitBtn = typeof document !== "undefined" ? document.getElementById("authWorkerRegisterSubmit") : null;
+  const restoreBtn = setButtonLoading(submitBtn, "Creating account...");
+  setAuthFeedback("Creating your worker account...", false);
+
+  try {
+    const firebaseReady = isFirebaseConfigured();
+    const methods = await getFirebaseAuthMethods();
+    let auth = getFirebaseAuth();
+    if (!auth && firebaseReady) {
+      const client = await initializeFirebaseClient();
+      auth = client?.auth;
+    }
+
+    if (firebaseReady && methods && auth) {
+      let createdUser = null;
+      let isRecoveredAccount = false;
+      const normalizedEmail = email.toLowerCase().trim();
+      pendingRegistrationEmail = normalizedEmail;
 
     try {
       setAuthStatus(AUTH_STATUS.LOADING);
@@ -753,6 +781,8 @@ export async function registerWorker({ name, email, phone, district, service, ex
       }
 
       pendingRegistrationUid = createdUser.uid;
+      restoreBtn.updateText("Setting up profile...");
+      setAuthFeedback("Setting up your worker profile...", false);
       const createdAt = new Date().toISOString();
 
       // Required profile creation in Firestore /users/{uid} and /workers/{uid} FIRST before non-blocking calls
@@ -952,6 +982,9 @@ export async function registerWorker({ name, email, phone, district, service, ex
   showAccountView();
   setAuthFeedback("Worker account created in session mode (Pending Verification).", false);
   return { success: true };
+  } finally {
+    restoreBtn();
+  }
 }
 
 /**
@@ -975,164 +1008,181 @@ export async function signInUser({ email, password }) {
 
   recordSecurityEvent("LOGIN_ATTEMPT");
 
-  const firebaseReady = isFirebaseConfigured();
-  const methods = await getFirebaseAuthMethods();
-  let auth = getFirebaseAuth();
-  if (!auth && firebaseReady) {
-    const client = await initializeFirebaseClient();
-    auth = client?.auth;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    const errorMsg = "Network connection error. Please check your internet connection and try again.";
+    setAuthFeedback(errorMsg, true);
+    return { success: false, error: errorMsg };
   }
 
-  if (firebaseReady && methods && auth) {
-    try {
-      setAuthStatus(AUTH_STATUS.LOADING);
-      const userCredential = await methods.signInWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
+  const submitBtn = typeof document !== "undefined" ? document.getElementById("authSignInSubmit") : null;
+  const restoreBtn = setButtonLoading(submitBtn, "Signing in...");
+  setAuthFeedback("Signing in to your account...", false);
 
-      let profile = getApplicationProfile(user.uid);
+  try {
+    const firebaseReady = isFirebaseConfigured();
+    const methods = await getFirebaseAuthMethods();
+    let auth = getFirebaseAuth();
+    if (!auth && firebaseReady) {
+      const client = await initializeFirebaseClient();
+      auth = client?.auth;
+    }
 
-      // Try fetching profile from Firestore
+    if (firebaseReady && methods && auth) {
       try {
-        const { db } = await initializeFirestoreClient();
-        const firestoreMethods = await getFirestoreMethods();
-        if (db && firestoreMethods && typeof firestoreMethods.getDoc === "function") {
-          const userDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "users", user.uid));
-          if (userDoc.exists()) {
-            const data = userDoc.data();
-            const role = isSupportedRole(data?.role) ? data.role : null;
-            if (role) {
-              profile = {
-                role,
-                name: data.name || user.displayName || (role === "worker" ? "Worker" : "Customer"),
-                email: data.email || user.email,
-                phone: data.phone || null,
-                district: data.district || null,
-                createdAt: data.createdAt || new Date().toISOString()
-              };
+        setAuthStatus(AUTH_STATUS.LOADING);
+        const userCredential = await methods.signInWithEmailAndPassword(auth, email, password);
+        const user = userCredential.user;
 
-              if (profile.role === "worker") {
-                const workerDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "workers", user.uid));
-                if (workerDoc.exists()) {
-                  const wData = workerDoc.data();
-                  profile.service = wData.service || null;
-                  profile.experience = wData.experience || null;
-                  profile.availability = wData.availability || "Available";
-                  profile.isVerified = Boolean(wData.isVerified);
-                  profile.status = wData.status || "pending";
-                } else {
-                  profile.status = "pending";
-                  profile.isVerified = false;
+        restoreBtn.updateText("Loading profile...");
+        setAuthFeedback("Loading your profile...", false);
+
+        let profile = getApplicationProfile(user.uid);
+
+        // Try fetching profile from Firestore
+        try {
+          const { db } = await initializeFirestoreClient();
+          const firestoreMethods = await getFirestoreMethods();
+          if (db && firestoreMethods && typeof firestoreMethods.getDoc === "function") {
+            const userDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "users", user.uid));
+            if (userDoc.exists()) {
+              const data = userDoc.data();
+              const role = isSupportedRole(data?.role) ? data.role : null;
+              if (role) {
+                profile = {
+                  role,
+                  name: data.name || user.displayName || (role === "worker" ? "Worker" : "Customer"),
+                  email: data.email || user.email,
+                  phone: data.phone || null,
+                  district: data.district || null,
+                  createdAt: data.createdAt || new Date().toISOString()
+                };
+
+                if (profile.role === "worker") {
+                  const workerDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "workers", user.uid));
+                  if (workerDoc.exists()) {
+                    const wData = workerDoc.data();
+                    profile.service = wData.service || null;
+                    profile.experience = wData.experience || null;
+                    profile.availability = wData.availability || "Available";
+                    profile.isVerified = Boolean(wData.isVerified);
+                    profile.status = wData.status || "pending";
+                  } else {
+                    profile.status = "pending";
+                    profile.isVerified = false;
+                  }
                 }
+              } else {
+                profile = null;
               }
             } else {
               profile = null;
             }
-          } else {
-            profile = null;
-          }
 
-          // Authoritative admin verification against /admins/{uid}
-          if (!profile || profile.role === "admin") {
-            try {
-              const adminDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "admins", user.uid));
-              if (adminDoc.exists()) {
-                const aData = adminDoc.data();
-                if (aData && aData.active === true && aData.role === "admin") {
-                  profile = {
-                    role: "admin",
-                    name: aData.displayName || profile?.name || user.displayName || "Platform Administrator",
-                    email: aData.email || user.email,
-                    phone: aData.phone || profile?.phone || null,
-                    district: aData.district || profile?.district || null,
-                    createdAt: aData.createdAt || profile?.createdAt || new Date().toISOString()
-                  };
+            // Authoritative admin verification against /admins/{uid}
+            if (!profile || profile.role === "admin") {
+              try {
+                const adminDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "admins", user.uid));
+                if (adminDoc.exists()) {
+                  const aData = adminDoc.data();
+                  if (aData && aData.active === true && aData.role === "admin") {
+                    profile = {
+                      role: "admin",
+                      name: aData.displayName || profile?.name || user.displayName || "Platform Administrator",
+                      email: aData.email || user.email,
+                      phone: aData.phone || profile?.phone || null,
+                      district: aData.district || profile?.district || null,
+                      createdAt: aData.createdAt || profile?.createdAt || new Date().toISOString()
+                    };
+                  } else if (profile?.role === "admin") {
+                    // User doc claimed admin role but /admins/{uid} is not active admin
+                    profile = null;
+                  }
                 } else if (profile?.role === "admin") {
-                  // User doc claimed admin role but /admins/{uid} is not active admin
+                  // User doc claimed admin role but no /admins/{uid} record exists
                   profile = null;
                 }
-              } else if (profile?.role === "admin") {
-                // User doc claimed admin role but no /admins/{uid} record exists
-                profile = null;
-              }
-            } catch (adminErr) {
-              if (profile?.role === "admin") {
-                profile = null;
+              } catch (adminErr) {
+                if (profile?.role === "admin") {
+                  profile = null;
+                }
               }
             }
           }
+        } catch (e) {
+          // Fallback to local profile cache only if it has a valid supported role
+          if (!profile?.role || !isSupportedRole(profile.role)) {
+            profile = null;
+          }
         }
-      } catch (e) {
-        // Fallback to local profile cache only if it has a valid supported role
-        if (!profile?.role || !isSupportedRole(profile.role)) {
-          profile = null;
-        }
-      }
 
-      if (!profile || !profile.role || !isSupportedRole(profile.role)) {
-        recordSecurityEvent("FIREBASE_AUTH_ERROR");
-        setAuthStatus(AUTH_STATUS.ERROR, "missing-profile");
-        if (typeof methods.signOut === "function") {
-          try {
-            await methods.signOut(auth);
-          } catch (_) {}
+        if (!profile || !profile.role || !isSupportedRole(profile.role)) {
+          recordSecurityEvent("FIREBASE_AUTH_ERROR");
+          setAuthStatus(AUTH_STATUS.ERROR, "missing-profile");
+          if (typeof methods.signOut === "function") {
+            try {
+              await methods.signOut(auth);
+            } catch (_) {}
+          }
+          clearCurrentUser();
+          updateAccountControls();
+          const errorMsg = "Account profile not found. Please contact support or register again.";
+          setAuthFeedback(errorMsg, true);
+          return { success: false, error: errorMsg };
         }
-        clearCurrentUser();
+
+        saveApplicationProfile(user.uid, {
+          ...profile,
+          emailVerified: Boolean(user.emailVerified),
+          authProvider: "firebase"
+        });
+
+        setCurrentUser({
+          id: user.uid,
+          firebaseUid: user.uid,
+          role: profile.role,
+          name: profile.name,
+          email: user.email,
+          phone: profile.phone || null,
+          district: profile.district || null,
+          service: profile.service || null,
+          experience: profile.experience || null,
+          availability: profile.availability || "Available",
+          workerId: profile.workerId || null,
+          emailVerified: Boolean(user.emailVerified),
+          isVerified: Boolean(profile.isVerified),
+          status: profile.status || (profile.role === "worker" ? "pending" : null),
+          authProvider: "firebase",
+          createdAt: profile.createdAt || new Date().toISOString()
+        });
+
         updateAccountControls();
-        const errorMsg = "Account profile not found. Please contact support or register again.";
-        setAuthFeedback(errorMsg, true);
-        return { success: false, error: errorMsg };
+        if (profile.role === "admin") {
+          closeModal("authModal");
+          openAdminDashboard();
+          setAuthFeedback("Signed in as Administrator.", false);
+        } else {
+          showAccountView();
+          setAuthFeedback("Signed in successfully.", false);
+        }
+        return { success: true };
+      } catch (error) {
+        recordSecurityEvent("FIREBASE_AUTH_ERROR");
+        setAuthStatus(AUTH_STATUS.ERROR, error?.code || "auth-error");
+        const safeMessage = mapFirebaseAuthError(error);
+        setAuthFeedback(safeMessage, true);
+        return { success: false, error: safeMessage };
       }
-
-      saveApplicationProfile(user.uid, {
-        ...profile,
-        emailVerified: Boolean(user.emailVerified),
-        authProvider: "firebase"
-      });
-
-      setCurrentUser({
-        id: user.uid,
-        firebaseUid: user.uid,
-        role: profile.role,
-        name: profile.name,
-        email: user.email,
-        phone: profile.phone || null,
-        district: profile.district || null,
-        service: profile.service || null,
-        experience: profile.experience || null,
-        availability: profile.availability || "Available",
-        workerId: profile.workerId || null,
-        emailVerified: Boolean(user.emailVerified),
-        isVerified: Boolean(profile.isVerified),
-        status: profile.status || (profile.role === "worker" ? "pending" : null),
-        authProvider: "firebase",
-        createdAt: profile.createdAt || new Date().toISOString()
-      });
-
-      updateAccountControls();
-      if (profile.role === "admin") {
-        closeModal("authModal");
-        openAdminDashboard();
-        setAuthFeedback("Signed in as Administrator.", false);
-      } else {
-        showAccountView();
-        setAuthFeedback("Signed in successfully.", false);
-      }
-      return { success: true };
-    } catch (error) {
-      recordSecurityEvent("FIREBASE_AUTH_ERROR");
-      setAuthStatus(AUTH_STATUS.ERROR, error?.code || "auth-error");
-      const safeMessage = mapFirebaseAuthError(error);
-      setAuthFeedback(safeMessage, true);
-      return { success: false, error: safeMessage };
     }
-  }
 
-  // If Firebase credentials are not yet configured
-  setAuthFeedback("Authentication service is temporarily unavailable. Please try again shortly.", true);
-  return {
-    success: false,
-    error: "Firebase Authentication credentials not configured."
-  };
+    // If Firebase credentials are not yet configured
+    setAuthFeedback("Authentication service is temporarily unavailable. Please try again shortly.", true);
+    return {
+      success: false,
+      error: "Firebase Authentication credentials not configured."
+    };
+  } finally {
+    restoreBtn();
+  }
 }
 
 /**
@@ -1140,8 +1190,10 @@ export async function signInUser({ email, password }) {
  */
 export async function resendVerificationEmail() {
   const user = getCurrentUser();
+  const resendBtn = typeof document !== "undefined" ? document.getElementById("authResendVerification") : null;
+  const feedback = typeof document !== "undefined" ? document.getElementById("authVerificationActionFeedback") : null;
+
   if (!user || user.authProvider !== "firebase") {
-    const feedback = document.getElementById("authVerificationActionFeedback");
     if (feedback) {
       setTextContent(feedback, "Verification email cannot be resent for this account.");
       feedback.hidden = false;
@@ -1149,34 +1201,50 @@ export async function resendVerificationEmail() {
     return false;
   }
 
-  const methods = await getFirebaseAuthMethods();
-  let auth = getFirebaseAuth();
-  if (!auth && isFirebaseConfigured()) {
-    const client = await initializeFirebaseClient();
-    auth = client?.auth;
-  }
-  if (methods && auth?.currentUser && typeof methods.sendEmailVerification === "function") {
-    try {
-      await methods.sendEmailVerification(auth.currentUser);
-      recordSecurityEvent("EMAIL_VERIFICATION_SENT");
-      const feedback = document.getElementById("authVerificationActionFeedback");
-      if (feedback) {
-        setTextContent(feedback, "Verification email resent! Check your inbox.");
-        feedback.hidden = false;
-      }
-      return true;
-    } catch (error) {
-      recordSecurityEvent("EMAIL_VERIFICATION_FAILED");
-      const feedback = document.getElementById("authVerificationActionFeedback");
-      if (feedback) {
-        setTextContent(feedback, mapFirebaseAuthError(error));
-        feedback.hidden = false;
-      }
-      return false;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    if (feedback) {
+      setTextContent(feedback, "Network connection error. Please reconnect to the internet.");
+      feedback.hidden = false;
     }
+    return false;
   }
 
-  return false;
+  const restoreBtn = setButtonLoading(resendBtn, "Sending email...");
+  if (feedback) {
+    setTextContent(feedback, "Sending verification email...");
+    feedback.hidden = false;
+  }
+
+  try {
+    const methods = await getFirebaseAuthMethods();
+    let auth = getFirebaseAuth();
+    if (!auth && isFirebaseConfigured()) {
+      const client = await initializeFirebaseClient();
+      auth = client?.auth;
+    }
+    if (methods && auth?.currentUser && typeof methods.sendEmailVerification === "function") {
+      try {
+        await methods.sendEmailVerification(auth.currentUser);
+        recordSecurityEvent("EMAIL_VERIFICATION_SENT");
+        if (feedback) {
+          setTextContent(feedback, "Verification email resent! Check your inbox.");
+          feedback.hidden = false;
+        }
+        return true;
+      } catch (error) {
+        recordSecurityEvent("EMAIL_VERIFICATION_FAILED");
+        if (feedback) {
+          setTextContent(feedback, mapFirebaseAuthError(error));
+          feedback.hidden = false;
+        }
+        return false;
+      }
+    }
+
+    return false;
+  } finally {
+    restoreBtn();
+  }
 }
 
 /**
@@ -1187,7 +1255,9 @@ export async function resendVerificationEmail() {
  */
 export async function refreshUserVerificationStatus() {
   const user = getCurrentUser();
-  const feedback = document.getElementById("authVerificationActionFeedback");
+  const refreshBtn = typeof document !== "undefined" ? document.getElementById("authRefreshVerification") : null;
+  const feedback = typeof document !== "undefined" ? document.getElementById("authVerificationActionFeedback") : null;
+
   if (!user || user.authProvider !== "firebase") {
     const msg = "Verification status cannot be checked for this account.";
     if (feedback) {
@@ -1197,76 +1267,95 @@ export async function refreshUserVerificationStatus() {
     return { success: false, verified: false, error: msg };
   }
 
-  const methods = await getFirebaseAuthMethods();
-  let auth = getFirebaseAuth();
-  if (!auth && isFirebaseConfigured()) {
-    const client = await initializeFirebaseClient();
-    auth = client?.auth;
-  }
-
-  if (methods && auth?.currentUser) {
-    try {
-      if (typeof methods.reload === "function") {
-        await methods.reload(auth.currentUser);
-      }
-      if (typeof methods.getIdToken === "function") {
-        await methods.getIdToken(auth.currentUser, true);
-      }
-
-      const isVerified = Boolean(auth.currentUser.emailVerified);
-
-      const existingProfile = getApplicationProfile(user.id);
-      saveApplicationProfile(user.id, {
-        ...(existingProfile || {}),
-        emailVerified: isVerified
-      });
-
-      setCurrentUser({
-        ...user,
-        emailVerified: isVerified
-      });
-
-      if (isVerified) {
-        try {
-          const { db } = await initializeFirestoreClient();
-          const firestoreMethods = await getFirestoreMethods();
-          if (db && firestoreMethods && typeof firestoreMethods.updateDoc === "function") {
-            const userDocRef = firestoreMethods.doc(db, "users", user.id);
-            await firestoreMethods.updateDoc(userDocRef, {
-              emailVerified: true,
-              updatedAt: new Date().toISOString()
-            });
-          }
-        } catch (dbErr) {
-          console.warn("[JKFixHub Auth] Firestore user verification sync notice:", dbErr?.message || dbErr);
-        }
-      }
-
-      recordSecurityEvent("AUTH_STATE_CHANGED", user.role);
-      updateAccountControls();
-      showAccountView(true);
-
-      const msg = isVerified
-        ? "✓ Email verified successfully!"
-        : "Email is not verified yet. Please check your inbox and click the verification link, then check status again.";
-      if (feedback) {
-        setTextContent(feedback, msg);
-        feedback.hidden = false;
-      }
-
-      return { success: true, verified: isVerified, message: msg };
-    } catch (error) {
-      recordSecurityEvent("FIREBASE_AUTH_ERROR", user.role);
-      const safeMessage = mapFirebaseAuthError(error);
-      if (feedback) {
-        setTextContent(feedback, safeMessage);
-        feedback.hidden = false;
-      }
-      return { success: false, verified: false, error: safeMessage };
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    const errorMsg = "Network connection error. Please reconnect to the internet.";
+    if (feedback) {
+      setTextContent(feedback, errorMsg);
+      feedback.hidden = false;
     }
+    return { success: false, verified: false, error: errorMsg };
   }
 
-  return { success: false, verified: false, error: "Auth service unavailable." };
+  const restoreBtn = setButtonLoading(refreshBtn, "Checking status...");
+  if (feedback) {
+    setTextContent(feedback, "Checking verification status with Firebase...");
+    feedback.hidden = false;
+  }
+
+  try {
+    const methods = await getFirebaseAuthMethods();
+    let auth = getFirebaseAuth();
+    if (!auth && isFirebaseConfigured()) {
+      const client = await initializeFirebaseClient();
+      auth = client?.auth;
+    }
+
+    if (methods && auth?.currentUser) {
+      try {
+        if (typeof methods.reload === "function") {
+          await methods.reload(auth.currentUser);
+        }
+        if (typeof methods.getIdToken === "function") {
+          await methods.getIdToken(auth.currentUser, true);
+        }
+
+        const isVerified = Boolean(auth.currentUser.emailVerified);
+
+        const existingProfile = getApplicationProfile(user.id);
+        saveApplicationProfile(user.id, {
+          ...(existingProfile || {}),
+          emailVerified: isVerified
+        });
+
+        setCurrentUser({
+          ...user,
+          emailVerified: isVerified
+        });
+
+        if (isVerified) {
+          try {
+            const { db } = await initializeFirestoreClient();
+            const firestoreMethods = await getFirestoreMethods();
+            if (db && firestoreMethods && typeof firestoreMethods.updateDoc === "function") {
+              const userDocRef = firestoreMethods.doc(db, "users", user.id);
+              await firestoreMethods.updateDoc(userDocRef, {
+                emailVerified: true,
+                updatedAt: new Date().toISOString()
+              });
+            }
+          } catch (dbErr) {
+            console.warn("[JKFixHub Auth] Firestore user verification sync notice:", dbErr?.message || dbErr);
+          }
+        }
+
+        recordSecurityEvent("AUTH_STATE_CHANGED", user.role);
+        updateAccountControls();
+        showAccountView(true);
+
+        const msg = isVerified
+          ? "✓ Email verified successfully!"
+          : "Email is not verified yet. Please check your inbox and click the verification link, then check status again.";
+        if (feedback) {
+          setTextContent(feedback, msg);
+          feedback.hidden = false;
+        }
+
+        return { success: true, verified: isVerified, message: msg };
+      } catch (error) {
+        recordSecurityEvent("FIREBASE_AUTH_ERROR", user.role);
+        const safeMessage = mapFirebaseAuthError(error);
+        if (feedback) {
+          setTextContent(feedback, safeMessage);
+          feedback.hidden = false;
+        }
+        return { success: false, verified: false, error: safeMessage };
+      }
+    }
+
+    return { success: false, verified: false, error: "Auth service unavailable." };
+  } finally {
+    restoreBtn();
+  }
 }
 
 /**
@@ -1334,18 +1423,21 @@ export async function handlePasswordResetSubmit(email) {
     return { success: false, error: errorMsg };
   }
 
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    const errorMsg = "Network connection error. Please check your internet connection and try again.";
+    setAuthFeedback(errorMsg, true);
+    return { success: false, error: errorMsg };
+  }
+
   const submitBtn = document.getElementById("authPasswordResetSubmit");
   const emailInput = document.getElementById("authPasswordResetEmail");
-  const originalBtnText = submitBtn?.textContent || "Send Reset Link";
+  const restoreBtn = setButtonLoading(submitBtn, "Sending Reset Link...");
 
   isResettingPassword = true;
-  if (submitBtn) {
-    submitBtn.disabled = true;
-    setTextContent(submitBtn, "Sending Reset Link...");
-  }
   if (emailInput) {
     emailInput.disabled = true;
   }
+  setAuthFeedback("Sending password reset email...", false);
 
   try {
     const result = await sendPasswordReset(trimmedEmail);
@@ -1366,10 +1458,7 @@ export async function handlePasswordResetSubmit(email) {
     return { success: false, error: safeError };
   } finally {
     isResettingPassword = false;
-    if (submitBtn) {
-      submitBtn.disabled = false;
-      setTextContent(submitBtn, originalBtnText);
-    }
+    restoreBtn();
     if (emailInput) {
       emailInput.disabled = false;
     }
@@ -1383,25 +1472,34 @@ export async function signOutUser() {
   const role = getUserRole();
   recordSecurityEvent("LOGOUT", role);
 
-  const methods = await getFirebaseAuthMethods();
-  let auth = getFirebaseAuth();
-  if (!auth && isFirebaseConfigured()) {
-    const client = await initializeFirebaseClient();
-    auth = client?.auth;
-  }
-  if (methods && auth && typeof methods.signOut === "function") {
-    try {
-      await methods.signOut(auth);
-    } catch {
-      // Clean up locally regardless
-    }
-  }
+  const logoutBtns = typeof document !== "undefined"
+    ? [document.getElementById("authLogout"), document.getElementById("authLogoutFromDashboard"), document.getElementById("adminLogoutButton")].filter(Boolean)
+    : [];
+  const restores = logoutBtns.map((btn) => setButtonLoading(btn, "Signing out..."));
 
-  demoLogout();
-  updateAccountControls();
-  clearAuthHash();
-  showSignedOutView(false);
-  setAuthFeedback("Signed out.", false);
+  try {
+    const methods = await getFirebaseAuthMethods();
+    let auth = getFirebaseAuth();
+    if (!auth && isFirebaseConfigured()) {
+      const client = await initializeFirebaseClient();
+      auth = client?.auth;
+    }
+    if (methods && auth && typeof methods.signOut === "function") {
+      try {
+        await methods.signOut(auth);
+      } catch {
+        // Clean up locally regardless
+      }
+    }
+
+    demoLogout();
+    updateAccountControls();
+    clearAuthHash();
+    showSignedOutView(false);
+    setAuthFeedback("Signed out.", false);
+  } finally {
+    restores.forEach((r) => r());
+  }
 }
 
 /**
@@ -2000,128 +2098,142 @@ export async function saveCustomerProfile({ name, email, phone, district }) {
   const trimmedEmail = email.trim();
   const trimmedPhone = phone.trim();
 
-  // If Firebase-authenticated user
-  if (user.authProvider === "firebase" && user.id) {
-    try {
-      const { auth } = await initializeFirebaseClient();
-      const methods = await getFirebaseAuthMethods();
-
-      // Check if email changed
-      if (auth?.currentUser && trimmedEmail !== user.email) {
-        try {
-          if (typeof methods?.verifyBeforeUpdateEmail === "function") {
-            await methods.verifyBeforeUpdateEmail(auth.currentUser, trimmedEmail);
-          } else if (typeof methods?.updateEmail === "function") {
-            await methods.updateEmail(auth.currentUser, trimmedEmail);
-          }
-        } catch (emailErr) {
-          recordSecurityEvent("EMAIL_UPDATE_ERROR", "customer");
-          let safeMsg = "Failed to update email address.";
-          if (emailErr.code === "auth/requires-recent-login") {
-            safeMsg = "Updating your email requires recent authentication. Please sign out and sign in again before changing your email.";
-          } else if (emailErr.code === "auth/email-already-in-use") {
-            safeMsg = "That email address is already in use by another account.";
-          } else if (emailErr.code === "auth/invalid-email") {
-            safeMsg = "The email address format is invalid.";
-          }
-          setFeedback(safeMsg, true);
-          return { success: false, error: safeMsg };
-        }
-      }
-
-      // Update displayName
-      if (auth?.currentUser && typeof methods?.updateProfile === "function" && trimmedName !== user.name) {
-        try {
-          await methods.updateProfile(auth.currentUser, { displayName: trimmedName });
-        } catch (nameErr) {
-          console.warn("[JKFixHub Auth] updateProfile notice:", nameErr?.message || nameErr);
-        }
-      }
-
-      // Sync Firestore /users/{uid}
-      try {
-        const { db } = await initializeFirestoreClient();
-        const firestoreMethods = await getFirestoreMethods();
-        if (db && firestoreMethods && typeof firestoreMethods.updateDoc === "function") {
-          const userDocRef = firestoreMethods.doc(db, "users", user.id);
-          await firestoreMethods.updateDoc(userDocRef, {
-            name: trimmedName,
-            email: trimmedEmail,
-            phone: trimmedPhone,
-            district,
-            updatedAt: new Date().toISOString()
-          });
-        }
-      } catch (firestoreErr) {
-        console.warn("[JKFixHub Auth] Firestore user profile sync error:", firestoreErr?.message || firestoreErr);
-        setFeedback("Failed to update profile in database.", true);
-        return { success: false, error: "Database update failed." };
-      }
-
-      // Update state
-      saveApplicationProfile(user.id, {
-        role: "customer",
-        name: trimmedName,
-        email: trimmedEmail,
-        phone: trimmedPhone,
-        district,
-        emailVerified: user.emailVerified,
-        isVerified: false,
-        authProvider: "firebase",
-        createdAt: user.createdAt
-      });
-
-      setCurrentUser({
-        ...user,
-        name: trimmedName,
-        email: trimmedEmail,
-        phone: trimmedPhone,
-        district
-      });
-
-      recordSecurityEvent("PROFILE_UPDATED", "customer");
-      updateAccountControls();
-      closeModal("customerProfileEditModal");
-      showAccountView(true);
-      setAccountFeedback("Profile updated successfully!", false);
-      openModal("authModal");
-      return { success: true };
-    } catch (err) {
-      recordSecurityEvent("FIREBASE_AUTH_ERROR", "customer");
-      const safeMessage = mapFirebaseAuthError(err);
-      setFeedback(safeMessage, true);
-      return { success: false, error: safeMessage };
-    }
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    const errorMsg = "Network connection error. Please check your internet connection and try again.";
+    setFeedback(errorMsg, true);
+    return { success: false, error: errorMsg };
   }
 
-  // Session / Demo mode fallback
-  saveApplicationProfile(user.id, {
-    role: "customer",
-    name: trimmedName,
-    email: trimmedEmail,
-    phone: trimmedPhone,
-    district,
-    emailVerified: Boolean(user.emailVerified),
-    isVerified: false,
-    authProvider: user.authProvider || "demo",
-    createdAt: user.createdAt || new Date().toISOString()
-  });
+  const submitBtn = typeof document !== "undefined" ? document.getElementById("saveCustomerProfileBtn") : null;
+  const restoreBtn = setButtonLoading(submitBtn, "Saving changes...");
+  setFeedback("Saving your profile changes...", false);
 
-  setCurrentUser({
-    ...user,
-    name: trimmedName,
-    email: trimmedEmail,
-    phone: trimmedPhone,
-    district
-  });
+  try {
+    // If Firebase-authenticated user
+    if (user.authProvider === "firebase" && user.id) {
+      try {
+        const { auth } = await initializeFirebaseClient();
+        const methods = await getFirebaseAuthMethods();
 
-  recordSecurityEvent("PROFILE_UPDATED", "customer");
-  updateAccountControls();
-  closeModal("customerProfileEditModal");
-  showAccountView(true);
-  setAccountFeedback("Profile updated successfully!", false);
-  openModal("authModal");
-  return { success: true };
+        // Check if email changed
+        if (auth?.currentUser && trimmedEmail !== user.email) {
+          try {
+            if (typeof methods?.verifyBeforeUpdateEmail === "function") {
+              await methods.verifyBeforeUpdateEmail(auth.currentUser, trimmedEmail);
+            } else if (typeof methods?.updateEmail === "function") {
+              await methods.updateEmail(auth.currentUser, trimmedEmail);
+            }
+          } catch (emailErr) {
+            recordSecurityEvent("EMAIL_UPDATE_ERROR", "customer");
+            let safeMsg = "Failed to update email address.";
+            if (emailErr.code === "auth/requires-recent-login") {
+              safeMsg = "Updating your email requires recent authentication. Please sign out and sign in again before changing your email.";
+            } else if (emailErr.code === "auth/email-already-in-use") {
+              safeMsg = "That email address is already in use by another account.";
+            } else if (emailErr.code === "auth/invalid-email") {
+              safeMsg = "The email address format is invalid.";
+            }
+            setFeedback(safeMsg, true);
+            return { success: false, error: safeMsg };
+          }
+        }
+
+        // Update displayName
+        if (auth?.currentUser && typeof methods?.updateProfile === "function" && trimmedName !== user.name) {
+          try {
+            await methods.updateProfile(auth.currentUser, { displayName: trimmedName });
+          } catch (nameErr) {
+            console.warn("[JKFixHub Auth] updateProfile notice:", nameErr?.message || nameErr);
+          }
+        }
+
+        // Sync Firestore /users/{uid}
+        try {
+          const { db } = await initializeFirestoreClient();
+          const firestoreMethods = await getFirestoreMethods();
+          if (db && firestoreMethods && typeof firestoreMethods.updateDoc === "function") {
+            const userDocRef = firestoreMethods.doc(db, "users", user.id);
+            await firestoreMethods.updateDoc(userDocRef, {
+              name: trimmedName,
+              email: trimmedEmail,
+              phone: trimmedPhone,
+              district,
+              updatedAt: new Date().toISOString()
+            });
+          }
+        } catch (firestoreErr) {
+          console.warn("[JKFixHub Auth] Firestore user profile sync error:", firestoreErr?.message || firestoreErr);
+          setFeedback("Failed to update profile in database.", true);
+          return { success: false, error: "Database update failed." };
+        }
+
+        // Update state
+        saveApplicationProfile(user.id, {
+          role: "customer",
+          name: trimmedName,
+          email: trimmedEmail,
+          phone: trimmedPhone,
+          district,
+          emailVerified: user.emailVerified,
+          isVerified: false,
+          authProvider: "firebase",
+          createdAt: user.createdAt
+        });
+
+        setCurrentUser({
+          ...user,
+          name: trimmedName,
+          email: trimmedEmail,
+          phone: trimmedPhone,
+          district
+        });
+
+        recordSecurityEvent("PROFILE_UPDATED", "customer");
+        updateAccountControls();
+        closeModal("customerProfileEditModal");
+        showAccountView(true);
+        setAccountFeedback("Profile updated successfully!", false);
+        openModal("authModal");
+        return { success: true };
+      } catch (err) {
+        recordSecurityEvent("FIREBASE_AUTH_ERROR", "customer");
+        const safeMessage = mapFirebaseAuthError(err);
+        setFeedback(safeMessage, true);
+        return { success: false, error: safeMessage };
+      }
+    }
+
+    // Session / Demo mode fallback
+    saveApplicationProfile(user.id, {
+      role: "customer",
+      name: trimmedName,
+      email: trimmedEmail,
+      phone: trimmedPhone,
+      district,
+      emailVerified: Boolean(user.emailVerified),
+      isVerified: false,
+      authProvider: user.authProvider || "demo",
+      createdAt: user.createdAt || new Date().toISOString()
+    });
+
+    setCurrentUser({
+      ...user,
+      name: trimmedName,
+      email: trimmedEmail,
+      phone: trimmedPhone,
+      district
+    });
+
+    recordSecurityEvent("PROFILE_UPDATED", "customer");
+    updateAccountControls();
+    closeModal("customerProfileEditModal");
+    showAccountView(true);
+    setAccountFeedback("Profile updated successfully!", false);
+    openModal("authModal");
+    return { success: true };
+  } finally {
+    restoreBtn();
+  }
 }
 
 /**

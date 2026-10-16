@@ -272,6 +272,9 @@ export function validatePassword(password, confirmPassword = null) {
 }
 
 export function mapFirebaseAuthError(error) {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return "Network connection error. Please check your internet connection and try again.";
+  }
   const code = error?.code || "";
   switch (code) {
     case "auth/invalid-credential":
@@ -287,7 +290,8 @@ export function mapFirebaseAuthError(error) {
     case "auth/too-many-requests":
       return "Too many attempts. Please try again later.";
     case "auth/network-request-failed":
-      return "Network connection error. Please try again.";
+    case "unavailable":
+      return "Network connection error. Please check your internet connection and try again.";
     case "auth/user-disabled":
       return "This account has been disabled.";
     case "auth/requires-recent-login":
@@ -297,6 +301,9 @@ export function mapFirebaseAuthError(error) {
     default:
       if (typeof error?.message === "string" && error.message.startsWith("SAFE:")) {
         return error.message.replace("SAFE:", "").trim();
+      }
+      if (typeof error?.message === "string" && /network|offline|failed to fetch/i.test(error.message)) {
+        return "Network connection error. Please check your internet connection and try again.";
       }
       return "Authentication could not be completed. Please try again.";
   }
@@ -327,7 +334,121 @@ export function getSafeErrorMessage(code) {
     invalidDistrict: "Please choose a valid district.",
     invalidPhone: "Please enter a valid phone number (at least 7 digits).",
     invalidExperience: "Please enter your experience (e.g. 5 years).",
-    firebaseNotConfigured: "Firebase Authentication is in preview/demo mode."
+    firebaseNotConfigured: "Firebase Authentication is in preview/demo mode.",
+    networkError: "Network connection error. Please check your internet connection and try again.",
+    offline: "You are currently offline. Please reconnect to the internet and try again."
   };
   return messages[code] || "Something went wrong. Please try again.";
 }
+
+/**
+ * Sets a button into an accessible loading state with an inline spinner and custom text.
+ * Returns a callable restore function (also with .updateText(text) and .restore()) to revert state.
+ *
+ * @param {HTMLElement|null} button The button element to toggle.
+ * @param {string} loadingText The loading announcement / visual text.
+ * @returns {Function} Callable restore function with .updateText() method.
+ */
+export function setButtonLoading(button, loadingText = "Loading...") {
+  const noop = () => {};
+  noop.updateText = () => {};
+  noop.restore = () => {};
+
+  if (!button || typeof button !== "object") {
+    return noop;
+  }
+
+  const originalDisabled = Boolean(button.disabled);
+  const originalHtml = typeof button.innerHTML === "string" ? button.innerHTML : "";
+  const originalTextContent = typeof button.textContent === "string" ? button.textContent : "";
+  const originalAriaBusy = typeof button.getAttribute === "function" ? button.getAttribute("aria-busy") : null;
+  const originalAriaLabel = typeof button.getAttribute === "function" ? button.getAttribute("aria-label") : null;
+
+  try {
+    button.disabled = true;
+    if (typeof button.setAttribute === "function") {
+      button.setAttribute("aria-busy", "true");
+    }
+    if (button.classList && typeof button.classList.add === "function") {
+      button.classList.add("is-loading");
+    }
+
+    const safeText = String(loadingText).replace(/[&<>"']/g, (m) => {
+      switch (m) {
+        case "&": return "&amp;";
+        case "<": return "&lt;";
+        case ">": return "&gt;";
+        case '"': return "&quot;";
+        case "'": return "&#039;";
+        default: return m;
+      }
+    });
+
+    button.innerHTML = `<span class="btn-spinner" aria-hidden="true"></span><span class="btn-loading-text">${safeText}</span>`;
+    // For mock environments without HTML parser where innerHTML does not create children or update textContent
+    if (!button.children || button.children.length === 0) {
+      button.textContent = loadingText;
+    }
+  } catch (_) {}
+
+  let isRestored = false;
+  function restore() {
+    if (isRestored) return;
+    isRestored = true;
+
+    try {
+      button.disabled = originalDisabled;
+      if (typeof button.setAttribute === "function") {
+        if (originalAriaBusy !== null) {
+          button.setAttribute("aria-busy", originalAriaBusy);
+        } else if (typeof button.removeAttribute === "function") {
+          button.removeAttribute("aria-busy");
+        }
+
+        if (originalAriaLabel !== null) {
+          button.setAttribute("aria-label", originalAriaLabel);
+        } else if (typeof button.removeAttribute === "function") {
+          button.removeAttribute("aria-label");
+        }
+      }
+
+      if (button.classList && typeof button.classList.remove === "function") {
+        button.classList.remove("is-loading");
+      }
+
+      button.innerHTML = originalHtml;
+      if (!button.children || button.children.length === 0) {
+        button.textContent = originalTextContent;
+      }
+    } catch (_) {}
+  }
+
+  restore.updateText = function (newText) {
+    if (isRestored) return;
+    try {
+      const textSpan = typeof button.querySelector === "function" ? button.querySelector(".btn-loading-text") : null;
+      if (textSpan) {
+        textSpan.textContent = String(newText);
+      } else {
+        const safeText = String(newText).replace(/[&<>"']/g, (m) => {
+          switch (m) {
+            case "&": return "&amp;";
+            case "<": return "&lt;";
+            case ">": return "&gt;";
+            case '"': return "&quot;";
+            case "'": return "&#039;";
+            default: return m;
+          }
+        });
+        button.innerHTML = `<span class="btn-spinner" aria-hidden="true"></span><span class="btn-loading-text">${safeText}</span>`;
+        if (!button.children || button.children.length === 0) {
+          button.textContent = String(newText);
+        }
+      }
+    } catch (_) {}
+  };
+
+  restore.restore = restore;
+  return restore;
+}
+

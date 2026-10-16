@@ -5617,3 +5617,100 @@ body #webgl-background {
   }
 }
 
+/* ==========================================
+   #CONNECTION_STATUS_BANNER
+   ==========================================
+*/
+.connection-status-banner {
+  position: sticky;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 18px;
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-align: center;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.connection-status-banner.is-offline {
+  background: #fee2e2;
+  color: #991b1b;
+  border-bottom: 1px solid #fca5a5;
+}
+
+.connection-status-banner.is-online {
+  background: #ecfdf5;
+  color: #065f46;
+  border-bottom: 1px solid #a7f3d0;
+}
+
+.connection-status-banner[hidden] {
+  display: none !important;
+}
+
+.connection-status-icon {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.connection-status-banner.is-offline .connection-status-icon {
+  background: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.2);
+}
+
+.connection-status-banner.is-online .connection-status-icon {
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+}
+
+/* ==========================================
+   #BUTTON_LOADING_AND_FEEDBACK
+   ==========================================
+*/
+.button.is-loading,
+button.is-loading {
+  position: relative;
+  cursor: not-allowed !important;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.btn-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: btnSpinnerRotate 0.65s linear infinite;
+}
+
+.btn-loading-text {
+  display: inline;
+}
+
+@keyframes btnSpinnerRotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-spinner {
+    animation-duration: 2s;
+    opacity: 0.7;
+  }
+}
+
+

@@ -12,7 +12,7 @@ import {
 } from "./store.js";
 import { openCustomerRequests } from "./customer-requests.js";
 import { openWorkerDashboard } from "./worker-dashboard.js";
-import { recordSecurityEvent, setTextContent, validateText } from "./security.js";
+import { recordSecurityEvent, setTextContent, validateText, setButtonLoading } from "./security.js";
 import {
   getFirestoreRequestById,
   getOrCreateFirestoreConversation,
@@ -289,6 +289,14 @@ async function sendChatMessage(rawText) {
     return;
   }
 
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    setChatFeedback("Network connection error. You are offline.");
+    return;
+  }
+
+  const sendBtn = document.querySelector("#chatForm button[type='submit']");
+  const restoreBtn = setButtonLoading(sendBtn, "Sending...");
+
   const currentUser = getCurrentUser();
   const currentUid = currentUser?.firebaseUid || currentUser?.id;
   const senderRole = getUserRole();
@@ -297,23 +305,30 @@ async function sendChatMessage(rawText) {
   if (input) input.value = "";
   updateMessageCounter();
 
-  const result = await sendFirestoreChatMessage({
-    chatId: currentChatConversation.id,
-    text: cleanText,
-    senderUid: currentUid,
-    senderName: currentUser?.name || (senderRole === "worker" ? "Worker" : "Customer"),
-    senderRole
-  });
+  try {
+    const result = await sendFirestoreChatMessage({
+      chatId: currentChatConversation.id,
+      text: cleanText,
+      senderUid: currentUid,
+      senderName: currentUser?.name || (senderRole === "worker" ? "Worker" : "Customer"),
+      senderRole
+    });
 
-  if (!result?.success) {
-    setChatFeedback(result?.error || getChatError());
+    if (!result?.success) {
+      setChatFeedback(result?.error || getChatError());
+      if (input) input.value = cleanText;
+      updateMessageCounter();
+    } else {
+      setChatFeedback("");
+    }
+  } catch (err) {
+    setChatFeedback("Failed to send message. Please try again.");
     if (input) input.value = cleanText;
     updateMessageCounter();
-  } else {
-    setChatFeedback("");
+  } finally {
+    restoreBtn();
+    if (input) input.focus();
   }
-
-  if (input) input.focus();
 }
 
 function sendMessage(event) {

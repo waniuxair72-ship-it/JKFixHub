@@ -31,7 +31,8 @@ import {
   validatePhone,
   validateText,
   SUPPORTED_SERVICES,
-  validateService
+  validateService,
+  setButtonLoading
 } from "./security.js";
 import {
   initializeFirebaseClient,
@@ -378,8 +379,15 @@ export async function loadAndRenderWorkerRequests(worker) {
   renderWorkerRequestsList(requests, worker);
 }
 
-async function handleWorkerRequestAction(requestId, newStatus, worker) {
+async function handleWorkerRequestAction(requestId, newStatus, worker, actionButton = null) {
   const feedbackEl = document.getElementById("workerDashboardFeedback");
+
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    if (feedbackEl) setTextContent(feedbackEl, "Network connection error. Please check your internet connection and try again.");
+    return;
+  }
+
+  const restoreBtn = actionButton ? setButtonLoading(actionButton, `${newStatus}...`) : () => {};
   if (feedbackEl) setTextContent(feedbackEl, `Updating request to ${newStatus}...`);
 
   try {
@@ -401,6 +409,8 @@ async function handleWorkerRequestAction(requestId, newStatus, worker) {
     if (feedbackEl) {
       setTextContent(feedbackEl, "An error occurred while updating the request.");
     }
+  } finally {
+    restoreBtn();
   }
 }
 
@@ -584,8 +594,18 @@ async function handleProfileSave(event) {
   const selectedExperience = experience.value.trim();
   const selectedAvailability = availability.value;
 
-  // Firebase auth & firestore sync
-  if (user?.authProvider === "firebase" && user.id) {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    setFeedback("Network connection error. Please check your internet connection and try again.", true);
+    return;
+  }
+
+  const saveBtn = document.getElementById("saveWorkerProfileBtn");
+  const restoreBtn = setButtonLoading(saveBtn, "Saving changes...");
+  setFeedback("Saving your profile changes...", false);
+
+  try {
+    // Firebase auth & firestore sync
+    if (user?.authProvider === "firebase" && user.id) {
     try {
       const { auth } = await initializeFirebaseClient();
       const methods = await getFirebaseAuthMethods();
@@ -714,6 +734,9 @@ async function handleProfileSave(event) {
     openModal("authModal");
     openWorkerDashboard();
   }
+  } finally {
+    restoreBtn();
+  }
 }
 
 export function openWorkerDashboard() {
@@ -795,7 +818,7 @@ export function initializeWorkerDashboard() {
         parent.querySelectorAll("button").forEach((btn) => { btn.disabled = true; });
       }
 
-      handleWorkerRequestAction(requestId, newStatus, worker);
+      handleWorkerRequestAction(requestId, newStatus, worker, workerActionButton);
       return;
     }
 
@@ -813,7 +836,7 @@ export function initializeWorkerDashboard() {
       const worker = getActiveWorker();
       if (worker && requestId) {
         completeButton.disabled = true;
-        handleWorkerRequestAction(requestId, "Completed", worker);
+        handleWorkerRequestAction(requestId, "Completed", worker, completeButton);
       }
     }
   });

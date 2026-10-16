@@ -33,7 +33,8 @@ import {
   validatePersonName,
   workerMatchesService,
   areServicesEquivalent,
-  normalizeService
+  normalizeService,
+  setButtonLoading
 } from "./security.js";
 
 const markupPattern = /<\s*\/?\s*[a-z!][^>]*>/i;
@@ -427,12 +428,25 @@ export function initializeRequestFlow() {
       return;
     }
 
+    if (currentUser.authProvider === "firebase" && !currentUser.emailVerified) {
+      recordSecurityEvent("UNAUTHORIZED_UI_ACTION", currentUser.role);
+      setRequestFeedback(
+        "Please verify your email address before submitting service requests. Check your inbox or visit your profile to check verification status.",
+        true,
+        false
+      );
+      return;
+    }
+
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      const offlineMsg = "Network connection error. Please check your internet connection and try again.";
+      setRequestFeedback(offlineMsg, true, false);
+      return;
+    }
+
     isSubmitting = true;
     const submitBtn = form.querySelector('button[type="submit"]');
-    if (submitBtn) {
-      submitBtn.disabled = true;
-      setTextContent(submitBtn, "Sending Request...");
-    }
+    const restoreBtn = setButtonLoading(submitBtn, "Sending Request...");
     setRequestFeedback("");
 
     const workerUid = worker.workerUid || worker.uid || String(worker.id);
@@ -473,15 +487,15 @@ export function initializeRequestFlow() {
       showRequestSuccess(submittedRequest);
     } catch (err) {
       console.error("[JKFixHub Request] Error creating request:", err);
-      const errMsg = "Failed to send request. Please try again.";
+      const isNetwork = (typeof navigator !== "undefined" && navigator.onLine === false) || err?.code === "unavailable";
+      const errMsg = isNetwork
+        ? "Network connection error. Please check your internet connection and try again."
+        : "Failed to send request. Please try again.";
       setRequestFeedback(errMsg, true, false);
       setFieldError(requestDescription, errMsg, descriptionError);
     } finally {
       isSubmitting = false;
-      if (submitBtn) {
-        submitBtn.disabled = false;
-        setTextContent(submitBtn, "Send Request");
-      }
+      restoreBtn();
     }
   });
 
