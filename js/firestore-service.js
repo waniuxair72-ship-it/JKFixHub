@@ -513,6 +513,7 @@ export async function getAdminCustomers() {
           uid: data.uid || doc.id,
           name: data.name || "Customer",
           email: data.email || null,
+          phone: data.phone || null,
           emailVerified: Boolean(data.emailVerified),
           district: data.district || null,
           createdAt: data.createdAt || null
@@ -523,6 +524,87 @@ export async function getAdminCustomers() {
   } catch (err) {
     console.warn("[JKFixHub Admin] Customers fetch failed:", err?.message || err);
     return [];
+  }
+}
+
+let activeAdminCustomersUnsub = null;
+
+/**
+ * Subscribes to real-time customer account updates for administration via /users collection.
+ *
+ * @param {Function} onUpdate - Callback with Array of customer objects.
+ * @param {Function} [onError] - Callback on error.
+ * @returns {Promise<Function>} Unsubscribe function.
+ */
+export async function subscribeToAdminCustomers(onUpdate, onError) {
+  if (typeof onUpdate !== "function") return () => {};
+  if (!isSessionAuthorizedAdmin()) {
+    if (typeof onError === "function") onError(new Error("Unauthorized admin access."));
+    return () => {};
+  }
+
+  if (typeof activeAdminCustomersUnsub === "function") {
+    try { activeAdminCustomersUnsub(); } catch (_) {}
+    activeAdminCustomersUnsub = null;
+  }
+
+  let isCleanedUp = false;
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.collection !== "function" || typeof methods.onSnapshot !== "function") {
+      return () => {};
+    }
+
+    const usersCol = methods.collection(db, "users");
+    const actualUnsubscribe = methods.onSnapshot(
+      usersCol,
+      (snapshot) => {
+        if (isCleanedUp || !snapshot) return;
+        const customers = [];
+        if (typeof snapshot.forEach === "function") {
+          snapshot.forEach((doc) => {
+            const data = typeof doc.data === "function" ? doc.data() : doc;
+            if (data && data.role === "customer") {
+              customers.push({
+                id: doc.id,
+                uid: data.uid || doc.id,
+                name: data.name || "Customer",
+                email: data.email || null,
+                phone: data.phone || null,
+                emailVerified: Boolean(data.emailVerified),
+                district: data.district || null,
+                createdAt: data.createdAt || null
+              });
+            }
+          });
+        }
+        onUpdate(customers);
+      },
+      (err) => {
+        if (!isCleanedUp) {
+          console.warn("[JKFixHub Admin] Customer realtime listener notice:", err?.message || err);
+          if (typeof onError === "function") onError(err);
+        }
+      }
+    );
+
+    const unsub = () => {
+      isCleanedUp = true;
+      if (activeAdminCustomersUnsub === unsub) {
+        activeAdminCustomersUnsub = null;
+      }
+      if (typeof actualUnsubscribe === "function") {
+        try { actualUnsubscribe(); } catch (_) {}
+      }
+    };
+
+    activeAdminCustomersUnsub = unsub;
+    return unsub;
+  } catch (err) {
+    console.warn("[JKFixHub Admin] Failed to subscribe to customers:", err?.message || err);
+    if (typeof onError === "function") onError(err);
+    return () => {};
   }
 }
 
@@ -1806,6 +1888,11 @@ export function unsubscribeAllFirestoreListeners() {
     }
   }
   activeWorkerSubscriptions.clear();
+
+  if (typeof activeAdminCustomersUnsub === "function") {
+    try { activeAdminCustomersUnsub(); } catch (_) {}
+    activeAdminCustomersUnsub = null;
+  }
 }
 
 // ==========================================

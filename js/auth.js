@@ -42,7 +42,8 @@ import {
   mapFirebaseAuthError,
   getSafeErrorMessage,
   validateService,
-  setButtonLoading
+  setButtonLoading,
+  normalizePhoneNumber
 } from "./security.js";
 import {
   initializeFirebaseClient,
@@ -84,6 +85,24 @@ let initialized = false;
 let activeAuthTab = "signin";
 let pendingRegistrationUid = null;
 let pendingRegistrationEmail = null;
+let customerVerificationDismissed = false;
+
+try {
+  if (typeof sessionStorage !== "undefined" && sessionStorage.getItem("jk_dismiss_verification_customer") === "true") {
+    customerVerificationDismissed = true;
+  }
+} catch (_) {}
+
+export function dismissCustomerVerificationReminder() {
+  customerVerificationDismissed = true;
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.setItem("jk_dismiss_verification_customer", "true");
+    }
+  } catch (_) {}
+  const notice = document.getElementById("authEmailVerificationNotice");
+  if (notice) notice.hidden = true;
+}
 
 /**
  * Returns the UID currently undergoing registration/recovery, if any.
@@ -321,6 +340,12 @@ export function showCustomerRegister() {
   if (signInPanel) signInPanel.hidden = true;
   if (custPanel) {
     custPanel.hidden = false;
+    const phoneContainer = document.getElementById("authCustomerPhoneContainer");
+    if (phoneContainer) phoneContainer.hidden = true;
+    const phoneToggleBtn = document.getElementById("authCustomerTogglePhoneBtn");
+    if (phoneToggleBtn) phoneToggleBtn.hidden = false;
+    const phoneInput = document.getElementById("authCustomerPhone");
+    if (phoneInput) phoneInput.value = "";
     document.getElementById("authCustomerName")?.focus();
   }
   if (wrkPanel) wrkPanel.hidden = true;
@@ -416,10 +441,11 @@ export function switchAuthTab(tabName) {
 }
 
 /**
- * Registers a new Customer using full profile attributes:
- * name, email, phone, district, password, confirmPassword.
+ * Customer registration handler.
+ * Accepts { name, email, phone, district, password, confirmPassword }.
+ * Email is required; Phone is optional (validated to 10 Indian digits if provided).
  */
-export async function registerCustomer({ name, email, phone, district, password, confirmPassword }) {
+export async function registerCustomer({ name, identifier, email, phone, district, password, confirmPassword }) {
   clearAuthFieldErrors();
 
   const isNameValid = validatePersonName(name);
@@ -428,16 +454,22 @@ export async function registerCustomer({ name, email, phone, district, password,
     return { success: false, error: getSafeErrorMessage("invalidName") };
   }
 
-  const isEmailValid = validateEmail(email);
+  const resolvedEmail = (email || identifier || "").trim();
+  const isEmailValid = validateEmail(resolvedEmail);
   if (!isEmailValid) {
     setFieldError("authCustomerEmail", "authCustomerEmailError", getSafeErrorMessage("invalidEmail"));
     return { success: false, error: getSafeErrorMessage("invalidEmail") };
   }
 
-  const isPhoneValid = validatePhone(phone);
-  if (!isPhoneValid) {
-    setFieldError("authCustomerPhone", "authCustomerPhoneError", getSafeErrorMessage("invalidPhone"));
-    return { success: false, error: getSafeErrorMessage("invalidPhone") };
+  let registeredPhone = null;
+  const rawPhone = (typeof phone === "string" ? phone : "").trim();
+  if (rawPhone) {
+    const normalizedPhone = normalizePhoneNumber(rawPhone);
+    if (!normalizedPhone) {
+      setFieldError("authCustomerPhone", "authCustomerPhoneError", "Please enter a valid 10-digit mobile number.");
+      return { success: false, error: "Please enter a valid 10-digit mobile number." };
+    }
+    registeredPhone = normalizedPhone;
   }
 
   if (!district || !ALLOWED_DISTRICTS.includes(district)) {
@@ -445,17 +477,17 @@ export async function registerCustomer({ name, email, phone, district, password,
     return { success: false, error: getSafeErrorMessage("invalidDistrict") };
   }
 
-  const passCheck = validatePassword(password, confirmPassword);
+  const passCheck = validatePassword(password, confirmPassword, { minLength: 6, maxLength: 20 });
   if (!passCheck.isValid) {
     const errorMsg = getSafeErrorMessage(passCheck.errorKey);
-    setFieldError(
-      passCheck.errorKey === "passwordsDoNotMatch" ? "authCustomerConfirmPassword" : "authCustomerPassword",
-      passCheck.errorKey === "passwordsDoNotMatch" ? "authCustomerConfirmPasswordError" : "authCustomerPasswordError",
-      errorMsg
-    );
+    setFieldError("authCustomerPassword", "authCustomerPasswordError", errorMsg);
+    if (passCheck.errorKey === "passwordsDoNotMatch") {
+      setFieldError("authCustomerConfirmPassword", "authCustomerConfirmPasswordError", errorMsg);
+    }
     return { success: false, error: errorMsg };
   }
 
+  const normalizedEmail = resolvedEmail.toLowerCase();
   recordSecurityEvent("REGISTER_ATTEMPT", "customer");
 
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
@@ -480,184 +512,174 @@ export async function registerCustomer({ name, email, phone, district, password,
     if (firebaseReady && methods && auth) {
       let createdUser = null;
       let isRecoveredAccount = false;
-      const normalizedEmail = email.toLowerCase().trim();
       pendingRegistrationEmail = normalizedEmail;
 
       try {
-      setAuthStatus(AUTH_STATUS.LOADING);
-      try {
-        const userCredential = await methods.createUserWithEmailAndPassword(auth, email, password);
-        createdUser = userCredential.user;
-      } catch (authErr) {
-        if (authErr?.code === "auth/email-already-in-use" && typeof methods.signInWithEmailAndPassword === "function") {
-          try {
-            const recoveryCredential = await methods.signInWithEmailAndPassword(auth, email, password);
-            const candidateUser = recoveryCredential.user;
-            const { db } = await initializeFirestoreClient();
-            const firestoreMethods = await getFirestoreMethods();
-            if (db && firestoreMethods && typeof firestoreMethods.getDoc === "function") {
-              const existingDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "users", candidateUser.uid));
-              if (!existingDoc.exists()) {
-                // Orphaned Auth user without Firestore profile: recover and complete profile setup
-                createdUser = candidateUser;
-                isRecoveredAccount = true;
-              } else {
-                if (typeof methods.signOut === "function") {
-                  try { await methods.signOut(auth); } catch (_) {}
+        setAuthStatus(AUTH_STATUS.LOADING);
+        try {
+          const userCredential = await methods.createUserWithEmailAndPassword(auth, normalizedEmail, password);
+          createdUser = userCredential.user;
+        } catch (authErr) {
+          if (authErr?.code === "auth/email-already-in-use" && typeof methods.signInWithEmailAndPassword === "function") {
+            try {
+              const recoveryCredential = await methods.signInWithEmailAndPassword(auth, normalizedEmail, password);
+              const candidateUser = recoveryCredential.user;
+              const { db } = await initializeFirestoreClient();
+              const firestoreMethods = await getFirestoreMethods();
+              if (db && firestoreMethods && typeof firestoreMethods.getDoc === "function") {
+                const existingDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "users", candidateUser.uid));
+                if (!existingDoc.exists()) {
+                  // Orphaned Auth user without Firestore profile: recover and complete profile setup
+                  createdUser = candidateUser;
+                  isRecoveredAccount = true;
+                } else {
+                  if (typeof methods.signOut === "function") {
+                    try { await methods.signOut(auth); } catch (_) {}
+                  }
+                  throw authErr;
                 }
+              } else {
                 throw authErr;
               }
-            } else {
+            } catch (recoveryErr) {
               throw authErr;
             }
-          } catch (recoveryErr) {
+          } else {
             throw authErr;
           }
-        } else {
-          throw authErr;
         }
-      }
 
-      pendingRegistrationUid = createdUser.uid;
-      restoreBtn.updateText("Setting up profile...");
-      setAuthFeedback("Setting up your customer profile...", false);
-      const createdAt = new Date().toISOString();
+        pendingRegistrationUid = createdUser.uid;
+        restoreBtn.updateText("Setting up profile...");
+        setAuthFeedback("Setting up your customer profile...", false);
+        const createdAt = new Date().toISOString();
 
-      // Required profile creation in Firestore /users/{uid} FIRST before non-blocking calls
-      const { db } = await initializeFirestoreClient();
-      const firestoreMethods = await getFirestoreMethods();
-      if (!db || !firestoreMethods || typeof firestoreMethods.setDoc !== "function") {
-        throw new Error("DATABASE_UNAVAILABLE: Firestore database client not available.");
-      }
+        // Required profile creation in Firestore /users/{uid} FIRST before non-blocking calls
+        const { db } = await initializeFirestoreClient();
+        const firestoreMethods = await getFirestoreMethods();
+        if (!db || !firestoreMethods || typeof firestoreMethods.setDoc !== "function") {
+          throw new Error("DATABASE_UNAVAILABLE: Firestore database client not available.");
+        }
 
-      const userDocRef = firestoreMethods.doc(db, "users", createdUser.uid);
-      await firestoreMethods.setDoc(userDocRef, {
-        uid: createdUser.uid,
-        name,
-        email,
-        phone,
-        district,
-        role: "customer",
-        emailVerified: Boolean(createdUser.emailVerified),
-        createdAt
-      });
+        const userDocRef = firestoreMethods.doc(db, "users", createdUser.uid);
+        await firestoreMethods.setDoc(userDocRef, {
+          uid: createdUser.uid,
+          name,
+          email: normalizedEmail,
+          phone: registeredPhone,
+          district,
+          role: "customer",
+          emailVerified: Boolean(createdUser.emailVerified),
+          createdAt
+        });
 
-      saveApplicationProfile(createdUser.uid, {
-        role: "customer",
-        name,
-        email,
-        phone,
-        district,
-        emailVerified: Boolean(createdUser.emailVerified),
-        isVerified: false,
-        authProvider: "firebase",
-        createdAt
-      });
+        saveApplicationProfile(createdUser.uid, {
+          role: "customer",
+          name,
+          email: normalizedEmail,
+          phone: registeredPhone,
+          district,
+          emailVerified: Boolean(createdUser.emailVerified),
+          isVerified: false,
+          authProvider: "firebase",
+          createdAt
+        });
 
-      setCurrentUser({
-        id: createdUser.uid,
-        firebaseUid: createdUser.uid,
-        role: "customer",
-        name,
-        email,
-        phone,
-        district,
-        emailVerified: Boolean(createdUser.emailVerified),
-        isVerified: false,
-        authProvider: "firebase",
-        createdAt
-      });
+        setCurrentUser({
+          id: createdUser.uid,
+          firebaseUid: createdUser.uid,
+          role: "customer",
+          name,
+          email: normalizedEmail,
+          phone: registeredPhone,
+          district,
+          emailVerified: Boolean(createdUser.emailVerified),
+          isVerified: false,
+          authProvider: "firebase",
+          createdAt
+        });
 
-      // Non-blocking metadata and verification operations after database record is secured
-      if (!isRecoveredAccount || !createdUser.displayName) {
-        if (typeof methods.updateProfile === "function") {
-          try {
-            await methods.updateProfile(createdUser, { displayName: name });
-          } catch {
-            // Non-blocking metadata update
+        // Non-blocking metadata and verification operations after database record is secured
+        if (!isRecoveredAccount || !createdUser.displayName) {
+          if (typeof methods.updateProfile === "function") {
+            try {
+              await methods.updateProfile(createdUser, { displayName: name });
+            } catch {
+              // Non-blocking metadata update
+            }
           }
         }
-      }
 
-      if (!createdUser.emailVerified && typeof methods.sendEmailVerification === "function") {
-        try {
-          await methods.sendEmailVerification(createdUser);
-          recordSecurityEvent("EMAIL_VERIFICATION_SENT", "customer");
-        } catch (verificationErr) {
-          console.warn("[JKFixHub Auth] Customer email verification dispatch notice:", verificationErr?.message || verificationErr);
-        }
-      }
-
-      recordSecurityEvent("REGISTER_SUCCESS", "customer");
-      updateAccountControls();
-      showAccountView();
-      setAuthFeedback("Account created! A verification link has been sent to your email. Please verify your email before requesting services.", false);
-      return { success: true, recovered: isRecoveredAccount };
-    } catch (error) {
-      recordSecurityEvent("FIREBASE_AUTH_ERROR");
-      setAuthStatus(AUTH_STATUS.ERROR, error?.code || "auth-error");
-
-      if (createdUser) {
-        console.warn("[JKFixHub Auth] Customer registration profile creation failed:", error?.message || error);
-        clearCurrentUser();
-        if (typeof methods.signOut === "function") {
-          try {
-            await methods.signOut(auth);
-          } catch (_) {}
-        }
+        recordSecurityEvent("REGISTER_SUCCESS", "customer");
         updateAccountControls();
-        const safeMessage = "Your account was created, but setting up your profile encountered an error. Please try signing in or contact support.";
-        setAuthFeedback(safeMessage, true);
-        return { success: false, error: safeMessage, partialFailure: true };
-      }
+        showAccountView();
+        setAuthFeedback("Account created successfully! Welcome to JK FixHub.", false);
+        return { success: true, recovered: isRecoveredAccount };
+      } catch (error) {
+        recordSecurityEvent("FIREBASE_AUTH_ERROR");
+        setAuthStatus(AUTH_STATUS.ERROR, error?.code || "auth-error");
 
-      const safeMessage = mapFirebaseAuthError(error);
-      setAuthFeedback(safeMessage, true);
-      return { success: false, error: safeMessage };
-    } finally {
-      if (pendingRegistrationUid === createdUser?.uid) {
-        pendingRegistrationUid = null;
-      }
-      if (pendingRegistrationEmail === normalizedEmail) {
-        pendingRegistrationEmail = null;
+        if (createdUser) {
+          console.warn("[JKFixHub Auth] Customer registration profile creation failed:", error?.message || error);
+          clearCurrentUser();
+          if (typeof methods.signOut === "function") {
+            try {
+              await methods.signOut(auth);
+            } catch (_) {}
+          }
+          updateAccountControls();
+          const safeMessage = "Your account was created, but setting up your profile encountered an error. Please try signing in or contact support.";
+          setAuthFeedback(safeMessage, true);
+          return { success: false, error: safeMessage, partialFailure: true };
+        }
+
+        const safeMessage = mapFirebaseAuthError(error);
+        setAuthFeedback(safeMessage, true);
+        return { success: false, error: safeMessage };
+      } finally {
+        if (pendingRegistrationUid === createdUser?.uid) {
+          pendingRegistrationUid = null;
+        }
+        if (pendingRegistrationEmail === normalizedEmail) {
+          pendingRegistrationEmail = null;
+        }
       }
     }
-  }
 
-  // Session Fallback
-  const createdAt = new Date().toISOString();
-  const demoUid = `cust-${Date.now().toString(36)}`;
-  saveApplicationProfile(demoUid, {
-    role: "customer",
-    name,
-    email,
-    phone,
-    district,
-    emailVerified: false,
-    isVerified: false,
-    authProvider: "demo",
-    createdAt
-  });
+    // Session Fallback
+    const createdAt = new Date().toISOString();
+    const demoUid = `cust-${Date.now().toString(36)}`;
+    saveApplicationProfile(demoUid, {
+      role: "customer",
+      name,
+      email: normalizedEmail,
+      phone: registeredPhone,
+      district,
+      emailVerified: false,
+      isVerified: false,
+      authProvider: "demo",
+      createdAt
+    });
 
-  setCurrentUser({
-    id: demoUid,
-    firebaseUid: null,
-    role: "customer",
-    name,
-    email,
-    phone,
-    district,
-    emailVerified: false,
-    isVerified: false,
-    authProvider: "demo",
-    createdAt
-  });
+    setCurrentUser({
+      id: demoUid,
+      firebaseUid: null,
+      role: "customer",
+      name,
+      email: normalizedEmail,
+      phone: registeredPhone,
+      district,
+      emailVerified: false,
+      isVerified: false,
+      authProvider: "demo",
+      createdAt
+    });
 
-  recordSecurityEvent("REGISTER_SUCCESS", "customer");
-  updateAccountControls();
-  showAccountView();
-  setAuthFeedback("Account created in session mode.", false);
-  return { success: true };
+    recordSecurityEvent("REGISTER_SUCCESS", "customer");
+    updateAccountControls();
+    showAccountView();
+    setAuthFeedback("Account created in session mode.", false);
+    return { success: true };
   } finally {
     restoreBtn();
   }
@@ -1006,6 +1028,7 @@ export async function signInUser({ email, password }) {
     return { success: false, error: getSafeErrorMessage("invalidPassword") };
   }
 
+  const normalizedEmail = email.toLowerCase().trim();
   recordSecurityEvent("LOGIN_ATTEMPT");
 
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
@@ -1030,7 +1053,7 @@ export async function signInUser({ email, password }) {
     if (firebaseReady && methods && auth) {
       try {
         setAuthStatus(AUTH_STATUS.LOADING);
-        const userCredential = await methods.signInWithEmailAndPassword(auth, email, password);
+        const userCredential = await methods.signInWithEmailAndPassword(auth, normalizedEmail, password);
         const user = userCredential.user;
 
         restoreBtn.updateText("Loading profile...");
@@ -1048,11 +1071,13 @@ export async function signInUser({ email, password }) {
               const data = userDoc.data();
               const role = isSupportedRole(data?.role) ? data.role : null;
               if (role) {
+                const userEmail = data.email || user.email;
+                const userPhone = data.phone || null;
                 profile = {
                   role,
                   name: data.name || user.displayName || (role === "worker" ? "Worker" : "Customer"),
-                  email: data.email || user.email,
-                  phone: data.phone || null,
+                  email: userEmail,
+                  phone: userPhone,
                   district: data.district || null,
                   createdAt: data.createdAt || new Date().toISOString()
                 };
@@ -1141,7 +1166,7 @@ export async function signInUser({ email, password }) {
           firebaseUid: user.uid,
           role: profile.role,
           name: profile.name,
-          email: user.email,
+          email: profile.email || user.email,
           phone: profile.phone || null,
           district: profile.district || null,
           service: profile.service || null,
@@ -1568,6 +1593,12 @@ export function demoLogout() {
   resetDemoChatState();
   clearCurrentUser();
   clearRequestState();
+  customerVerificationDismissed = false;
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.removeItem("jk_dismiss_verification_customer");
+    }
+  } catch (_) {}
 }
 
 /**
@@ -1945,21 +1976,45 @@ export function showAccountView(preserveFeedback = false) {
   }
   setTextContent(document.getElementById("authUserRole"), roleLabel);
 
-  // Email verification badge and notice (non-blocking recommendation)
+  // Email verification badge and notice (unobtrusive reminder for customer, required for worker)
   const verifiedBadge = document.getElementById("authEmailVerifiedBadge");
   const verificationNotice = document.getElementById("authEmailVerificationNotice");
+  const dismissNoticeBtn = document.getElementById("authDismissVerificationNotice");
+  const verificationPrompt = document.getElementById("authVerificationPrompt");
+
   if (verifiedBadge) {
-    if (user.email) {
-      if (user.emailVerified) {
-        setTextContent(verifiedBadge, "✓ Email Verified");
-        verifiedBadge.className = "auth-verification-badge verified";
-        verifiedBadge.hidden = false;
-        if (verificationNotice) verificationNotice.hidden = true;
-      } else {
-        setTextContent(verifiedBadge, "Email Unverified");
-        verifiedBadge.className = "auth-verification-badge unverified";
-        verifiedBadge.hidden = false;
-        if (verificationNotice) verificationNotice.hidden = false;
+    if (user.emailVerified) {
+      setTextContent(verifiedBadge, "✓ Email Verified");
+      verifiedBadge.className = "auth-verification-badge verified";
+      verifiedBadge.hidden = false;
+      if (verificationNotice) verificationNotice.hidden = true;
+    } else if (user.role === "customer") {
+      // Customer: email verification is optional and unobtrusive
+      verifiedBadge.hidden = true;
+      if (verificationNotice) {
+        if (customerVerificationDismissed) {
+          verificationNotice.hidden = true;
+        } else {
+          verificationNotice.hidden = false;
+          verificationNotice.classList.add("auth-verification-notice-subtle");
+          if (verificationPrompt) {
+            setTextContent(verificationPrompt, "Verify your email to help secure your account and recover password if needed.");
+          }
+          if (dismissNoticeBtn) dismissNoticeBtn.hidden = false;
+        }
+      }
+    } else if (user.role === "worker") {
+      // Worker: email verification is required
+      setTextContent(verifiedBadge, "Email Unverified");
+      verifiedBadge.className = "auth-verification-badge unverified";
+      verifiedBadge.hidden = false;
+      if (verificationNotice) {
+        verificationNotice.hidden = false;
+        verificationNotice.classList.remove("auth-verification-notice-subtle");
+        if (verificationPrompt) {
+          setTextContent(verificationPrompt, "Your email address is not yet verified. Please verify your email before accepting service requests or updating your profile.");
+        }
+        if (dismissNoticeBtn) dismissNoticeBtn.hidden = true;
       }
     } else {
       verifiedBadge.hidden = true;
@@ -2083,10 +2138,15 @@ export async function saveCustomerProfile({ name, email, phone, district }) {
     return { success: false, error: getSafeErrorMessage("invalidEmail") };
   }
 
-  const isPhoneValid = validatePhone(phone);
-  if (!isPhoneValid) {
-    setFieldError("editCustomerPhone", "editCustomerPhoneError", getSafeErrorMessage("invalidPhone"));
-    return { success: false, error: getSafeErrorMessage("invalidPhone") };
+  let trimmedPhone = null;
+  const rawPhone = (typeof phone === "string" ? phone : "").trim();
+  if (rawPhone) {
+    const normalizedPhone = normalizePhoneNumber(rawPhone);
+    if (!normalizedPhone) {
+      setFieldError("editCustomerPhone", "editCustomerPhoneError", "Please enter a valid 10-digit mobile number.");
+      return { success: false, error: "Please enter a valid 10-digit mobile number." };
+    }
+    trimmedPhone = normalizedPhone;
   }
 
   if (!district || !ALLOWED_DISTRICTS.includes(district)) {
@@ -2096,7 +2156,6 @@ export async function saveCustomerProfile({ name, email, phone, district }) {
 
   const trimmedName = name.trim();
   const trimmedEmail = email.trim();
-  const trimmedPhone = phone.trim();
 
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
     const errorMsg = "Network connection error. Please check your internet connection and try again.";
@@ -2267,8 +2326,25 @@ export function initializeAuth() {
       const phone = document.getElementById("authCustomerPhone")?.value || "";
       const district = document.getElementById("authCustomerDistrict")?.value || "";
       const password = document.getElementById("authCustomerPassword")?.value || "";
-      const confirmPassword = document.getElementById("authCustomerConfirmPassword")?.value || "";
+      const confirmPassword = document.getElementById("authCustomerConfirmPassword")?.value || null;
       await registerCustomer({ name, email, phone, district, password, confirmPassword });
+    });
+  }
+
+  const togglePhoneBtn = document.getElementById("authCustomerTogglePhoneBtn");
+  const phoneContainer = document.getElementById("authCustomerPhoneContainer");
+  if (togglePhoneBtn && phoneContainer) {
+    togglePhoneBtn.addEventListener("click", () => {
+      phoneContainer.hidden = false;
+      togglePhoneBtn.hidden = true;
+      document.getElementById("authCustomerPhone")?.focus();
+    });
+  }
+
+  const dismissVerificationNoticeBtn = document.getElementById("authDismissVerificationNotice");
+  if (dismissVerificationNoticeBtn) {
+    dismissVerificationNoticeBtn.addEventListener("click", () => {
+      dismissCustomerVerificationReminder();
     });
   }
 
@@ -2462,12 +2538,14 @@ export function initializeAuth() {
                       const uData = userDoc.data();
                       const role = isSupportedRole(uData?.role) ? uData.role : null;
                       if (role) {
+                        const resolvedEmail = uData.email || firebaseUser.email;
+                        const resolvedPhone = uData.phone || null;
                         existingProfile = {
                           ...existingProfile,
                           role,
                           name: uData.name || existingProfile?.name || firebaseUser.displayName || (role === "worker" ? "Worker" : "Customer"),
-                          email: uData.email || firebaseUser.email,
-                          phone: uData.phone || null,
+                          email: resolvedEmail,
+                          phone: resolvedPhone,
                           district: uData.district || null
                         };
 
@@ -2542,7 +2620,7 @@ export function initializeAuth() {
                   firebaseUid: firebaseUser.uid,
                   role: existingProfile.role,
                   name: existingProfile.name || firebaseUser.displayName || (existingProfile.role === "worker" ? "Worker" : "Customer"),
-                  email: firebaseUser.email,
+                  email: existingProfile.email || firebaseUser.email,
                   phone: existingProfile.phone || null,
                   district: existingProfile.district || null,
                   service: existingProfile.service || null,

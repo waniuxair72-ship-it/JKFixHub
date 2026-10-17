@@ -27,6 +27,7 @@ import {
   getAdminWorkers,
   updateAdminWorkerStatus,
   getAdminCustomers,
+  subscribeToAdminCustomers,
   getAdminRequests,
   updateAdminRequestStatus,
   getAdminReports,
@@ -319,7 +320,14 @@ function navigateToTab(tabId, filterOptions = null) {
 // ----------------------------------------------------------------------------
 // View Rendering Dispatcher
 // ----------------------------------------------------------------------------
+let activeCustomersUnsubscribe = null;
+
 async function renderActiveView() {
+  if (typeof activeCustomersUnsubscribe === "function") {
+    try { activeCustomersUnsubscribe(); } catch (_) {}
+    activeCustomersUnsubscribe = null;
+  }
+
   if (!currentAdmin || currentAdmin.role !== "admin" || currentAdmin.active !== true) {
     unmountAdminShell();
     return;
@@ -1264,7 +1272,7 @@ async function renderWorkersView(container) {
 // 3. OPERATIONS: Customers
 // ----------------------------------------------------------------------------
 async function renderCustomersView(container) {
-  const customers = await getAdminCustomers();
+  let customers = await getAdminCustomers();
   container.replaceChildren();
 
   // Header
@@ -1275,7 +1283,7 @@ async function renderCustomersView(container) {
   const h2 = document.createElement("h2");
   h2.textContent = "Customer Accounts";
   const p = document.createElement("p");
-  p.textContent = "Manage registered customer identities, email verification status, and district associations.";
+  p.textContent = "Manage registered customer identities, contact numbers, email verification status, and district associations.";
   titleBox.appendChild(h2);
   titleBox.appendChild(p);
   header.appendChild(titleBox);
@@ -1290,7 +1298,7 @@ async function renderCustomersView(container) {
   const searchInput = document.createElement("input");
   searchInput.type = "search";
   searchInput.className = "admin-search-input";
-  searchInput.placeholder = "Search customers by name, email, district, or UID...";
+  searchInput.placeholder = "Search customers by name, phone, email, district, or UID...";
   searchInput.value = tabFilterState.customers.query || "";
   searchBox.appendChild(searchInput);
 
@@ -1353,9 +1361,10 @@ async function renderCustomersView(container) {
       if (q) {
         const uidMatch = String(c.uid || c.id || "").toLowerCase().includes(q);
         const nameMatch = String(c.name || "").toLowerCase().includes(q);
+        const phoneMatch = String(c.phone || "").toLowerCase().includes(q);
         const emailMatch = String(c.email || "").toLowerCase().includes(q);
         const distMatch = String(c.district || "").toLowerCase().includes(q);
-        if (!uidMatch && !nameMatch && !emailMatch && !distMatch) return false;
+        if (!uidMatch && !nameMatch && !phoneMatch && !emailMatch && !distMatch) return false;
       }
       if (vFilter === "verified" && !c.emailVerified) return false;
       if (vFilter === "unverified" && Boolean(c.emailVerified)) return false;
@@ -1381,7 +1390,7 @@ async function renderCustomersView(container) {
 
     const thead = document.createElement("thead");
     const headRow = document.createElement("tr");
-    ["UID", "Name", "Email", "Email Verified", "District", "Registered", "Actions"].forEach((txt) => {
+    ["UID", "Name", "Phone", "Email", "Email Verified", "District", "Registered", "Actions"].forEach((txt) => {
       const th = document.createElement("th");
       th.textContent = txt;
       headRow.appendChild(th);
@@ -1401,6 +1410,10 @@ async function renderCustomersView(container) {
       const tdName = document.createElement("td");
       tdName.textContent = String(c.name || "Customer");
       row.appendChild(tdName);
+
+      const tdPhone = document.createElement("td");
+      tdPhone.textContent = String(c.phone || "—");
+      row.appendChild(tdPhone);
 
       const tdEmail = document.createElement("td");
       tdEmail.textContent = String(c.email || "—");
@@ -1433,7 +1446,8 @@ async function renderCustomersView(container) {
 
         grid.appendChild(createDetailItem("Firebase UID", c.uid || c.id, true));
         grid.appendChild(createDetailItem("Customer Name", c.name));
-        grid.appendChild(createDetailItem("Email Address", c.email));
+        grid.appendChild(createDetailItem("Phone Number", c.phone || "Not provided"));
+        grid.appendChild(createDetailItem("Email Address", c.email || "Not provided"));
         grid.appendChild(createDetailItem("Email Verified", c.emailVerified ? "Yes (Verified)" : "No (Pending)"));
         grid.appendChild(createDetailItem("District", c.district));
         grid.appendChild(createDetailItem("Account Created", formatDateTime(c.createdAt)));
@@ -1481,6 +1495,16 @@ async function renderCustomersView(container) {
   });
 
   renderTable();
+
+  // Attach real-time listener for continuous live customer updates
+  try {
+    activeCustomersUnsubscribe = await subscribeToAdminCustomers((updatedCustomers) => {
+      customers = updatedCustomers;
+      renderTable();
+    });
+  } catch (err) {
+    console.warn("[JKFixHub Admin] Real-time customer subscription notice:", err?.message || err);
+  }
 }
 
 // ----------------------------------------------------------------------------

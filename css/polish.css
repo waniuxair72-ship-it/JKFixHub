@@ -4382,6 +4382,29 @@ body #webgl-background {
   font-weight: 750;
 }
 
+.auth-optional-phone-section {
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
+
+.auth-optional-toggle-link {
+  display: inline-block;
+  background: none;
+  border: none;
+  padding: 3px 0;
+  color: var(--color-primary, #2563eb);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: color 0.15s ease;
+}
+
+.auth-optional-toggle-link:hover {
+  color: #1d4ed8;
+}
+
 .auth-verification-notice {
   margin-top: 12px;
   padding: 12px 14px;
@@ -4390,12 +4413,50 @@ body #webgl-background {
   border-radius: var(--radius-xs, 8px);
   font-size: 0.84rem;
   line-height: 1.5;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.auth-verification-notice-content {
+  flex: 1;
 }
 
 .auth-verification-notice p {
   margin: 0 0 10px 0;
   color: #78350f;
   font-weight: 550;
+}
+
+.auth-verification-notice-subtle {
+  background: var(--color-surface, #f8fafc);
+  border: 1px solid var(--color-border, #e2e8f0);
+  padding: 10px 14px;
+}
+
+.auth-verification-notice-subtle p {
+  color: var(--color-muted, #475569);
+  margin-bottom: 8px;
+  font-size: 0.82rem;
+}
+
+.auth-notice-dismiss-btn {
+  background: transparent;
+  border: none;
+  font-size: 0.95rem;
+  line-height: 1;
+  color: var(--color-muted, #94a3b8);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.15s ease, background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.auth-notice-dismiss-btn:hover {
+  color: var(--color-ink, #0f172a);
+  background: rgba(0, 0, 0, 0.06);
 }
 
 .auth-resend-feedback {
@@ -6408,6 +6469,32 @@ button.is-loading {
   background: rgba(245, 158, 11, 0.12);
   border-color: rgba(245, 158, 11, 0.25);
   color: #fcd34d;
+}
+
+[data-theme="dark"] .auth-verification-notice-subtle {
+  background: rgba(30, 41, 59, 0.5);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="dark"] .auth-verification-notice-subtle p {
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .auth-notice-dismiss-btn {
+  color: #64748b;
+}
+
+[data-theme="dark"] .auth-notice-dismiss-btn:hover {
+  color: #f8fafc;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .auth-optional-toggle-link {
+  color: #38bdf8;
+}
+
+[data-theme="dark"] .auth-optional-toggle-link:hover {
+  color: #7dd3fc;
 }
 
 [data-theme="dark"] .auth-link-btn,

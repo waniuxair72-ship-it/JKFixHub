@@ -109,7 +109,9 @@ export const SECURITY_EVENT_TYPES = Object.freeze([
   "REGISTER_ATTEMPT",
   "REGISTER_SUCCESS",
   "EMAIL_VERIFICATION_SENT",
-  "EMAIL_VERIFICATION_FAILED"
+  "EMAIL_VERIFICATION_FAILED",
+  "PROFILE_UPDATED",
+  "EMAIL_UPDATE_ERROR"
 ]);
 
 const MAX_SECURITY_EVENTS = 50;
@@ -258,14 +260,58 @@ export function clearSecurityEvents() {
   securityEvents.length = 0;
 }
 
-export function validatePassword(password, confirmPassword = null) {
+export const ALL_DISTRICTS = Object.freeze([
+  "Shopian",
+  "Srinagar",
+  "Anantnag",
+  "Pulwama",
+  "Kulgam",
+  "Baramulla",
+  "Budgam",
+  "Kupwara",
+  "Ganderbal",
+  "Bandipora",
+  "Jammu",
+  "Kathua",
+  "Udhampur",
+  "Rajouri",
+  "Poonch",
+  "Doda",
+  "Ramban",
+  "Kishtwar",
+  "Reasi",
+  "Samba"
+]);
+
+export function validateDistrict(district) {
+  return typeof district === "string" && ALL_DISTRICTS.includes(district.trim());
+}
+
+export function normalizePhoneNumber(value) {
+  if (typeof value !== "string") return null;
+  let cleaned = value.trim().replace(/[\s\-()]/g, "");
+  if (cleaned.startsWith("+91")) {
+    cleaned = cleaned.slice(3);
+  } else if (cleaned.startsWith("0") && cleaned.length === 11) {
+    cleaned = cleaned.slice(1);
+  }
+  if (/^[6-9]\d{9}$/.test(cleaned)) {
+    return cleaned;
+  }
+  return null;
+}
+
+export function validatePassword(password, confirmPassword = null, { minLength = 6, maxLength = 20 } = {}) {
   if (typeof password !== "string") {
     return { isValid: false, errorKey: "invalidPassword" };
   }
-  if (password.length < 6) {
+  if (password.length < minLength) {
     return { isValid: false, errorKey: "passwordTooShort" };
   }
-  if (confirmPassword !== null && password !== confirmPassword) {
+  if (password.length > maxLength) {
+    return { isValid: false, errorKey: "passwordTooLong" };
+  }
+  if (confirmPassword !== null && confirmPassword !== undefined && password !== confirmPassword) {
     return { isValid: false, errorKey: "passwordsDoNotMatch" };
   }
   return { isValid: true, errorKey: null };
@@ -328,8 +374,10 @@ export function getSafeErrorMessage(code) {
     unauthorizedAdmin: "Access unavailable.",
     invalidAdminTarget: "Invalid target.",
     invalidEmail: "Please enter a valid email address.",
-    invalidPassword: "Password must be at least 6 characters long.",
+    invalidIdentifier: "Please enter a valid email or 10-digit mobile number.",
+    invalidPassword: "Password must be between 6 and 20 characters.",
     passwordTooShort: "Password must be at least 6 characters long.",
+    passwordTooLong: "Password cannot exceed 20 characters.",
     passwordsDoNotMatch: "Passwords do not match.",
     invalidDistrict: "Please choose a valid district.",
     invalidPhone: "Please enter a valid phone number (at least 7 digits).",

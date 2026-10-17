@@ -428,16 +428,6 @@ export function initializeRequestFlow() {
       return;
     }
 
-    if (currentUser.authProvider === "firebase" && !currentUser.emailVerified) {
-      recordSecurityEvent("UNAUTHORIZED_UI_ACTION", currentUser.role);
-      setRequestFeedback(
-        "Please verify your email address before submitting service requests. Check your inbox or visit your profile to check verification status.",
-        true,
-        false
-      );
-      return;
-    }
-
     if (typeof navigator !== "undefined" && navigator.onLine === false) {
       const offlineMsg = "Network connection error. Please check your internet connection and try again.";
       setRequestFeedback(offlineMsg, true, false);
