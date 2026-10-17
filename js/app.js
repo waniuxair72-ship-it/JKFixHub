@@ -15,6 +15,7 @@ import { initializeReviews } from "./reviews.js";
 import { initializeReports } from "./reports.js";
 import { initializeAdminDashboard } from "./admin-dashboard.js";
 import { initializeBrandReveal } from "./brand-reveal.js";
+import { initializeTheme } from "./theme.js";
 
 // ==========================================
 // #UTILITY
@@ -65,6 +66,7 @@ function initializePointerMotion() {
 }
 
 function initializeApp() {
+  initializeTheme();
   initializeStore();
   initializeNavigation();
   initializeSearch({ showToast });

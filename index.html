@@ -7,6 +7,9 @@
     <meta name="description" content="JK FixHub connects customers with skilled local repair and service professionals across Jammu & Kashmir." />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%232563eb'/><text x='16' y='21' font-family='system-ui,sans-serif' font-size='14' font-weight='900' fill='white' text-anchor='middle'>JK</text></svg>" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://www.gstatic.com; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com; frame-src 'self' https://*.firebaseapp.com; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" />
+    <script src="js/theme-preinit.js"></script>
     <style>
       :root {
         --bg: #f8fafc;
@@ -25,9 +28,26 @@
         --max: 1140px;
         --radius: 20px;
       }
+      [data-theme="dark"] {
+        --bg: #090d16;
+        --surface: #0f172a;
+        --surface-2: #151d30;
+        --line: rgba(255, 255, 255, 0.12);
+        --line-bright: rgba(255, 255, 255, 0.22);
+        --text: #f8fafc;
+        --muted: #94a3b8;
+        --cyan: #38bdf8;
+        --mint: #2dd4bf;
+        --violet: #a855f7;
+        --coral: #fb7185;
+        --indigo: #818cf8;
+        --shadow: 0 16px 36px -4px rgba(0, 0, 0, 0.6), 0 4px 12px rgba(0, 0, 0, 0.4);
+      }
       * { box-sizing: border-box; }
       [hidden] { display: none !important; }
-      html { scroll-behavior: smooth; overflow-x: hidden; color-scheme: light; }
+      html { scroll-behavior: smooth; overflow-x: hidden; }
+      html[data-theme="light"] { color-scheme: light; }
+      html[data-theme="dark"] { color-scheme: dark; }
       body {
         margin: 0;
         background:
@@ -39,6 +59,12 @@
         line-height: 1.6;
         overflow-x: hidden;
         -webkit-font-smoothing: antialiased;
+      }
+      [data-theme="dark"] body {
+        background:
+          radial-gradient(ellipse at 80% 0%, rgba(124, 58, 237, 0.14), transparent 50%),
+          radial-gradient(ellipse at 20% 0%, rgba(56, 189, 248, 0.08), transparent 50%),
+          var(--bg);
       }
       body::before { content: ""; display: none; }
       body.modal-open { overflow: hidden; }
@@ -398,7 +424,7 @@
     </div>
     <canvas id="webgl-background" aria-hidden="true"></canvas>
     <!-- #NAVIGATION -->
-    <header class="site-header" id="top"><div class="container nav" id="nav"><button class="menu-button" id="menuButton" aria-label="Open navigation" aria-expanded="false"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="20" y2="18"></line></svg></button><nav class="nav-links" id="navLinks" aria-label="Main navigation"><div class="nav-drawer-header"><div class="nav-drawer-brand"><span class="brand-wordmark"><span class="brand-wordmark-jk">JK</span> <span class="brand-wordmark-hub">FixHub</span></span><span class="nav-drawer-badge">Jammu &amp; Kashmir</span></div><button class="nav-drawer-close" id="navDrawerClose" type="button" aria-label="Close navigation">✕</button></div><div class="nav-drawer-items"><a href="#about" class="nav-drawer-link" data-nav-modal="aboutModal"><span class="nav-item-icon" aria-hidden="true">ℹ️</span><span class="nav-item-text">About</span></a><a href="#how-it-works" class="nav-drawer-link" data-nav-modal="howItWorksModal"><span class="nav-item-icon" aria-hidden="true">⚡</span><span class="nav-item-text">How It Works</span></a><a href="#services" class="nav-drawer-link" data-nav-modal="servicesModal"><span class="nav-item-icon" aria-hidden="true">🛠️</span><span class="nav-item-text">Services</span></a><a href="#trust" class="nav-drawer-link" data-nav-modal="trustModal"><span class="nav-item-icon" aria-hidden="true">🛡️</span><span class="nav-item-text">Trust &amp; Safety</span></a><a href="#contact" class="nav-drawer-link" data-nav-modal="supportModal"><span class="nav-item-icon" aria-hidden="true">💬</span><span class="nav-item-text">Contact Support</span></a></div><div class="nav-drawer-divider"></div><div class="nav-drawer-actions"><button class="button subtle nav-action-btn" type="button" data-jk-action="sign-in"><span class="nav-item-icon" aria-hidden="true">🔑</span><span>Sign In</span></button><button class="button primary nav-action-btn" type="button" data-jk-action="join-worker"><span class="nav-item-icon" aria-hidden="true">🔧</span><span>Join as a Worker</span></button></div></nav><div class="nav-actions"><div class="jk-nav-item" id="jkNavItem"><button class="jk-btn" id="jkMenuButton" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Open JK FixHub menu"><span class="jk-badge" id="jkBadge" aria-hidden="true">JK</span><span class="jk-label" id="jkLabel">Sign In</span><svg class="jk-chevron" width="12" height="12" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/></svg></button><div class="jk-dropdown" id="jkDropdownMenu" role="menu" aria-label="User Account Menu" hidden><div class="jk-dropdown-header" id="jkDropdownHeader"><div class="jk-user-info"><strong class="jk-user-name" id="jkDropdownUserName">Welcome to JK FixHub</strong><span class="jk-user-role" id="jkDropdownUserRole">Jammu &amp; Kashmir Local Services</span></div></div><div class="jk-dropdown-divider"></div><div class="jk-dropdown-items" id="jkDropdownItems"></div></div></div><div class="legacy-nav-controls" hidden aria-hidden="true"><button id="authContinue" type="button"></button><button id="authAccount" type="button" hidden></button><button id="workerDashboardButton" type="button" hidden></button><button data-auth-target="worker-register" type="button" hidden></button></div></div></div></header>
+    <header class="site-header" id="top"><div class="container nav" id="nav"><button class="menu-button" id="menuButton" aria-label="Open navigation" aria-expanded="false"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="20" y2="18"></line></svg></button><nav class="nav-links" id="navLinks" aria-label="Main navigation"><div class="nav-drawer-header"><div class="nav-drawer-brand"><span class="brand-wordmark"><span class="brand-wordmark-jk">JK</span> <span class="brand-wordmark-hub">FixHub</span></span><span class="nav-drawer-badge">Jammu &amp; Kashmir</span></div><button class="nav-drawer-close" id="navDrawerClose" type="button" aria-label="Close navigation">✕</button></div><div class="nav-drawer-items"><a href="#about" class="nav-drawer-link" data-nav-modal="aboutModal"><span class="nav-item-icon" aria-hidden="true">ℹ️</span><span class="nav-item-text">About</span></a><a href="#how-it-works" class="nav-drawer-link" data-nav-modal="howItWorksModal"><span class="nav-item-icon" aria-hidden="true">⚡</span><span class="nav-item-text">How It Works</span></a><a href="#services" class="nav-drawer-link" data-nav-modal="servicesModal"><span class="nav-item-icon" aria-hidden="true">🛠️</span><span class="nav-item-text">Services</span></a><a href="#trust" class="nav-drawer-link" data-nav-modal="trustModal"><span class="nav-item-icon" aria-hidden="true">🛡️</span><span class="nav-item-text">Trust &amp; Safety</span></a><a href="#contact" class="nav-drawer-link" data-nav-modal="supportModal"><span class="nav-item-icon" aria-hidden="true">💬</span><span class="nav-item-text">Contact Support</span></a></div><div class="nav-drawer-divider"></div><div class="nav-drawer-theme-section" role="region" aria-label="Appearance theme"><span class="nav-drawer-theme-title">Theme</span><div class="theme-segmented-control" role="radiogroup" aria-label="Theme selection"><button type="button" class="theme-option-btn" data-theme-choice="light" role="radio" aria-checked="true"><span class="theme-icon" aria-hidden="true">☀️</span><span>Light Mode</span></button><button type="button" class="theme-option-btn" data-theme-choice="dark" role="radio" aria-checked="false"><span class="theme-icon" aria-hidden="true">🌙</span><span>Dark Mode</span></button></div></div><div class="nav-drawer-actions"><button class="button subtle nav-action-btn" type="button" data-jk-action="sign-in"><span class="nav-item-icon" aria-hidden="true">🔑</span><span>Sign In</span></button><button class="button primary nav-action-btn" type="button" data-jk-action="join-worker"><span class="nav-item-icon" aria-hidden="true">🔧</span><span>Join as a Worker</span></button></div></nav><div class="nav-actions"><div class="jk-nav-item" id="jkNavItem"><button class="jk-btn" id="jkMenuButton" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Open JK FixHub menu"><span class="jk-badge" id="jkBadge" aria-hidden="true">JK</span><span class="jk-label" id="jkLabel">Sign In</span><svg class="jk-chevron" width="12" height="12" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/></svg></button><div class="jk-dropdown" id="jkDropdownMenu" role="menu" aria-label="User Account Menu" hidden><div class="jk-dropdown-header" id="jkDropdownHeader"><div class="jk-user-info"><strong class="jk-user-name" id="jkDropdownUserName">Welcome to JK FixHub</strong><span class="jk-user-role" id="jkDropdownUserRole">Jammu &amp; Kashmir Local Services</span></div></div><div class="jk-theme-section" role="region" aria-label="Appearance theme"><div class="theme-segmented-control theme-compact" role="radiogroup" aria-label="Theme selection"><button type="button" class="theme-option-btn" data-theme-choice="light" role="radio" aria-checked="true"><span class="theme-icon" aria-hidden="true">☀️</span><span>Light</span></button><button type="button" class="theme-option-btn" data-theme-choice="dark" role="radio" aria-checked="false"><span class="theme-icon" aria-hidden="true">🌙</span><span>Dark</span></button></div></div><div class="jk-dropdown-divider"></div><div class="jk-dropdown-items" id="jkDropdownItems"></div></div></div><div class="legacy-nav-controls" hidden aria-hidden="true"><button id="authContinue" type="button"></button><button id="authAccount" type="button" hidden></button><button id="workerDashboardButton" type="button" hidden></button><button data-auth-target="worker-register" type="button" hidden></button></div></div></div></header>
     <main>
       <!-- #HOME_VIEW -->
       <div id="homeView" class="page-view">
