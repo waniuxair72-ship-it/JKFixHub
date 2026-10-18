@@ -520,7 +520,36 @@ export function openProfileEditor(origin = "dashboard") {
   if (phoneInput) phoneInput.value = user?.phone || "";
   if (serviceInput) serviceInput.value = worker.service || user?.service || "";
   if (districtInput) districtInput.value = worker.district || user?.district || "";
-  if (expInput) expInput.value = worker.experience || user?.experience || "";
+  if (expInput) {
+    const rawExp = (worker.experience || user?.experience || "").trim();
+    const customWrap = document.getElementById("editWorkerCustomExpWrap");
+    const customInput = document.getElementById("editWorkerCustomExpInput");
+    const customUnit = document.getElementById("editWorkerCustomExpUnit");
+
+    const presetOption = Array.from(expInput.options).find((opt) => opt.value === rawExp);
+    if (presetOption && rawExp !== "" && rawExp !== "custom") {
+      expInput.value = rawExp;
+      if (customWrap) customWrap.hidden = true;
+      if (customInput) customInput.value = "";
+      if (customUnit) customUnit.textContent = "years";
+    } else if (rawExp) {
+      expInput.value = "custom";
+      if (customWrap) customWrap.hidden = false;
+      const num = parseInt(rawExp, 10);
+      if (!isNaN(num) && num >= 1) {
+        if (customInput) customInput.value = num;
+        if (customUnit) customUnit.textContent = num === 1 ? "year" : "years";
+      } else {
+        if (customInput) customInput.value = "";
+        if (customUnit) customUnit.textContent = "years";
+      }
+    } else {
+      expInput.value = "";
+      if (customWrap) customWrap.hidden = true;
+      if (customInput) customInput.value = "";
+      if (customUnit) customUnit.textContent = "years";
+    }
+  }
   if (availInput) {
     availInput.value = ["Available", "Busy", "Offline"].includes(worker.availability) ? worker.availability : "Busy";
   }
@@ -559,7 +588,8 @@ async function handleProfileSave(event) {
   const phone = document.getElementById("editWorkerPhone");
   const service = document.getElementById("editWorkerService");
   const district = document.getElementById("editWorkerDistrict");
-  const experience = document.getElementById("editWorkerExperience");
+  const expSelect = document.getElementById("editWorkerExperience");
+  const customExpInput = document.getElementById("editWorkerCustomExpInput");
   const availability = document.getElementById("editWorkerAvailability");
 
   const nameValid = validatePersonName(name ? name.value : "");
@@ -567,8 +597,20 @@ async function handleProfileSave(event) {
   const phoneValid = phone ? validatePhone(phone.value) : true;
   const serviceValid = service ? (validateService(service.value) || getWorkers().some((item) => item.service === service.value)) : false;
   const districtValid = district ? (ALL_DISTRICTS.includes(district.value) || getWorkers().some((item) => item.district === district.value)) : false;
-  const experienceValid = experience && validateText(experience.value, { minLength: 1, maxLength: 40 }) &&
-    /^\d{1,2} years?$/.test(experience.value.trim());
+
+  let selectedExperience = "";
+  let experienceValid = false;
+  if (expSelect?.value === "custom") {
+    const rawVal = customExpInput?.value ? parseInt(customExpInput.value.trim(), 10) : NaN;
+    if (!isNaN(rawVal) && rawVal >= 1 && rawVal <= 70) {
+      selectedExperience = `${rawVal} ${rawVal === 1 ? "year" : "years"}`;
+      experienceValid = true;
+    }
+  } else if (expSelect?.value) {
+    selectedExperience = expSelect.value.trim();
+    experienceValid = /^\d{1,2} years?$/i.test(selectedExperience);
+  }
+
   const availabilityValid = availability && ["Available", "Busy", "Offline"].includes(availability.value);
 
   setEditError(name, nameValid ? "" : getSafeErrorMessage("invalidName"), document.getElementById("editWorkerNameError"));
@@ -576,7 +618,7 @@ async function handleProfileSave(event) {
   if (phone) setEditError(phone, phoneValid ? "" : getSafeErrorMessage("invalidPhone"), document.getElementById("editWorkerPhoneError"));
   setEditError(service, serviceValid ? "" : getSafeErrorMessage("invalidService"), document.getElementById("editWorkerServiceError"));
   setEditError(district, districtValid ? "" : "Choose a valid district.", document.getElementById("editWorkerDistrictError"));
-  setEditError(experience, experienceValid ? "" : "Enter experience like “6 years”.", document.getElementById("editWorkerExperienceError"));
+  setEditError(expSelect, experienceValid ? "" : "Choose your experience or enter custom years (1–70).", document.getElementById("editWorkerExperienceError"));
   setEditError(availability, availabilityValid ? "" : "Choose an availability option.", document.getElementById("editWorkerAvailabilityError"));
 
   if (!nameValid || !emailValid || !phoneValid || !serviceValid || !districtValid || !experienceValid || !availabilityValid) {
@@ -591,7 +633,6 @@ async function handleProfileSave(event) {
   const trimmedPhone = phone ? phone.value.trim() : (user?.phone || "");
   const selectedService = service.value;
   const selectedDistrict = district.value;
-  const selectedExperience = experience.value.trim();
   const selectedAvailability = availability.value;
 
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
@@ -762,6 +803,31 @@ export function initializeWorkerDashboard() {
   const editModal = document.getElementById("workerProfileEditModal");
   if (!view || !form || !editModal) return;
   installWorkerReviewsSection();
+
+  const editExpSelect = document.getElementById("editWorkerExperience");
+  const editCustomExpWrap = document.getElementById("editWorkerCustomExpWrap");
+  const editCustomExpInput = document.getElementById("editWorkerCustomExpInput");
+  const editCustomExpUnit = document.getElementById("editWorkerCustomExpUnit");
+  const editExpError = document.getElementById("editWorkerExperienceError");
+
+  if (editExpSelect) {
+    editExpSelect.addEventListener("change", () => {
+      const isCustom = editExpSelect.value === "custom";
+      if (editCustomExpWrap) editCustomExpWrap.hidden = !isCustom;
+      if (isCustom && editCustomExpInput) editCustomExpInput.focus();
+      if (editExpError) setEditError(editExpSelect, "", editExpError);
+    });
+  }
+
+  if (editCustomExpInput) {
+    editCustomExpInput.addEventListener("input", () => {
+      const raw = parseInt(editCustomExpInput.value, 10);
+      if (editCustomExpUnit) {
+        editCustomExpUnit.textContent = raw === 1 ? "year" : "years";
+      }
+      if (editExpError) setEditError(editExpSelect, "", editExpError);
+    });
+  }
 
   document.getElementById("editWorkerProfileButton").addEventListener("click", openProfileEditor);
   form.addEventListener("submit", handleProfileSave);

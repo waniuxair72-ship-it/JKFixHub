@@ -721,9 +721,9 @@ export async function registerWorker({ name, email, phone, district, service, ex
     return { success: false, error: "Please select a valid primary service." };
   }
 
-  if (typeof experience !== "string" || experience.trim().length === 0 || experience.trim().length > 40) {
-    setFieldError("authWorkerExperience", "authWorkerExperienceError", getSafeErrorMessage("invalidExperience"));
-    return { success: false, error: getSafeErrorMessage("invalidExperience") };
+  if (typeof experience !== "string" || experience.trim().length === 0 || !/^\d{1,2} years?$/i.test(experience.trim())) {
+    setFieldError("authWorkerExperience", "authWorkerExperienceError", "Please select or enter valid years of experience.");
+    return { success: false, error: "Please select or enter valid years of experience." };
   }
 
   const allowedAvailabilities = ["Available", "Busy", "Offline"];
@@ -2350,6 +2350,28 @@ export function initializeAuth() {
 
   const workerRegisterForm = document.getElementById("authWorkerRegisterForm");
   if (workerRegisterForm) {
+    const authExpSelect = document.getElementById("authWorkerExperience");
+    const authCustomExpWrap = document.getElementById("authWorkerCustomExpWrap");
+    const authCustomExpInput = document.getElementById("authWorkerCustomExpInput");
+    const authCustomExpUnit = document.getElementById("authWorkerCustomExpUnit");
+
+    if (authExpSelect) {
+      authExpSelect.addEventListener("change", () => {
+        const isCustom = authExpSelect.value === "custom";
+        if (authCustomExpWrap) authCustomExpWrap.hidden = !isCustom;
+        if (isCustom && authCustomExpInput) authCustomExpInput.focus();
+      });
+    }
+
+    if (authCustomExpInput) {
+      authCustomExpInput.addEventListener("input", () => {
+        const raw = parseInt(authCustomExpInput.value, 10);
+        if (authCustomExpUnit) {
+          authCustomExpUnit.textContent = raw === 1 ? "year" : "years";
+        }
+      });
+    }
+
     workerRegisterForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       const name = document.getElementById("authWorkerName")?.value || "";
@@ -2357,7 +2379,25 @@ export function initializeAuth() {
       const phone = document.getElementById("authWorkerPhone")?.value || "";
       const district = document.getElementById("authWorkerDistrict")?.value || "";
       const service = document.getElementById("authWorkerService")?.value || "";
-      const experience = document.getElementById("authWorkerExperience")?.value || "";
+      
+      let experience = "";
+      if (authExpSelect?.value === "custom") {
+        const val = authCustomExpInput?.value ? parseInt(authCustomExpInput.value.trim(), 10) : NaN;
+        if (!isNaN(val) && val >= 1 && val <= 70) {
+          experience = `${val} ${val === 1 ? "year" : "years"}`;
+        } else {
+          setFieldError("authWorkerExperience", "authWorkerExperienceError", "Please enter a valid number of years (1–70).");
+          authCustomExpInput?.focus();
+          return;
+        }
+      } else if (authExpSelect?.value) {
+        experience = authExpSelect.value;
+      } else {
+        setFieldError("authWorkerExperience", "authWorkerExperienceError", "Please select your years of experience.");
+        authExpSelect?.focus();
+        return;
+      }
+
       const availability = document.getElementById("authWorkerAvailability")?.value || "Available";
       const password = document.getElementById("authWorkerPassword")?.value || "";
       const confirmPassword = document.getElementById("authWorkerConfirmPassword")?.value || "";

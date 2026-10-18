@@ -27,6 +27,8 @@ let currentChatConversation = null;
 let chatMessagesUnsubscribe = null;
 
 let feedbackTimer = null;
+const renderedMessageIds = new Set();
+let hasLoadedInitialConversation = false;
 
 const CUSTOMER_QUICK_MESSAGES = [
   "When can you visit?",
@@ -51,6 +53,71 @@ function getInitials(name) {
   if (parts.length === 0) return "--";
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+export function highlightReferencedMessage(targetId) {
+  if (!targetId) return;
+  const messageList = document.getElementById("chatMessages");
+  if (!messageList) return;
+  const targetEl = document.getElementById(`chat-msg-${targetId}`) ||
+    messageList.querySelector(`[data-message-id="${targetId}"]`);
+  if (!targetEl) return;
+
+  targetEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  targetEl.classList.remove("chat-message-highlighted");
+  void targetEl.offsetWidth;
+  targetEl.classList.add("chat-message-highlighted");
+  setTimeout(() => {
+    targetEl.classList.remove("chat-message-highlighted");
+  }, 1600);
+}
+
+function triggerPortalSendEffect(senderRole) {
+  if (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
+  const sendBtn = document.getElementById("chatSendButton") || document.querySelector("#chatForm button[type='submit']");
+  if (!sendBtn) return;
+
+  sendBtn.classList.remove("chat-portal-pulse");
+  void sendBtn.offsetWidth;
+  sendBtn.classList.add("chat-portal-pulse");
+  setTimeout(() => sendBtn.classList.remove("chat-portal-pulse"), 600);
+
+  const burst = document.createElement("div");
+  burst.className = `chat-portal-burst chat-portal-burst-${senderRole === "worker" ? "worker" : "customer"}`;
+  burst.setAttribute("aria-hidden", "true");
+
+  const colors = senderRole === "worker"
+    ? ["#0d9488", "#2dd4bf", "#5eead4", "#14b8a6"]
+    : ["#2563eb", "#38bdf8", "#60a5fa", "#93c5fd"];
+
+  const count = 6;
+  for (let i = 0; i < count; i++) {
+    const particle = document.createElement("span");
+    particle.className = "chat-portal-particle";
+    const angle = (i / count) * 2 * Math.PI + (Math.random() * 0.4 - 0.2);
+    const distance = 16 + Math.random() * 20;
+    const dx = Math.cos(angle) * distance;
+    const dy = Math.sin(angle) * distance;
+    const size = 3 + Math.random() * 2.5;
+
+    particle.style.setProperty("--p-dx", `${dx.toFixed(1)}px`);
+    particle.style.setProperty("--p-dy", `${dy.toFixed(1)}px`);
+    particle.style.setProperty("--p-color", colors[i % colors.length]);
+    particle.style.width = `${size.toFixed(1)}px`;
+    particle.style.height = `${size.toFixed(1)}px`;
+    burst.appendChild(particle);
+  }
+
+  const prevPosition = window.getComputedStyle(sendBtn).position;
+  if (prevPosition === "static") {
+    sendBtn.style.position = "relative";
+  }
+  sendBtn.appendChild(burst);
+  setTimeout(() => {
+    if (burst.parentNode) burst.parentNode.removeChild(burst);
+  }, 650);
 }
 
 function setChatFeedback(message, type = "") {
@@ -99,7 +166,7 @@ function renderQuickMessages(role) {
   container.replaceChildren(...chips);
 }
 
-function buildMessage(message, currentUid) {
+function buildMessage(message, currentUid, isNew = false, allMessages = []) {
   const article = document.createElement("article");
   const author = document.createElement("span");
   const text = document.createElement("p");
@@ -110,7 +177,51 @@ function buildMessage(message, currentUid) {
   const ownMessage = (message.senderId === currentUid || message.senderUid === currentUid);
   const senderRole = message.senderRole || (ownMessage ? getUserRole() : (getUserRole() === "customer" ? "worker" : "customer"));
 
-  article.className = `chat-message${ownMessage ? " chat-message-own" : " chat-message-other"}${senderRole === "worker" ? " chat-message-worker" : " chat-message-customer"}`;
+  const msgId = message.id || `${message.senderUid || message.senderId || "msg"}_${message.createdAt || ""}_${message.text || ""}`;
+  article.id = `chat-msg-${msgId}`;
+  article.dataset.messageId = String(msgId);
+
+  let classes = `chat-message${ownMessage ? " chat-message-own" : " chat-message-other"}${senderRole === "worker" ? " chat-message-worker" : " chat-message-customer"}`;
+  if (isNew) {
+    classes += " chat-message-portal-emerge";
+  }
+  article.className = classes;
+
+  // Handle explicit reply metadata only when present
+  const replyTargetId = message.replyToId || message.replyToMessageId || message.replyTo?.id || message.replyTo || message.parentMessageId;
+  if (replyTargetId) {
+    article.dataset.replyToId = String(replyTargetId);
+
+    const referencedMsg = allMessages.find((m) => (m.id && String(m.id) === String(replyTargetId)) || (m.messageId && String(m.messageId) === String(replyTargetId)));
+    const replyAuthorText = message.replyToAuthor || referencedMsg?.senderName || (referencedMsg?.senderRole === "worker" ? "Worker" : (referencedMsg?.senderRole === "customer" ? "Customer" : "User"));
+    const replyTextPreview = message.replyToText || referencedMsg?.text || message.replySnippet || "";
+
+    const threadLine = document.createElement("div");
+    threadLine.className = "chat-reply-thread-line";
+    threadLine.setAttribute("aria-hidden", "true");
+    article.append(threadLine);
+
+    if (replyTextPreview) {
+      const quoteWrap = document.createElement("div");
+      quoteWrap.className = "chat-reply-quote";
+      quoteWrap.dataset.targetId = String(replyTargetId);
+      quoteWrap.setAttribute("role", "button");
+      quoteWrap.setAttribute("tabindex", "0");
+      quoteWrap.setAttribute("aria-label", `Jump to replied message from ${replyAuthorText}`);
+
+      const quoteAuthor = document.createElement("span");
+      quoteAuthor.className = "chat-reply-quote-author";
+      setTextContent(quoteAuthor, replyAuthorText);
+
+      const quoteSnippet = document.createElement("span");
+      quoteSnippet.className = "chat-reply-quote-text";
+      setTextContent(quoteSnippet, replyTextPreview.length > 55 ? replyTextPreview.slice(0, 53) + "…" : replyTextPreview);
+
+      quoteWrap.append(quoteAuthor, quoteSnippet);
+      article.append(quoteWrap);
+    }
+  }
+
   author.className = "chat-message-author";
   const authorText = ownMessage
     ? "You"
@@ -150,14 +261,61 @@ function renderMessages(messages) {
   if (!messageList) return;
   const currentUser = getCurrentUser();
   const currentUid = currentUser?.firebaseUid || currentUser?.id;
-  messageList.replaceChildren(...messages.map((m) => buildMessage(m, currentUid)));
+
+  if (!messages || messages.length === 0) {
+    renderedMessageIds.clear();
+    hasLoadedInitialConversation = true;
+    const emptyState = document.createElement("div");
+    emptyState.className = "chat-empty-state";
+    emptyState.innerHTML = `
+      <div class="chat-empty-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="36" height="36">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+          <path d="M8 10h.01M12 10h.01M16 10h.01"></path>
+        </svg>
+      </div>
+      <h3 class="chat-empty-title">Direct Conversation</h3>
+      <p class="chat-empty-desc">Send a message or pick a suggestion below to discuss your service details securely.</p>
+    `;
+    messageList.replaceChildren(emptyState);
+    const feedbackEl = document.getElementById("chatFeedback");
+    const currentFeedback = feedbackEl ? feedbackEl.textContent : "";
+    if (!currentFeedback || currentFeedback === "Connecting to conversation...") {
+      setChatFeedback("Direct communication channel is open.");
+    }
+    return;
+  }
+
+  const newArticles = [];
+  const newlyArrivedReplies = [];
+
+  for (const m of messages) {
+    const msgKey = m.id || `${m.senderUid || m.senderId || "msg"}_${m.createdAt || ""}_${m.text || ""}`;
+    const isNew = hasLoadedInitialConversation && !renderedMessageIds.has(msgKey);
+    renderedMessageIds.add(msgKey);
+    const article = buildMessage(m, currentUid, isNew, messages);
+    newArticles.push(article);
+    if (isNew && article.dataset.replyToId) {
+      newlyArrivedReplies.push(article.dataset.replyToId);
+    }
+  }
+
+  hasLoadedInitialConversation = true;
+  messageList.replaceChildren(...newArticles);
+
+  if (newlyArrivedReplies.length > 0) {
+    requestAnimationFrame(() => {
+      highlightReferencedMessage(newlyArrivedReplies[newlyArrivedReplies.length - 1]);
+    });
+  }
+
   requestAnimationFrame(() => {
     messageList.scrollTop = messageList.scrollHeight;
   });
   const feedbackEl = document.getElementById("chatFeedback");
   const currentFeedback = feedbackEl ? feedbackEl.textContent : "";
   if (!currentFeedback || currentFeedback === "Direct communication channel is open." || currentFeedback === "Connecting to conversation...") {
-    setChatFeedback(messages.length ? "" : "Direct communication channel is open.");
+    setChatFeedback("");
   }
 }
 
@@ -171,6 +329,14 @@ export function closeChat(returnToList = true) {
   currentChatConversation = null;
   closeModal("chatModal");
   closeActiveConversation();
+
+  renderedMessageIds.clear();
+  hasLoadedInitialConversation = false;
+
+  const messageList = document.getElementById("chatMessages");
+  if (messageList) {
+    messageList.replaceChildren();
+  }
 
   isSending = false;
   const input = document.getElementById("chatMessageInput");
@@ -303,6 +469,22 @@ export async function openChatForRequest(requestId) {
   setChatFeedback("Direct communication channel is open.");
 
   // 9. Open modal and focus input
+  renderedMessageIds.clear();
+  hasLoadedInitialConversation = false;
+
+  const messageList = document.getElementById("chatMessages");
+  if (messageList) {
+    const loadingState = document.createElement("div");
+    loadingState.className = "chat-loading-state";
+    loadingState.setAttribute("role", "status");
+    loadingState.setAttribute("aria-live", "polite");
+    loadingState.innerHTML = `
+      <span class="btn-spinner" aria-hidden="true"></span>
+      <span>Loading conversation...</span>
+    `;
+    messageList.replaceChildren(loadingState);
+  }
+
   openModal("chatModal");
   const input = document.getElementById("chatMessageInput");
   if (input) input.focus();
@@ -316,6 +498,17 @@ export async function openChatForRequest(requestId) {
     (err) => {
       console.warn("[JKFixHub Chat] Message subscription notice:", err);
       setChatFeedback("Connection issue: could not load recent messages.");
+      const list = document.getElementById("chatMessages");
+      if (list && (!list.children.length || list.querySelector(".chat-loading-state"))) {
+        const errorState = document.createElement("div");
+        errorState.className = "chat-error-state";
+        errorState.innerHTML = `
+          <div class="chat-empty-icon chat-error-icon" aria-hidden="true">⚠️</div>
+          <h3 class="chat-empty-title">Unable to Load Messages</h3>
+          <p class="chat-empty-desc">Check your network connection and try again.</p>
+        `;
+        list.replaceChildren(errorState);
+      }
     }
   );
 
@@ -354,6 +547,8 @@ async function sendChatMessage(rawText) {
   const currentUser = getCurrentUser();
   const currentUid = currentUser?.firebaseUid || currentUser?.id;
   const senderRole = getUserRole();
+
+  triggerPortalSendEffect(senderRole);
 
   const input = document.getElementById("chatMessageInput");
   if (input) {
@@ -414,6 +609,12 @@ function sendMessage(event) {
 function handleChatActions(event) {
   const target = event.target;
   if (!(target instanceof Element)) return;
+
+  const quoteBtn = target.closest(".chat-reply-quote");
+  if (quoteBtn && quoteBtn.dataset.targetId) {
+    highlightReferencedMessage(quoteBtn.dataset.targetId);
+    return;
+  }
 
   const quickButton = target.closest(".chat-quick-btn");
   if (quickButton && quickButton.dataset.quickText) {
@@ -517,4 +718,14 @@ export function initializeChat() {
       closeChat();
     }
   }, true);
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      const quoteBtn = event.target?.closest?.(".chat-reply-quote");
+      if (quoteBtn && quoteBtn.dataset.targetId) {
+        event.preventDefault();
+        highlightReferencedMessage(quoteBtn.dataset.targetId);
+      }
+    }
+  });
 }

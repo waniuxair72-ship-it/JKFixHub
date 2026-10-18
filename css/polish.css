@@ -2064,6 +2064,49 @@ body #webgl-background {
   margin-top: 4px;
 }
 
+/* Worker Experience Custom Input Styling */
+.custom-experience-row {
+  margin-top: 6px;
+}
+
+.custom-experience-input-wrap {
+  display: flex;
+  align-items: center;
+  min-height: 47px;
+  border: 1px solid var(--color-border, #cbd5e1);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--color-surface-raised, #ffffff);
+  box-sizing: border-box;
+  padding: 0 12px;
+  transition: border-color var(--duration-fast, 0.15s) ease, box-shadow var(--duration-fast, 0.15s) ease;
+}
+
+.custom-experience-input-wrap:focus-within {
+  border-color: var(--color-primary, #0284c7);
+  box-shadow: var(--shadow-focus, 0 0 0 3px rgba(2, 132, 199, 0.15));
+}
+
+.custom-experience-input-wrap input {
+  flex: 1;
+  min-width: 0;
+  border: none !important;
+  outline: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 8px 4px !important;
+  min-height: 0 !important;
+  font-size: 0.9rem;
+  color: var(--color-ink, #0f172a);
+}
+
+.custom-experience-unit {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-muted, #64748b);
+  padding-left: 6px;
+  user-select: none;
+}
+
 /* Customer request management */
 #customerRequestsModal .customer-requests-modal {
   width: min(920px, 100%);
@@ -2577,7 +2620,6 @@ body #webgl-background {
   overflow-wrap: anywhere;
   word-break: break-word;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
-  animation: chatMessageIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
   transition: transform 0.12s ease;
 }
 
@@ -2589,6 +2631,152 @@ body #webgl-background {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* Kashmir Portal Chat 2.0: Emerging Message Portal Glow & Ripple */
+.chat-message-portal-emerge {
+  animation: kashmirPortalEmerge 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  position: relative;
+}
+
+@keyframes kashmirPortalEmerge {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+    filter: blur(1.5px);
+  }
+  50% {
+    opacity: 0.95;
+    transform: translateY(0) scale(1.015);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: none;
+  }
+}
+
+.chat-message-customer.chat-message-portal-emerge {
+  box-shadow: 0 0 20px rgba(37, 99, 235, 0.4), 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+
+.chat-message-worker.chat-message-portal-emerge {
+  box-shadow: 0 0 20px rgba(13, 148, 136, 0.4), 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+
+.chat-message-portal-emerge::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  animation: kashmirPortalRipple 0.58s ease-out forwards;
+}
+
+.chat-message-customer.chat-message-portal-emerge::after {
+  border: 1.5px solid rgba(56, 189, 248, 0.65);
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
+}
+
+.chat-message-worker.chat-message-portal-emerge::after {
+  border: 1.5px solid rgba(45, 212, 191, 0.65);
+  box-shadow: 0 0 12px rgba(45, 212, 191, 0.35);
+}
+
+@keyframes kashmirPortalRipple {
+  0% {
+    transform: scale(0.97);
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(1.06);
+    opacity: 0;
+  }
+}
+
+/* Kashmir Portal Chat 2.0: Referenced Message Highlight */
+.chat-message-highlighted {
+  animation: kashmirRefHighlight 1.5s ease-out forwards !important;
+}
+
+@keyframes kashmirRefHighlight {
+  0% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.85);
+    transform: scale(1.02);
+  }
+  25% {
+    box-shadow: 0 0 20px 4px rgba(56, 189, 248, 0.75);
+    transform: scale(1.02);
+  }
+  100% {
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+    transform: scale(1);
+  }
+}
+
+/* Kashmir Portal Chat 2.0: Reply Quote & Thread Line */
+.chat-reply-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 8px;
+  margin-bottom: 6px;
+  background: rgba(0, 0, 0, 0.08);
+  border-left: 3px solid currentColor;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+  user-select: none;
+}
+
+.chat-reply-quote:hover {
+  background: rgba(0, 0, 0, 0.14);
+  transform: translateX(2px);
+}
+
+.chat-reply-quote-author {
+  font-weight: 700;
+  font-size: 0.68rem;
+  opacity: 0.9;
+}
+
+.chat-reply-quote-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.82;
+}
+
+.chat-reply-thread-line {
+  position: absolute;
+  top: -8px;
+  left: 14px;
+  width: 2px;
+  height: 8px;
+  background: currentColor;
+  opacity: 0.35;
+  border-radius: 1px;
+  pointer-events: none;
+  animation: kashmirThreadDraw 0.35s ease-out forwards;
+}
+
+.chat-message-own .chat-reply-thread-line {
+  left: auto;
+  right: 14px;
+}
+
+@keyframes kashmirThreadDraw {
+  0% {
+    transform: scaleY(0);
+    opacity: 0;
+  }
+  100% {
+    transform: scaleY(1);
+    opacity: 0.35;
   }
 }
 
@@ -2717,6 +2905,75 @@ body #webgl-background {
   gap: 6px;
   margin-top: 4px;
   font-size: 0.65rem;
+}
+
+/* Chat Empty, Loading, and Error States */
+.chat-empty-state,
+.chat-loading-state,
+.chat-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  margin: auto;
+  padding: 32px 18px;
+  max-width: 340px;
+  animation: chatMessageIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.chat-empty-icon {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(14, 116, 144, 0.08);
+  color: #0891b2;
+  margin-bottom: 12px;
+  border: 1px solid rgba(14, 116, 144, 0.18);
+  box-shadow: 0 2px 8px rgba(8, 145, 178, 0.08);
+}
+
+.chat-empty-icon svg {
+  display: block;
+}
+
+.chat-empty-icon.chat-error-icon {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.2);
+  font-size: 1.35rem;
+}
+
+.chat-empty-title {
+  margin: 0 0 6px;
+  font-size: 0.96rem;
+  font-weight: 700;
+  color: var(--text, #0f172a);
+  letter-spacing: -0.01em;
+}
+
+.chat-empty-desc {
+  margin: 0;
+  font-size: 0.81rem;
+  color: var(--muted, #64748b);
+  line-height: 1.5;
+}
+
+.chat-loading-state {
+  flex-direction: row;
+  gap: 10px;
+  color: #0891b2;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.chat-loading-state .btn-spinner {
+  width: 18px;
+  height: 18px;
+  margin-right: 0;
 }
 
 .chat-modal .chat-feedback,
@@ -2952,6 +3209,58 @@ body #webgl-background {
 
 .chat-send-btn:hover:not(:disabled) .chat-send-icon {
   transform: translate(1px, -1px);
+}
+
+/* Kashmir Portal Chat 2.0: Sending Portal Glow & Particles */
+.chat-send-btn.chat-portal-pulse {
+  animation: kashmirPortalPulse 0.55s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+@keyframes kashmirPortalPulse {
+  0% {
+    transform: scale(0.96);
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.7);
+  }
+  40% {
+    transform: scale(1.05);
+    box-shadow: 0 0 22px 6px rgba(56, 189, 248, 0.8), 0 0 34px 10px rgba(13, 148, 136, 0.4);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.28);
+  }
+}
+
+.chat-portal-burst {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 25;
+}
+
+.chat-portal-particle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: 50%;
+  background: var(--p-color, #38bdf8);
+  box-shadow: 0 0 8px 1px var(--p-color, #38bdf8);
+  transform: translate(-50%, -50%) scale(1);
+  animation: kashmirParticleFly 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes kashmirParticleFly {
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(calc(-50% + var(--p-dx, 0px)), calc(-50% + var(--p-dy, 0px))) scale(0);
+    opacity: 0;
+  }
 }
 
 .customer-chat-locked {
@@ -6348,9 +6657,30 @@ button.is-loading {
     animation-duration: 2s;
     opacity: 0.7;
   }
-  .chat-message {
+  .chat-message,
+  .chat-message-portal-emerge {
     animation: none !important;
     transition: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+  }
+  .chat-message-portal-emerge::after {
+    display: none !important;
+  }
+  .chat-portal-burst {
+    display: none !important;
+  }
+  .chat-send-btn.chat-portal-pulse {
+    animation: none !important;
+  }
+  .chat-message-highlighted {
+    animation: none !important;
+    box-shadow: 0 0 0 2px #38bdf8 !important;
+  }
+  .chat-reply-thread-line {
+    animation: none !important;
+    opacity: 0.35 !important;
   }
   .chat-send-btn,
   .chat-quick-btn {
@@ -7300,6 +7630,116 @@ button.is-loading {
 [data-theme="dark"] .chat-modal .chat-feedback.chat-feedback-error,
 [data-theme="dark"] .chat-feedback-error {
   color: #f87171 !important;
+}
+
+/* Dark Mode: Worker Experience Custom Input */
+[data-theme="dark"] .custom-experience-input-wrap {
+  background: #151d30;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+[data-theme="dark"] .custom-experience-input-wrap:focus-within {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25);
+}
+
+[data-theme="dark"] .custom-experience-input-wrap input {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .custom-experience-unit {
+  color: #94a3b8;
+}
+
+/* Dark Mode: Chat Empty, Loading, and Error States */
+[data-theme="dark"] .chat-empty-icon {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.25);
+  box-shadow: 0 2px 12px rgba(56, 189, 248, 0.12);
+}
+
+[data-theme="dark"] .chat-empty-icon.chat-error-icon {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+[data-theme="dark"] .chat-empty-title {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .chat-empty-desc {
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .chat-loading-state {
+  color: #38bdf8;
+}
+
+/* Dark Mode: Kashmir Portal Chat 2.0 */
+[data-theme="dark"] .chat-send-btn.chat-portal-pulse {
+  animation: kashmirPortalPulseDark 0.55s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+@keyframes kashmirPortalPulseDark {
+  0% {
+    transform: scale(0.96);
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.8);
+  }
+  40% {
+    transform: scale(1.05);
+    box-shadow: 0 0 24px 8px rgba(56, 189, 248, 0.9), 0 0 36px 12px rgba(45, 212, 191, 0.5);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
+  }
+}
+
+[data-theme="dark"] .chat-message-customer.chat-message-portal-emerge {
+  box-shadow: 0 0 22px rgba(56, 189, 248, 0.45), 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .chat-message-worker.chat-message-portal-emerge {
+  box-shadow: 0 0 22px rgba(45, 212, 191, 0.45), 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .chat-message-customer.chat-message-portal-emerge::after {
+  border-color: rgba(56, 189, 248, 0.7);
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.4);
+}
+
+[data-theme="dark"] .chat-message-worker.chat-message-portal-emerge::after {
+  border-color: rgba(45, 212, 191, 0.7);
+  box-shadow: 0 0 14px rgba(45, 212, 191, 0.4);
+}
+
+[data-theme="dark"] .chat-reply-quote {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .chat-reply-quote:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+[data-theme="dark"] .chat-message-highlighted {
+  animation: kashmirRefHighlightDark 1.5s ease-out forwards !important;
+}
+
+@keyframes kashmirRefHighlightDark {
+  0% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.9);
+    transform: scale(1.02);
+  }
+  25% {
+    box-shadow: 0 0 22px 6px rgba(56, 189, 248, 0.85);
+    transform: scale(1.02);
+  }
+  100% {
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+    transform: scale(1);
+  }
 }
 
 /* 8. Buttons & Feedback in Dark Mode */
