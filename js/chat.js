@@ -26,24 +26,44 @@ let returnTo = null;
 let currentChatConversation = null;
 let chatMessagesUnsubscribe = null;
 
+let feedbackTimer = null;
+
 const CUSTOMER_QUICK_MESSAGES = [
+  "When can you visit?",
+  "Please share the estimated price",
+  "Can you explain the issue?",
   "Hey, are you available?",
-  "Can you help me with this issue?",
-  "When can you come?",
   "Thank you."
 ];
 
 const WORKER_QUICK_MESSAGES = [
   "Yes, I am available.",
-  "Please share more details.",
-  "May I give you my contact no.?",
   "I can come today.",
+  "Please share the estimated price",
+  "Can you explain the issue?",
+  "Please share more details.",
   "Thank you."
 ];
 
-function setChatFeedback(message) {
+function getInitials(name) {
+  if (!name || typeof name !== "string") return "--";
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "--";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function setChatFeedback(message, type = "") {
+  if (feedbackTimer) {
+    clearTimeout(feedbackTimer);
+    feedbackTimer = null;
+  }
   const feedbackEl = document.getElementById("chatFeedback");
   if (feedbackEl) {
+    feedbackEl.className = "chat-feedback";
+    if (type) {
+      feedbackEl.classList.add(`chat-feedback-${type}`);
+    }
     setTextContent(feedbackEl, message);
   }
 }
@@ -88,8 +108,10 @@ function buildMessage(message, currentUid) {
   const readState = document.createElement("span");
 
   const ownMessage = (message.senderId === currentUid || message.senderUid === currentUid);
+  const senderRole = message.senderRole || (ownMessage ? getUserRole() : (getUserRole() === "customer" ? "worker" : "customer"));
 
-  article.className = `chat-message${ownMessage ? " chat-message-own" : ""}`;
+  article.className = `chat-message${ownMessage ? " chat-message-own" : " chat-message-other"}${senderRole === "worker" ? " chat-message-worker" : " chat-message-customer"}`;
+  author.className = "chat-message-author";
   const authorText = ownMessage
     ? "You"
     : message.senderRole === "worker"
@@ -98,10 +120,13 @@ function buildMessage(message, currentUid) {
         ? "Customer"
         : (message.senderName || "User");
   setTextContent(author, authorText);
+
+  text.className = "chat-message-text";
   setTextContent(text, message.text);
 
   const dateVal = message.createdAt ? new Date(message.createdAt) : new Date();
   timestamp.dateTime = message.createdAt || dateVal.toISOString();
+  timestamp.className = "chat-message-time";
   setTextContent(
     timestamp,
     Number.isNaN(dateVal.getTime())
@@ -112,6 +137,7 @@ function buildMessage(message, currentUid) {
   metadata.className = "chat-message-meta";
   metadata.append(timestamp);
   if (ownMessage && message.readAt) {
+    readState.className = "chat-message-read-state";
     setTextContent(readState, "Read");
     metadata.append(readState);
   }
@@ -125,8 +151,14 @@ function renderMessages(messages) {
   const currentUser = getCurrentUser();
   const currentUid = currentUser?.firebaseUid || currentUser?.id;
   messageList.replaceChildren(...messages.map((m) => buildMessage(m, currentUid)));
-  messageList.scrollTop = messageList.scrollHeight;
-  setChatFeedback(messages.length ? "" : "Direct communication channel is open.");
+  requestAnimationFrame(() => {
+    messageList.scrollTop = messageList.scrollHeight;
+  });
+  const feedbackEl = document.getElementById("chatFeedback");
+  const currentFeedback = feedbackEl ? feedbackEl.textContent : "";
+  if (!currentFeedback || currentFeedback === "Direct communication channel is open." || currentFeedback === "Connecting to conversation...") {
+    setChatFeedback(messages.length ? "" : "Direct communication channel is open.");
+  }
 }
 
 export function closeChat(returnToList = true) {
@@ -140,8 +172,16 @@ export function closeChat(returnToList = true) {
   closeModal("chatModal");
   closeActiveConversation();
 
+  isSending = false;
   const input = document.getElementById("chatMessageInput");
-  if (input) input.value = "";
+  if (input) {
+    input.value = "";
+    input.style.height = "";
+  }
+  if (feedbackTimer) {
+    clearTimeout(feedbackTimer);
+    feedbackTimer = null;
+  }
   setChatFeedback("");
   updateMessageCounter();
 
@@ -240,11 +280,20 @@ export async function openChatForRequest(requestId) {
   const headerName = isCust
     ? (currentChatConversation.workerName || "Worker")
     : (currentChatConversation.customerName || "Customer");
+  const otherRole = isCust ? "worker" : "customer";
 
   setTextContent(document.getElementById("chatParticipantName"), headerName);
+  setTextContent(document.getElementById("chatParticipantInitials"), getInitials(headerName));
+
+  const avatarEl = document.getElementById("chatParticipantAvatar");
+  if (avatarEl) {
+    avatarEl.classList.remove("chat-avatar-worker", "chat-avatar-customer");
+    avatarEl.classList.add(otherRole === "worker" ? "chat-avatar-worker" : "chat-avatar-customer");
+  }
+
   setTextContent(document.getElementById("chatService"), currentChatConversation.service || "");
   setTextContent(document.getElementById("chatDistrict"), currentChatConversation.district || "");
-  setTextContent(document.getElementById("chatRequestStatus"), "Accepted · Active");
+  setTextContent(document.getElementById("chatRequestStatus"), `Request ${request.status || "Accepted"}`);
 
   // 8. Reset composer & render quick response chips
   const form = document.getElementById("chatForm");
@@ -273,10 +322,13 @@ export async function openChatForRequest(requestId) {
   return true;
 }
 
+let isSending = false;
+
 async function sendChatMessage(rawText) {
+  if (isSending) return;
   if (!currentChatConversation) {
     recordSecurityEvent("CHAT_ACCESS_DENIED", getUserRole());
-    setChatFeedback("Chat is not available yet.");
+    setChatFeedback("Chat is not available yet.", "error");
     closeChat(false);
     return;
   }
@@ -284,16 +336,18 @@ async function sendChatMessage(rawText) {
   const cleanText = (rawText || "").trim();
   if (!validateText(cleanText, { minLength: 1, maxLength: MAX_MESSAGE_LENGTH, allowNewlines: true })) {
     recordSecurityEvent("CHAT_MESSAGE_REJECTED", getUserRole());
-    setChatFeedback(cleanText ? "Messages must be 1,000 characters or fewer." : "Write a message before sending.");
+    setChatFeedback(cleanText ? "Messages must be 1,000 characters or fewer." : "Write a message before sending.", "error");
     document.getElementById("chatMessageInput")?.focus();
     return;
   }
 
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
-    setChatFeedback("Network connection error. You are offline.");
+    setChatFeedback("Network connection error. You are offline.", "error");
     return;
   }
 
+  isSending = true;
+  setChatFeedback("Sending message...", "sending");
   const sendBtn = document.querySelector("#chatForm button[type='submit']");
   const restoreBtn = setButtonLoading(sendBtn, "Sending...");
 
@@ -302,7 +356,10 @@ async function sendChatMessage(rawText) {
   const senderRole = getUserRole();
 
   const input = document.getElementById("chatMessageInput");
-  if (input) input.value = "";
+  if (input) {
+    input.value = "";
+    input.style.height = "";
+  }
   updateMessageCounter();
 
   try {
@@ -315,17 +372,33 @@ async function sendChatMessage(rawText) {
     });
 
     if (!result?.success) {
-      setChatFeedback(result?.error || getChatError());
-      if (input) input.value = cleanText;
+      setChatFeedback(result?.error || getChatError(), "error");
+      if (input) {
+        input.value = cleanText;
+        input.style.height = "";
+      }
       updateMessageCounter();
     } else {
-      setChatFeedback("");
+      setChatFeedback("Message sent", "sent");
+      feedbackTimer = setTimeout(() => {
+        setChatFeedback("");
+      }, 2500);
+      const messageList = document.getElementById("chatMessages");
+      if (messageList) {
+        requestAnimationFrame(() => {
+          messageList.scrollTop = messageList.scrollHeight;
+        });
+      }
     }
   } catch (err) {
-    setChatFeedback("Failed to send message. Please try again.");
-    if (input) input.value = cleanText;
+    setChatFeedback("Failed to send message. Please try again.", "error");
+    if (input) {
+      input.value = cleanText;
+      input.style.height = "";
+    }
     updateMessageCounter();
   } finally {
+    isSending = false;
     restoreBtn();
     if (input) input.focus();
   }
@@ -344,7 +417,15 @@ function handleChatActions(event) {
 
   const quickButton = target.closest(".chat-quick-btn");
   if (quickButton && quickButton.dataset.quickText) {
-    sendChatMessage(quickButton.dataset.quickText);
+    const input = document.getElementById("chatMessageInput");
+    if (input) {
+      input.value = quickButton.dataset.quickText;
+      updateMessageCounter();
+      input.style.height = "auto";
+      const newHeight = Math.min(input.scrollHeight, 120);
+      input.style.height = `${Math.max(newHeight, 42)}px`;
+      input.focus();
+    }
     return;
   }
 
@@ -390,7 +471,38 @@ export function initializeChat() {
 
   document.addEventListener("click", handleChatActions);
   form.addEventListener("submit", sendMessage);
-  input.addEventListener("input", updateMessageCounter);
+  input.addEventListener("input", () => {
+    updateMessageCounter();
+    input.style.height = "auto";
+    const newHeight = Math.min(input.scrollHeight, 120);
+    input.style.height = `${Math.max(newHeight, 42)}px`;
+  });
+
+  // Support Enter to send and Shift+Enter for newline
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      if (event.shiftKey || event.ctrlKey || event.altKey || event.isComposing) {
+        return;
+      }
+      event.preventDefault();
+      if (typeof form.requestSubmit === "function") {
+        form.requestSubmit();
+      } else {
+        sendMessage(event);
+      }
+    }
+  });
+
+  // Ensure message log is visible when virtual keyboard opens
+  input.addEventListener("focus", () => {
+    setTimeout(() => {
+      const list = document.getElementById("chatMessages");
+      if (list) {
+        list.scrollTop = list.scrollHeight;
+      }
+    }, 200);
+  });
+
   document.addEventListener("keydown", (event) => {
     const dialog = document.getElementById("chatModal");
     if (event.key === "Escape" && dialog?.classList.contains("open")) {
