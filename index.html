@@ -262,7 +262,7 @@
       /* SEARCH SECTION */
       .search-section { padding-top: 48px; }
       .search-panel { margin-top: 24px; padding: 28px; border: 1px solid var(--line); border-radius: var(--radius); background: #ffffff; box-shadow: var(--shadow); }
-      .search-form { display: grid; grid-template-columns: 1.15fr 1.15fr 1.35fr auto auto; gap: 14px; align-items: end; }
+      .search-form { display: grid; grid-template-columns: 1.15fr 1.15fr 1.35fr auto; gap: 14px; align-items: end; }
       .field { display: grid; gap: 7px; }
       .field label { color: #334155; font-size: .78rem; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
       .field input, .field select, .registration-grid input, .registration-grid select, .registration-grid textarea { min-height: 48px; width: 100%; border: 1.5px solid #cbd5e1; border-radius: 12px; padding: 11px 14px; outline: 0; background: #ffffff; color: var(--text); font-size: .95rem; }
@@ -877,7 +877,80 @@
       </div>
       <!-- #SEARCH_VIEW -->
       <div id="searchView" class="page-view" hidden>
-        <section class="section search-section dedicated-search-screen" id="find-worker"><div class="container"><div class="search-screen-topbar" id="searchScreenTopbar"><a href="#home" class="search-back-link" id="searchBackHomeLink"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg><span>Back to Home</span></a><span class="search-screen-badge">Jammu &amp; Kashmir Repair Directory</span></div><span class="section-label">Find a Service</span><h2 class="section-title">Search verified local professionals.</h2><p class="section-copy">Choose your service and district to connect with local professionals right away.</p><div class="search-panel reveal"><form class="search-form" id="searchForm"><div class="field"><label for="serviceFilter">Service</label><select id="serviceFilter"><option value="">Any service</option><option value="Electrician">Electrician</option><option value="Appliance repair">Appliance repair</option><option value="Plumber">Plumbing</option><option value="Carpenter">Carpentry</option><option value="Washing Machine Repair">Washing Machine Repair</option><option value="Refrigerator Repair">Refrigerator Repair</option><option value="Heater Repair">Heater Repair</option><option value="TV / Electronics Repair">TV / Electronics Repair</option></select></div><div class="field"><label for="districtFilter">District</label><select id="districtFilter"><option value="">Any district</option><option value="Shopian">Shopian</option><option value="Srinagar">Srinagar</option><option value="Anantnag">Anantnag</option><option value="Pulwama">Pulwama</option><option value="Kulgam">Kulgam</option><option value="Baramulla">Baramulla</option><option value="Budgam">Budgam</option><option value="Kupwara">Kupwara</option><option value="Ganderbal">Ganderbal</option><option value="Bandipora">Bandipora</option><option value="Jammu">Jammu</option><option value="Kathua">Kathua</option><option value="Udhampur">Udhampur</option><option value="Rajouri">Rajouri</option><option value="Poonch">Poonch</option><option value="Doda">Doda</option><option value="Ramban">Ramban</option><option value="Kishtwar">Kishtwar</option><option value="Reasi">Reasi</option><option value="Samba">Samba</option></select></div><div class="field"><label for="keyword">Keyword</label><input id="keyword" type="search" placeholder="Search professionals, services, or districts" /></div><button class="button subtle" type="button" id="locationButton">📍 Try a sample area</button><button class="button primary" type="submit" id="searchSubmitButton">🔍 Find Help</button></form><div class="quick-category-pills" aria-label="Popular repair services"><button class="quick-pill" type="button" data-service="Electrician"><span>⚡</span> Electrician</button><button class="quick-pill" type="button" data-service="Washing Machine Repair"><span>🧺</span> Washing Machine</button><button class="quick-pill" type="button" data-service="Refrigerator Repair"><span>❄️</span> Refrigerator</button><button class="quick-pill" type="button" data-service="Heater Repair"><span>🔥</span> Heater Repair</button><button class="quick-pill" type="button" data-service="TV / Electronics Repair"><span>📺</span> TV &amp; Electronics</button></div><div class="search-feedback-row"><div class="search-feedback" id="searchFeedback" aria-live="polite">3 workers found</div><button class="button subtle" type="button" data-clear-filters>Clear Filters</button></div><div id="results" class="results-grid"></div></div></div></section>
+        <section class="section search-section dedicated-search-screen" id="find-worker">
+          <div class="container">
+            <div class="search-screen-topbar" id="searchScreenTopbar">
+              <a href="#home" class="search-back-link" id="searchBackHomeLink">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="19" y1="12" x2="5" y2="12"></line>
+                  <polyline points="12 19 5 12 12 5"></polyline>
+                </svg>
+                <span>Back to Home</span>
+              </a>
+            </div>
+            <h2 class="section-title">Find a Verified Specialist</h2>
+            <div class="search-panel reveal">
+              <form class="search-form" id="searchForm">
+                <div class="field">
+                  <label for="serviceFilter">Service</label>
+                  <select id="serviceFilter">
+                    <option value="">Any service</option>
+                    <option value="Electrician">Electrician</option>
+                    <option value="Appliance repair">Appliance repair</option>
+                    <option value="Plumber">Plumbing</option>
+                    <option value="Carpenter">Carpentry</option>
+                    <option value="Washing Machine Repair">Washing Machine Repair</option>
+                    <option value="Refrigerator Repair">Refrigerator Repair</option>
+                    <option value="Heater Repair">Heater Repair</option>
+                    <option value="TV / Electronics Repair">TV / Electronics Repair</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="districtFilter">District</label>
+                  <select id="districtFilter">
+                    <option value="">Any district</option>
+                    <option value="Shopian">Shopian</option>
+                    <option value="Srinagar">Srinagar</option>
+                    <option value="Anantnag">Anantnag</option>
+                    <option value="Pulwama">Pulwama</option>
+                    <option value="Kulgam">Kulgam</option>
+                    <option value="Baramulla">Baramulla</option>
+                    <option value="Budgam">Budgam</option>
+                    <option value="Kupwara">Kupwara</option>
+                    <option value="Ganderbal">Ganderbal</option>
+                    <option value="Bandipora">Bandipora</option>
+                    <option value="Jammu">Jammu</option>
+                    <option value="Kathua">Kathua</option>
+                    <option value="Udhampur">Udhampur</option>
+                    <option value="Rajouri">Rajouri</option>
+                    <option value="Poonch">Poonch</option>
+                    <option value="Doda">Doda</option>
+                    <option value="Ramban">Ramban</option>
+                    <option value="Kishtwar">Kishtwar</option>
+                    <option value="Reasi">Reasi</option>
+                    <option value="Samba">Samba</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="keyword">Keyword</label>
+                  <input id="keyword" type="search" placeholder="Search professionals, services, or districts" />
+                </div>
+                <button class="button primary" type="submit" id="searchSubmitButton">🔍 Find Help</button>
+              </form>
+              <div class="search-feedback-row">
+                <div class="search-feedback" id="searchFeedback" aria-live="polite">Select a service to view verified specialists</div>
+                <button class="button subtle" type="button" data-clear-filters>Clear Filters</button>
+              </div>
+              <div id="results" class="results-grid">
+                <div class="search-prompt-state" role="status">
+                  <div class="search-prompt-icon" aria-hidden="true">🔍</div>
+                  <h3>Select a service to find verified specialists</h3>
+                  <p>Choose a repair service from the dropdown above to view local professionals available in your district.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
     </main>
     <footer class="site-footer" id="siteFooter"><div class="container footer-content"><div class="footer-brand-wrap"><div class="footer-brand"><span class="brand-wordmark"><span class="brand-wordmark-jk">JK</span> <span class="brand-wordmark-hub">FixHub</span></span></div><p class="footer-tagline">Local Services Platform · Jammu &amp; Kashmir</p></div><div class="footer-support-block"><button class="button subtle footer-support-btn" type="button" data-nav-modal="supportModal"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg><span>Contact Support</span></button><div class="footer-contact-links"><a href="mailto:jkfixhub@gmail.com" class="footer-contact-link footer-email-link" aria-label="Email JK FixHub Support"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path></svg><span>jkfixhub@gmail.com</span></a><a href="https://www.instagram.com/jkfixhub/" target="_blank" rel="noopener noreferrer" class="footer-contact-link instagram-link" aria-label="Visit JK FixHub on Instagram"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg><span>@jkfixhub</span></a></div></div><div class="footer-meta-block"><div class="footer-developer-credit">Developed by <a href="https://www.instagram.com/uz4ir7/" target="_blank" rel="noopener noreferrer" class="developer-link" aria-label="Visit @uz4ir7 on Instagram">@uz4ir7</a></div><span class="footer-copyright">© 2026 JK FixHub · All rights reserved</span></div></div></footer>

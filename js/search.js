@@ -116,7 +116,6 @@ export function initializeSearch({ showToast } = {}) {
   const serviceFilter = document.getElementById("serviceFilter");
   const districtFilter = document.getElementById("districtFilter");
   const keywordInput = document.getElementById("keyword");
-  const locationButton = document.getElementById("locationButton");
   let searchTimer = null;
 
   if (!searchForm || !results) return;
@@ -275,16 +274,6 @@ export function initializeSearch({ showToast } = {}) {
       window.clearTimeout(searchTimer);
       fetchLiveWorkers().catch(() => {});
     }
-  });
-
-  locationButton?.addEventListener("click", () => {
-    const district = getWorkers().find((worker) => worker.district)?.district;
-    if (!district || !districtFilter) return;
-
-    districtFilter.value = district;
-    window.clearTimeout(searchTimer);
-    renderResults(getMatchingWorkers());
-    if (showToast) showToast(`Showing workers in ${district}`);
   });
 
   document.addEventListener("click", (event) => {

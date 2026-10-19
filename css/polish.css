@@ -920,8 +920,9 @@ body #webgl-background {
 }
 
 .search-form {
-  grid-template-columns: 1fr 1fr 1.2fr auto auto;
+  grid-template-columns: 1fr 1fr 1.2fr auto;
   gap: 12px;
+  align-items: flex-end;
 }
 
 .field label {
