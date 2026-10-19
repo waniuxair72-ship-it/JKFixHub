@@ -136,6 +136,36 @@ export function initializeSearch({ showToast } = {}) {
     results.replaceChildren(loadingState);
   }
 
+  function renderPrompt() {
+    if (feedback) {
+      setTextContent(feedback, "Select a service to view verified specialists");
+    }
+    const promptState = document.createElement("div");
+    promptState.className = "search-prompt-state";
+    promptState.setAttribute("role", "status");
+
+    const icon = document.createElement("div");
+    icon.className = "search-prompt-icon";
+    icon.setAttribute("aria-hidden", "true");
+    setTextContent(icon, "🔍");
+
+    const heading = document.createElement("h3");
+    setTextContent(heading, "Select a service to find verified specialists");
+
+    const message = document.createElement("p");
+    setTextContent(message, "Choose a repair service from the dropdown above to view local professionals available in your district.");
+
+    promptState.append(icon, heading, message);
+    results.replaceChildren(promptState);
+  }
+
+  function hasActiveSearch() {
+    const service = serviceFilter?.value?.trim() || "";
+    const district = districtFilter?.value?.trim() || "";
+    const keyword = keywordInput?.value?.trim() || "";
+    return Boolean(service || district || keyword);
+  }
+
   function renderError(err) {
     if (feedback) {
       setTextContent(feedback, "Unable to load verified professionals");
@@ -161,7 +191,7 @@ export function initializeSearch({ showToast } = {}) {
   }
 
   function renderResults(matchingWorkers) {
-    if (matchingWorkers.length > 0) {
+    if (matchingWorkers && matchingWorkers.length > 0) {
       results.replaceChildren(...matchingWorkers.map(buildWorkerCard));
       if (feedback) {
         const count = matchingWorkers.length;
@@ -241,20 +271,30 @@ export function initializeSearch({ showToast } = {}) {
 
   function updateResults() {
     window.clearTimeout(searchTimer);
-    searchTimer = window.setTimeout(() => renderResults(getMatchingWorkers()), 120);
+    searchTimer = window.setTimeout(() => {
+      if (hasActiveSearch()) {
+        renderResults(getMatchingWorkers());
+      } else {
+        renderPrompt();
+      }
+    }, 120);
   }
 
   function clearFilters() {
     if (serviceFilter) serviceFilter.value = "";
     if (districtFilter) districtFilter.value = "";
     if (keywordInput) keywordInput.value = "";
-    renderResults(getMatchingWorkers());
+    renderPrompt();
   }
 
   searchForm.addEventListener("submit", (event) => {
     event.preventDefault();
     window.clearTimeout(searchTimer);
-    renderResults(getMatchingWorkers());
+    if (hasActiveSearch()) {
+      renderResults(getMatchingWorkers());
+    } else {
+      renderPrompt();
+    }
   });
 
   serviceFilter?.addEventListener("change", updateResults);
@@ -318,22 +358,34 @@ export function initializeSearch({ showToast } = {}) {
       if (Array.isArray(realWorkers)) {
         setDiscoveredWorkers(realWorkers);
       }
-      renderResults(getMatchingWorkers());
+      if (hasActiveSearch()) {
+        renderResults(getMatchingWorkers());
+      } else {
+        renderPrompt();
+      }
       return realWorkers;
     } catch (err) {
       console.warn("[JKFixHub Discovery] Real worker discovery notice:", err?.message || err);
-      renderError(err);
-      throw err;
+      if (hasActiveSearch()) {
+        renderError(err);
+      } else {
+        renderPrompt();
+      }
+      return [];
     }
   }
 
   // Initial load
   renderLoading();
   const discoveryPromise = fetchLiveWorkers().catch(() => {});
+  if (typeof window !== "undefined") {
+    window.__searchDiscoveryPromise = discoveryPromise;
+  }
 
   return {
     fetchLiveWorkers,
     renderResults,
+    renderPrompt,
     getMatchingWorkers,
     discoveryPromise
   };
