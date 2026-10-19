@@ -9,6 +9,7 @@
 // logic so the project remains easier to understand
 // and maintain.
 import { openModal } from "./modals.js";
+import { updateRoleBasedHome } from "./smart-home.js";
 
 export function setView(viewName) {
   const homeView = document.getElementById("homeView");
@@ -18,6 +19,12 @@ export function setView(viewName) {
   const isSearch = viewName === "search" || viewName === "find-worker";
   homeView.hidden = isSearch;
   searchView.hidden = !isSearch;
+
+  if (!isSearch) {
+    try {
+      updateRoleBasedHome();
+    } catch (_) {}
+  }
 
   if (typeof window !== "undefined") {
     window.scrollTo({ top: 0, behavior: "instant" });

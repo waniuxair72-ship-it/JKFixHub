@@ -7825,5 +7825,572 @@ button.is-loading {
   color: #475569;
 }
 
+/* ==========================================================================
+   #ROLE_BASED_SMART_HOME
+   Authenticated Customer & Worker Home Dashboards with Kashmir Theme
+   ========================================================================== */
+
+.smart-home-wrapper {
+  position: relative;
+  width: 100%;
+  min-height: calc(100svh - 64px);
+  min-height: calc(100dvh - 64px);
+  min-height: calc(100vh - 64px);
+  background: var(--bg);
+  box-sizing: border-box;
+  padding: 32px 16px 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-x: hidden;
+}
+
+.smart-home-backdrop {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+[data-theme="dark"] .smart-home-backdrop {
+  opacity: 0.25;
+}
+
+.smart-home {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+/* Smart Home Header */
+.smart-home-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.smart-home-welcome-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  color: var(--color-primary);
+  width: fit-content;
+}
+
+[data-theme="dark"] .smart-home-welcome-badge {
+  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.28);
+  color: #38bdf8;
+}
+
+.smart-home-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+}
+
+.smart-home-title {
+  margin: 0;
+  font-size: clamp(1.6rem, 3.8vw, 2.35rem);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.smart-home-name {
+  background: linear-gradient(135deg, #2563eb 0%, #0284c7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+[data-theme="dark"] .smart-home-name {
+  background: linear-gradient(135deg, #38bdf8 0%, #a855f7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.smart-home-subtitle {
+  margin: 0;
+  font-size: var(--text-base);
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 680px;
+}
+
+/* Worker Top Row & Availability Controls */
+.worker-home-top-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.worker-home-availability-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-sm);
+}
+
+[data-theme="dark"] .worker-home-availability-wrap {
+  background: rgba(15, 23, 42, 0.85);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.smart-avail-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.smart-avail-select-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+}
+
+.smart-avail-indicator {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  background: #94a3b8;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.smart-avail-indicator.avail-available {
+  background: #10b981;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
+}
+
+.smart-avail-indicator.avail-busy {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.7);
+}
+
+.smart-avail-indicator.avail-offline {
+  background: #64748b;
+  box-shadow: none;
+}
+
+.smart-avail-select {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  outline: none;
+}
+
+.smart-avail-select:focus-visible {
+  outline: 2px solid var(--color-primary);
+  border-radius: var(--radius-xs);
+}
+
+/* Primary Service Search Action Panel */
+.smart-home-search-panel {
+  background: var(--surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(16px);
+}
+
+[data-theme="dark"] .smart-home-search-panel {
+  background: rgba(15, 23, 42, 0.82);
+  border-color: rgba(56, 189, 248, 0.2);
+}
+
+.smart-home-search-form {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+.smart-home-search-input-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.smart-search-icon {
+  position: absolute;
+  left: 14px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.smart-search-input {
+  width: 100%;
+  height: 48px;
+  padding: 0 16px 0 44px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-page);
+  color: var(--text);
+  font-size: var(--text-base);
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+[data-theme="dark"] .smart-search-input {
+  background: rgba(9, 13, 22, 0.7);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.smart-search-input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+}
+
+[data-theme="dark"] .smart-search-input:focus {
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.22);
+}
+
+.smart-search-btn {
+  height: 48px;
+  padding: 0 24px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Service Categories Block */
+.smart-home-categories-block,
+.smart-home-shortcuts-block {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.smart-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.smart-block-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.smart-block-link {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.smart-block-link:hover {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+[data-theme="dark"] .smart-block-link:hover {
+  background: rgba(56, 189, 248, 0.12);
+}
+
+/* Service Category Cards Grid */
+.smart-categories-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.smart-category-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  min-height: 48px;
+}
+
+[data-theme="dark"] .smart-category-card {
+  background: rgba(15, 23, 42, 0.78);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.smart-category-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-md);
+}
+
+[data-theme="dark"] .smart-category-card:hover {
+  border-color: rgba(56, 189, 248, 0.4);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.smart-cat-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.35rem;
+  flex-shrink: 0;
+}
+
+.smart-cat-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.smart-cat-title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--text);
+}
+
+.smart-cat-desc {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.smart-cat-arrow {
+  color: var(--muted);
+  font-weight: 700;
+  transition: transform 0.18s ease, color 0.18s ease;
+}
+
+.smart-category-card:hover .smart-cat-arrow {
+  color: var(--color-primary);
+  transform: translateX(3px);
+}
+
+/* Shortcuts & Worker Stat Cards Grid */
+.smart-shortcuts-grid,
+.smart-home-worker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.smart-shortcut-card,
+.smart-worker-stat-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+  gap: 16px;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+[data-theme="dark"] .smart-shortcut-card,
+[data-theme="dark"] .smart-worker-stat-card {
+  background: rgba(15, 23, 42, 0.78);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.smart-shortcut-card:hover,
+.smart-worker-stat-card:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+[data-theme="dark"] .smart-shortcut-card:hover,
+[data-theme="dark"] .smart-worker-stat-card:hover {
+  border-color: rgba(56, 189, 248, 0.35);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.smart-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.smart-shortcut-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.45rem;
+  background: rgba(37, 99, 235, 0.08);
+}
+
+[data-theme="dark"] .smart-shortcut-icon {
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.smart-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  background: var(--color-page-soft);
+  color: var(--color-ink-soft);
+  border: 1px solid var(--color-border);
+}
+
+[data-theme="dark"] .smart-status-badge {
+  background: rgba(30, 41, 59, 0.85);
+  color: #cbd5e1;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.smart-status-badge.status-pending {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: #d97706;
+}
+
+[data-theme="dark"] .smart-status-badge.status-pending {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+
+.smart-status-badge.status-accepted {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: #059669;
+}
+
+[data-theme="dark"] .smart-status-badge.status-accepted {
+  background: rgba(16, 185, 129, 0.18);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+.smart-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.smart-shortcut-title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--text);
+}
+
+.smart-shortcut-desc {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.smart-card-actions {
+  display: flex;
+  align-items: center;
+  padding-top: 4px;
+}
+
+.smart-shortcut-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+
+/* Mobile Responsiveness */
+@media (max-width: 640px) {
+  .smart-home-wrapper {
+    padding: 20px 12px 48px;
+  }
+
+  .smart-home {
+    gap: 24px;
+  }
+
+  .smart-home-search-panel {
+    padding: 14px 12px;
+  }
+
+  .smart-home-search-form {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .smart-search-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .smart-categories-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .smart-shortcuts-grid,
+  .smart-home-worker-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .worker-home-top-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+
 
 

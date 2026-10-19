@@ -16,6 +16,7 @@ import { initializeReports } from "./reports.js";
 import { initializeAdminDashboard } from "./admin-dashboard.js";
 import { initializeBrandReveal } from "./brand-reveal.js";
 import { initializeTheme } from "./theme.js";
+import { initializeSmartHome } from "./smart-home.js";
 
 // ==========================================
 // #UTILITY
@@ -82,6 +83,7 @@ function initializeApp() {
   initializeRevealObserver();
   initializePointerMotion();
   initializeBrandReveal();
+  initializeSmartHome();
 
   const heroSignInBtn = document.getElementById("heroSignInBtn");
   if (heroSignInBtn) {

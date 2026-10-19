@@ -167,7 +167,7 @@ function setRequestsFeedback(message) {
   setTextContent(document.getElementById("customerRequestsFeedback"), message);
 }
 
-async function syncCustomerRequestsFromFirestore() {
+export async function syncCustomerRequestsFromFirestore() {
   const currentUser = getCurrentUser();
   if (!currentUser) return;
   const customerUid = currentUser.firebaseUid || currentUser.id;

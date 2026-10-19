@@ -429,7 +429,7 @@
       <!-- #HOME_VIEW -->
       <div id="homeView" class="page-view">
         <!-- #HERO -->
-        <div class="hero-kashmir-wrapper"><div class="hero-kashmir-landscape" aria-hidden="true"></div><section class="container hero" id="hero"><div class="hero-copy-wrap"><h1 class="hero-headline">The right help. <span class="hero-headline-accent">Right around you.</span></h1><div class="brand-hero-stage" aria-label="JK FixHub brand intro"><div class="hero-ring-stage"><div class="ring-atmosphere-aura" aria-hidden="true"></div><div class="ring-svg-wrapper brand-wordmark-wrap"><svg class="brand-wordmark-svg" viewBox="0 0 540 540" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="JK FixHub">
+        <div class="hero-kashmir-wrapper" id="publicHeroWrapper"><div class="hero-kashmir-landscape" aria-hidden="true"></div><section class="container hero" id="hero"><div class="hero-copy-wrap"><h1 class="hero-headline">The right help. <span class="hero-headline-accent">Right around you.</span></h1><div class="brand-hero-stage" aria-label="JK FixHub brand intro"><div class="hero-ring-stage"><div class="ring-atmosphere-aura" aria-hidden="true"></div><div class="ring-svg-wrapper brand-wordmark-wrap"><svg class="brand-wordmark-svg" viewBox="0 0 540 540" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="JK FixHub">
   <defs>
     <!-- Background Radial Aura -->
     <radialGradient id="ringAtmosphereGlow" cx="45%" cy="50%" r="55%">
@@ -636,6 +636,244 @@
     <line x1="120" y1="270" x2="420" y2="270" stroke="url(#gradSolarFlare)" stroke-width="3" stroke-linecap="round" opacity="0" class="aperture-sweep-beam" />
   </g>
 </svg></div></div><div class="hero-content-below brand-support-content"><div class="hero-slogan-wrap"><div class="hero-badge brand-reveal-badge slogan-badge"><span class="hero-spark-dot brand-spark-dot slogan-dot" aria-hidden="true"></span><span class="cinematic-badge-text">Every problem has a solution.</span></div></div><p class="brand-hero-tagline">Find trusted local repair services.</p><div class="hero-actions brand-reveal-actions"><a class="button primary hero-primary-cta" href="#find-worker"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Find a Worker</span><span class="cta-arrow" aria-hidden="true">→</span></a><button class="button hero-worker-cta" data-jk-action="join-worker" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg><span>Join as a Worker</span></button><button id="heroSignInBtn" hidden aria-hidden="true" type="button"></button></div><div class="hero-location-coverage" aria-label="Coverage areas"><span class="coverage-badge">📍 Srinagar · Shopian · Anantnag · Baramulla · Jammu &amp; more</span></div></div></div></div></section></div>
+        <!-- #CUSTOMER_SMART_HOME -->
+        <div class="smart-home-wrapper customer-home-wrapper" id="customerHomeWrapper" hidden>
+          <div class="hero-kashmir-landscape smart-home-backdrop" aria-hidden="true"></div>
+          <section class="container smart-home customer-smart-home" id="customerSmartHome">
+            <header class="smart-home-header customer-home-header">
+              <div class="smart-home-welcome-badge">
+                <span class="smart-home-dot" aria-hidden="true"></span>
+                <span>Customer Portal · <span id="customerHomeDistrict">Jammu &amp; Kashmir</span></span>
+              </div>
+              <h1 class="smart-home-title">Welcome back, <span id="customerHomeName" class="smart-home-name">Customer</span> 👋</h1>
+              <p class="smart-home-subtitle">Need reliable repair help today? Search verified specialists in your district or manage your service requests.</p>
+            </header>
+
+            <!-- Primary Service Search Action -->
+            <div class="smart-home-search-panel">
+              <form class="smart-home-search-form" id="customerHomeSearchForm" role="search">
+                <div class="smart-home-search-input-wrap">
+                  <svg class="smart-search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                  </svg>
+                  <input type="search" id="customerHomeSearchInput" class="smart-search-input" placeholder="Search repair services, electricians, plumbers..." aria-label="Search local repair services" />
+                </div>
+                <button type="submit" class="button primary smart-search-btn">
+                  <span>Find Help</span>
+                  <span class="cta-arrow" aria-hidden="true">→</span>
+                </button>
+              </form>
+            </div>
+
+            <!-- Existing Service Categories -->
+            <div class="smart-home-categories-block">
+              <div class="smart-block-header">
+                <h2 class="smart-block-title">Popular Service Categories</h2>
+                <button type="button" class="smart-block-link" id="customerBrowseAllServicesBtn">View All Services →</button>
+              </div>
+              <div class="smart-categories-grid" role="group" aria-label="Popular repair service categories">
+                <button type="button" class="smart-category-card" data-service="Electrician">
+                  <div class="smart-cat-icon cat-blue">⚡</div>
+                  <div class="smart-cat-content">
+                    <strong class="smart-cat-title">Electrician</strong>
+                    <span class="smart-cat-desc">Wiring, inverters &amp; switches</span>
+                  </div>
+                  <span class="smart-cat-arrow" aria-hidden="true">→</span>
+                </button>
+                <button type="button" class="smart-category-card" data-service="Washing Machine Repair">
+                  <div class="smart-cat-icon cat-violet">🧺</div>
+                  <div class="smart-cat-content">
+                    <strong class="smart-cat-title">Washing Machine</strong>
+                    <span class="smart-cat-desc">Motors, drains &amp; spin issues</span>
+                  </div>
+                  <span class="smart-cat-arrow" aria-hidden="true">→</span>
+                </button>
+                <button type="button" class="smart-category-card" data-service="Refrigerator Repair">
+                  <div class="smart-cat-icon cat-blue">❄️</div>
+                  <div class="smart-cat-content">
+                    <strong class="smart-cat-title">Refrigerator</strong>
+                    <span class="smart-cat-desc">Cooling, compressor &amp; gas</span>
+                  </div>
+                  <span class="smart-cat-arrow" aria-hidden="true">→</span>
+                </button>
+                <button type="button" class="smart-category-card" data-service="Heater Repair">
+                  <div class="smart-cat-icon cat-coral">🔥</div>
+                  <div class="smart-cat-content">
+                    <strong class="smart-cat-title">Heater Repair</strong>
+                    <span class="smart-cat-desc">Geysers &amp; heating elements</span>
+                  </div>
+                  <span class="smart-cat-arrow" aria-hidden="true">→</span>
+                </button>
+                <button type="button" class="smart-category-card" data-service="TV / Electronics Repair">
+                  <div class="smart-cat-icon cat-teal">📺</div>
+                  <div class="smart-cat-content">
+                    <strong class="smart-cat-title">TV &amp; Electronics</strong>
+                    <span class="smart-cat-desc">LED panels &amp; circuit boards</span>
+                  </div>
+                  <span class="smart-cat-arrow" aria-hidden="true">→</span>
+                </button>
+                <button type="button" class="smart-category-card" data-service="Plumber">
+                  <div class="smart-cat-icon cat-teal">🔧</div>
+                  <div class="smart-cat-content">
+                    <strong class="smart-cat-title">Plumbing</strong>
+                    <span class="smart-cat-desc">Pipes, leaks &amp; sanitary fittings</span>
+                  </div>
+                  <span class="smart-cat-arrow" aria-hidden="true">→</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Clear Access: My Requests and My Chats -->
+            <div class="smart-home-shortcuts-block">
+              <div class="smart-block-header">
+                <h2 class="smart-block-title">Your Activity &amp; Communication</h2>
+              </div>
+              <div class="smart-shortcuts-grid">
+                <!-- My Requests Card -->
+                <article class="smart-shortcut-card" id="customerRequestsCard">
+                  <div class="smart-card-top">
+                    <div class="smart-shortcut-icon">📋</div>
+                    <span class="smart-status-badge" id="customerRequestsBadge">0 Requests</span>
+                  </div>
+                  <div class="smart-card-body">
+                    <h3 class="smart-shortcut-title">My Requests</h3>
+                    <p class="smart-shortcut-desc" id="customerRequestsDesc">Monitor the progress of your submitted service requests.</p>
+                  </div>
+                  <div class="smart-card-actions">
+                    <button type="button" class="button primary smart-shortcut-btn" id="customerHomeMyRequestsBtn">
+                      <span>View Requests</span>
+                      <span class="cta-arrow" aria-hidden="true">→</span>
+                    </button>
+                  </div>
+                </article>
+
+                <!-- My Chats Card -->
+                <article class="smart-shortcut-card" id="customerChatsCard">
+                  <div class="smart-card-top">
+                    <div class="smart-shortcut-icon">💬</div>
+                    <span class="smart-status-badge" id="customerChatsBadge">Private Messaging</span>
+                  </div>
+                  <div class="smart-card-body">
+                    <h3 class="smart-shortcut-title">My Chats</h3>
+                    <p class="smart-shortcut-desc" id="customerChatsDesc">Chat directly and privately with assigned specialists once your request is accepted.</p>
+                  </div>
+                  <div class="smart-card-actions">
+                    <button type="button" class="button subtle smart-shortcut-btn" id="customerHomeMyChatsBtn">
+                      <span>Open Chats</span>
+                      <span class="cta-arrow" aria-hidden="true">→</span>
+                    </button>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- #WORKER_SMART_HOME -->
+        <div class="smart-home-wrapper worker-home-wrapper" id="workerHomeWrapper" hidden>
+          <div class="hero-kashmir-landscape smart-home-backdrop" aria-hidden="true"></div>
+          <section class="container smart-home worker-smart-home" id="workerSmartHome">
+            <!-- Professional Welcome Heading & Availability Controls -->
+            <header class="smart-home-header worker-home-header">
+              <div class="worker-home-top-row">
+                <div class="smart-home-welcome-badge">
+                  <span class="smart-home-dot" aria-hidden="true"></span>
+                  <span id="workerHomeBadgeText">Technician Portal · <span id="workerHomeDistrict">Jammu &amp; Kashmir</span></span>
+                </div>
+                <!-- Availability Controls (Supported by existing system) -->
+                <div class="worker-home-availability-wrap">
+                  <label for="workerHomeAvailability" class="smart-avail-label">Availability:</label>
+                  <div class="smart-avail-select-wrap">
+                    <span class="smart-avail-indicator" id="workerHomeAvailIndicator" aria-hidden="true"></span>
+                    <select id="workerHomeAvailability" class="smart-avail-select" aria-label="Update your operational availability">
+                      <option value="Available">Available</option>
+                      <option value="Busy">Busy</option>
+                      <option value="Offline">Offline</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+              <h1 class="smart-home-title">Welcome, <span id="workerHomeName" class="smart-home-name">Worker</span></h1>
+              <p class="smart-home-subtitle"><span id="workerHomeService">Service Specialist</span> · <span id="workerHomeVerification" class="worker-verification-badge">Pending verification</span> · Rated <strong id="workerHomeRating">5.0 ★</strong></p>
+            </header>
+
+            <!-- Priority Service Requests & Accepted Jobs -->
+            <div class="smart-home-worker-grid">
+              <!-- Incoming / Pending Requests Card -->
+              <article class="smart-worker-stat-card" id="workerPendingRequestsCard">
+                <div class="smart-card-top">
+                  <div class="smart-shortcut-icon">📥</div>
+                  <span class="smart-status-badge status-pending" id="workerPendingCountBadge">0 Pending</span>
+                </div>
+                <div class="smart-card-body">
+                  <h3 class="smart-shortcut-title">Incoming Requests</h3>
+                  <p class="smart-shortcut-desc" id="workerPendingDesc">Review new customer repair requests in your district.</p>
+                </div>
+                <div class="smart-card-actions">
+                  <button type="button" class="button primary smart-shortcut-btn" id="workerHomePendingBtn">
+                    <span>Review Incoming</span>
+                    <span class="cta-arrow" aria-hidden="true">→</span>
+                  </button>
+                </div>
+              </article>
+
+              <!-- Accepted / Active Jobs Card -->
+              <article class="smart-worker-stat-card" id="workerAcceptedJobsCard">
+                <div class="smart-card-top">
+                  <div class="smart-shortcut-icon">🛠️</div>
+                  <span class="smart-status-badge status-accepted" id="workerAcceptedCountBadge">0 Active</span>
+                </div>
+                <div class="smart-card-body">
+                  <h3 class="smart-shortcut-title">Accepted Jobs</h3>
+                  <p class="smart-shortcut-desc" id="workerAcceptedDesc">Active repair assignments awaiting completion or scheduling.</p>
+                </div>
+                <div class="smart-card-actions">
+                  <button type="button" class="button primary smart-shortcut-btn" id="workerHomeAcceptedBtn">
+                    <span>Manage Active Jobs</span>
+                    <span class="cta-arrow" aria-hidden="true">→</span>
+                  </button>
+                </div>
+              </article>
+
+              <!-- Clear Access: My Chats -->
+              <article class="smart-worker-stat-card" id="workerChatsCard">
+                <div class="smart-card-top">
+                  <div class="smart-shortcut-icon">💬</div>
+                  <span class="smart-status-badge" id="workerChatsBadge">Client Messages</span>
+                </div>
+                <div class="smart-card-body">
+                  <h3 class="smart-shortcut-title">My Chats</h3>
+                  <p class="smart-shortcut-desc" id="workerChatsDesc">Coordinate timing, pricing, and locations directly with clients for accepted jobs.</p>
+                </div>
+                <div class="smart-card-actions">
+                  <button type="button" class="button subtle smart-shortcut-btn" id="workerHomeChatsBtn">
+                    <span>Open Chats</span>
+                    <span class="cta-arrow" aria-hidden="true">→</span>
+                  </button>
+                </div>
+              </article>
+
+              <!-- Clear Access: My Profile -->
+              <article class="smart-worker-stat-card" id="workerProfileCard">
+                <div class="smart-card-top">
+                  <div class="smart-shortcut-icon">👤</div>
+                  <span class="smart-status-badge" id="workerProfileExpBadge">Experience</span>
+                </div>
+                <div class="smart-card-body">
+                  <h3 class="smart-shortcut-title">My Profile</h3>
+                  <p class="smart-shortcut-desc">Manage your trade details, experience years, and service information.</p>
+                </div>
+                <div class="smart-card-actions">
+                  <button type="button" class="button subtle smart-shortcut-btn" id="workerHomeProfileBtn">
+                    <span>View &amp; Edit Profile</span>
+                    <span class="cta-arrow" aria-hidden="true">→</span>
+                  </button>
+                </div>
+              </article>
+            </div>
+          </section>
+        </div>
       </div>
       <!-- #SEARCH_VIEW -->
       <div id="searchView" class="page-view" hidden>

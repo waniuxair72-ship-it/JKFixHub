@@ -15,6 +15,7 @@ import { closeModal, openModal } from "./modals.js";
 import { openWorkerDashboard, openProfileEditor, stopWorkerDashboardSubscription } from "./worker-dashboard.js";
 import { openCustomerRequests } from "./customer-requests.js";
 import { openAdminDashboard } from "./admin-dashboard.js";
+import { updateRoleBasedHome } from "./smart-home.js";
 import {
   clearRequestState,
   clearCurrentUser,
@@ -1554,6 +1555,7 @@ export function demoLogin(role) {
       authProvider: "demo",
       createdAt
     });
+    updateAccountControls();
     return true;
   }
 
@@ -1575,6 +1577,7 @@ export function demoLogin(role) {
       authProvider: "demo",
       createdAt
     });
+    updateAccountControls();
     return true;
   }
 
@@ -1599,6 +1602,7 @@ export function demoLogout() {
       sessionStorage.removeItem("jk_dismiss_verification_customer");
     }
   } catch (_) {}
+  updateAccountControls();
 }
 
 /**
@@ -1806,6 +1810,9 @@ export function updateAccountControls() {
   }
   if (dashboardButton) dashboardButton.hidden = role !== "worker";
   updateJkMenu();
+  try {
+    updateRoleBasedHome();
+  } catch (_) {}
 }
 
 /**
