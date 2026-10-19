@@ -1515,6 +1515,18 @@ body #webgl-background {
   font-size: 0.93rem;
 }
 
+.request-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.request-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .request-form label span:not(.request-error) {
   color: var(--color-muted);
   font-weight: 400;
@@ -1543,6 +1555,25 @@ body #webgl-background {
 .request-form .modal-actions {
   justify-content: flex-end;
   margin-top: 2px;
+}
+
+.request-auth-prompt-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.request-auth-prompt-actions .button {
+  min-height: 36px;
+  padding: 6px 14px;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 640px) {
+  .request-form {
+    grid-template-columns: 1fr;
+  }
 }
 
 .request-success {
@@ -8687,6 +8718,40 @@ button.is-loading {
   }
 }
 
+/* Customer Service Request Flow - Dark Theme Contrast */
+[data-theme="dark"] .status-pending {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
 
+[data-theme="dark"] .status-accepted {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: rgba(56, 189, 248, 0.4);
+  color: #38bdf8;
+}
 
+[data-theme="dark"] .status-completed {
+  background: rgba(16, 185, 129, 0.18);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
 
+[data-theme="dark"] .status-rejected,
+[data-theme="dark"] .status-cancelled {
+  background: rgba(244, 63, 94, 0.18);
+  border-color: rgba(244, 63, 94, 0.4);
+  color: #fb7185;
+}
+
+[data-theme="dark"] .request-worker,
+[data-theme="dark"] .customer-request-card,
+[data-theme="dark"] .customer-request-detail-grid > div {
+  background: #151d30;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+[data-theme="dark"] .customer-request-status {
+  background: #151d30;
+  border-color: rgba(255, 255, 255, 0.12);
+}

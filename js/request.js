@@ -23,7 +23,7 @@ import {
   createFirestoreServiceRequest,
   subscribeToFirestoreRequest
 } from "./firestore-service.js";
-import { refreshCustomerRequestSummary } from "./customer-requests.js";
+import { refreshCustomerRequestSummary, openCustomerRequests } from "./customer-requests.js";
 import {
   getSafeErrorMessage,
   recordSecurityEvent,
@@ -197,11 +197,12 @@ function renderSelectedWorker(worker) {
   container.replaceChildren();
   container.className = "request-worker";
   avatar.className = "avatar";
-  setTextContent(avatar, worker.initials);
+  setTextContent(avatar, worker?.initials || "--");
   details.className = "request-worker-details";
-  setTextContent(name, worker.name);
-  setTextContent(service, worker.service);
-  setTextContent(districtRating, `${worker.district} · ${worker.rating} ★`);
+  setTextContent(name, worker?.name || "Professional");
+  setTextContent(service, worker?.service || "");
+  const ratingStr = worker && worker.rating ? `${worker.rating} ★` : "No ratings yet";
+  setTextContent(districtRating, `${worker?.district || "J&K"} · ${ratingStr}`);
   details.append(name, service, districtRating);
   container.append(avatar, details);
 }
@@ -267,16 +268,20 @@ export function initializeRequestFlow() {
     resetRequestForm(form, true);
     setSelectedWorker(worker.id);
     const selectedWorker = getSelectedWorker();
+    const targetService = trigger.dataset.service || trigger.dataset.requestService || selectedWorker.service;
     const requestServiceSelect = document.getElementById("requestService");
     if (requestServiceSelect && selectedWorker) {
-      const normWorkerService = normalizeService(selectedWorker.service).toLowerCase();
+      const preferredService = (targetService && workerMatchesService(selectedWorker, targetService))
+        ? targetService
+        : selectedWorker.service;
+      const normPreferredService = normalizeService(preferredService).toLowerCase();
       let matched = false;
       for (const opt of requestServiceSelect.options) {
         if (
           opt.value &&
           (
-            opt.value === selectedWorker.service ||
-            normalizeService(opt.value).toLowerCase() === normWorkerService
+            opt.value === preferredService ||
+            normalizeService(opt.value).toLowerCase() === normPreferredService
           )
         ) {
           requestServiceSelect.value = opt.value;
@@ -284,8 +289,8 @@ export function initializeRequestFlow() {
           break;
         }
       }
-      if (!matched && selectedWorker.service) {
-        requestServiceSelect.value = selectedWorker.service;
+      if (!matched && preferredService) {
+        requestServiceSelect.value = preferredService;
       }
     }
     renderSelectedWorker(selectedWorker);
@@ -338,6 +343,14 @@ export function initializeRequestFlow() {
         showCustomerRegister();
       } catch (_) {}
       openModal("authModal");
+    });
+  }
+
+  const viewRequestsBtn = document.getElementById("requestSuccessViewRequestsBtn");
+  if (viewRequestsBtn) {
+    viewRequestsBtn.addEventListener("click", () => {
+      closeModal("requestModal");
+      openCustomerRequests();
     });
   }
 
@@ -428,6 +441,15 @@ export function initializeRequestFlow() {
       return;
     }
 
+    if (currentUser.authProvider === "firebase" && currentUser.emailVerified === false) {
+      setRequestFeedback(
+        "Please verify your email address to submit service requests. Check your inbox or profile settings to verify.",
+        true,
+        false
+      );
+      return;
+    }
+
     if (typeof navigator !== "undefined" && navigator.onLine === false) {
       const offlineMsg = "Network connection error. Please check your internet connection and try again.";
       setRequestFeedback(offlineMsg, true, false);
@@ -459,9 +481,11 @@ export function initializeRequestFlow() {
       });
 
       if (!result || !result.success || !result.request) {
-        const errorMsg = result?.error || "Failed to submit request. Please try again.";
+        let errorMsg = result?.error || "Failed to submit request. Please try again.";
+        if (currentUser && currentUser.emailVerified === false && /permission[- ]denied/i.test(errorMsg)) {
+          errorMsg = "Please verify your email address to submit service requests. Check your inbox or profile settings to verify.";
+        }
         setRequestFeedback(errorMsg, true, false);
-        setFieldError(requestDescription, errorMsg, descriptionError);
         return;
       }
 
@@ -478,11 +502,16 @@ export function initializeRequestFlow() {
     } catch (err) {
       console.error("[JKFixHub Request] Error creating request:", err);
       const isNetwork = (typeof navigator !== "undefined" && navigator.onLine === false) || err?.code === "unavailable";
-      const errMsg = isNetwork
-        ? "Network connection error. Please check your internet connection and try again."
-        : "Failed to send request. Please try again.";
+      const isPermissionDenied = err?.code === "permission-denied" || /permission[- ]denied/i.test(err?.message || "");
+      let errMsg;
+      if (isNetwork) {
+        errMsg = "Network connection error. Please check your internet connection and try again.";
+      } else if (isPermissionDenied && currentUser && currentUser.emailVerified === false) {
+        errMsg = "Please verify your email address to submit service requests. Check your inbox or profile settings to verify.";
+      } else {
+        errMsg = "Failed to send request. Please try again.";
+      }
       setRequestFeedback(errMsg, true, false);
-      setFieldError(requestDescription, errMsg, descriptionError);
     } finally {
       isSubmitting = false;
       restoreBtn();
