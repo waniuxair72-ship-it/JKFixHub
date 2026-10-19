@@ -16,6 +16,7 @@ import {
   validateDescription,
   validatePersonName
 } from "./security.js";
+import { renderWorkerReviews } from "./reviews.js";
 
 function setRegistrationError(field, errorElement, message) {
   setTextContent(errorElement, message);
@@ -62,42 +63,105 @@ export function openMaintenanceNotice(feature = "Service requests") {
   openModal("maintenanceModal");
 }
 
-function openWorkerProfile(id) {
+export function openWorkerProfile(id) {
   const worker = getWorkerById(id);
   const profileContent = document.getElementById("profileContent");
   if (!worker || !profileContent) return;
 
   const profile = document.createElement("div");
-  const aside = document.createElement("aside");
-  const avatar = document.createElement("div");
-  const name = document.createElement("h3");
-  const service = document.createElement("p");
-  const details = document.createElement("div");
-  const about = document.createElement("div");
-  const aboutTitle = document.createElement("strong");
-  const aboutText = document.createElement("p");
-  const actions = document.createElement("div");
-  const backButton = document.createElement("button");
-  const requestButton = document.createElement("button");
-
   profile.className = "profile-grid";
-  aside.className = "profile-aside";
-  avatar.className = "avatar";
-  setTextContent(avatar, worker.initials);
-  name.id = "profileTitle";
-  setTextContent(name, worker.name);
-  setTextContent(service, worker.service);
-  aside.append(avatar, name, service);
 
+  // Worker identity aside
+  const aside = document.createElement("aside");
+  aside.className = "profile-aside";
+
+  const avatar = document.createElement("div");
+  avatar.className = "avatar";
+  setTextContent(avatar, worker.initials || "W");
+
+  const identity = document.createElement("div");
+  identity.className = "profile-identity";
+
+  const name = document.createElement("h3");
+  name.id = "profileTitle";
+  name.className = "profile-name";
+  setTextContent(name, worker.name || "Specialist");
+
+  const primaryService = document.createElement("p");
+  primaryService.className = "profile-service-text";
+  setTextContent(primaryService, worker.service || "Local Specialist");
+
+  const badgesRow = document.createElement("div");
+  badgesRow.className = "profile-badges-row";
+
+  const verificationBadge = document.createElement("span");
+  verificationBadge.className = worker.isVerified
+    ? "worker-verified-badge"
+    : worker.isDemo
+      ? "demo-badge"
+      : "worker-pending-badge";
+  setTextContent(
+    verificationBadge,
+    worker.isVerified
+      ? "Verified Professional"
+      : worker.isDemo
+        ? "Sample Profile"
+        : "Pending Verification"
+  );
+
+  const availabilityBadge = document.createElement("span");
+  availabilityBadge.className = "availability";
+  const availabilityDot = document.createElement("i");
+  availabilityDot.setAttribute("aria-hidden", "true");
+  setTextContent(availabilityBadge, worker.availability || "Available");
+  availabilityBadge.prepend(availabilityDot);
+
+  badgesRow.append(verificationBadge, availabilityBadge);
+  identity.append(name, primaryService, badgesRow);
+  aside.append(avatar, identity);
+
+  // Profile details
+  const details = document.createElement("div");
   details.className = "profile-details";
+
+  // Rating and review count: only show what is supported by actual worker data
+  let ratingText = "No ratings yet";
+  if (worker.rating) {
+    const reviewCount = worker.reviewCount ?? worker.reviewsCount;
+    if (typeof reviewCount === "number" && reviewCount > 0) {
+      ratingText = `${worker.rating} ★ (${reviewCount} ${reviewCount === 1 ? "review" : "reviews"})`;
+    } else {
+      ratingText = `${worker.rating} ★`;
+    }
+  }
+
   const fields = [
-    ["District", worker.district],
-    ["Experience", worker.experience],
-    ["Rating", worker.rating ? `${worker.rating} ★` : "5.0 ★"],
-    ["Availability", worker.availability],
-    ["Services", worker.services || worker.service],
-    ["Status", worker.isVerified ? "Verified Professional" : (worker.isDemo ? "Sample Profile" : "Pending Verification")]
+    ["District", worker.district || "Jammu & Kashmir"],
+    ["Experience", worker.experience || "Experienced"],
+    ["Rating", ratingText]
   ];
+
+  // Deduplicate and extract legitimate additional skills
+  let specializations = "";
+  if (Array.isArray(worker.services)) {
+    const primaryNorm = (worker.service || "").trim().toLowerCase();
+    const additional = worker.services.filter(
+      (s) => typeof s === "string" && s.trim().toLowerCase() !== primaryNorm
+    );
+    if (additional.length > 0) {
+      specializations = additional.join(", ");
+    }
+  } else if (typeof worker.services === "string" && worker.services.trim()) {
+    const primaryNorm = (worker.service || "").trim().toLowerCase();
+    if (worker.services.trim().toLowerCase() !== primaryNorm) {
+      specializations = worker.services.trim();
+    }
+  }
+
+  if (specializations) {
+    fields.push(["Specializations", specializations]);
+  }
+
   for (const [label, value] of fields) {
     const row = document.createElement("div");
     const heading = document.createElement("strong");
@@ -109,23 +173,55 @@ function openWorkerProfile(id) {
     details.append(row);
   }
 
+  // Profile About card
+  const about = document.createElement("div");
   about.className = "profile-about";
-  setTextContent(aboutTitle, "About this profile");
-  setTextContent(aboutText, worker.about);
+  const aboutTitle = document.createElement("strong");
+  aboutTitle.className = "profile-about-title";
+  setTextContent(aboutTitle, "About this professional");
+  const aboutText = document.createElement("p");
+  aboutText.className = "profile-about-text";
+  setTextContent(aboutText, worker.about || "Verified service professional providing trusted repairs in Jammu & Kashmir.");
   about.append(aboutTitle, aboutText);
   details.append(about);
+
+  // Public customer reviews section
+  const reviewsSection = document.createElement("div");
+  reviewsSection.className = "profile-reviews-section";
+  const reviewsTitle = document.createElement("h4");
+  reviewsTitle.className = "profile-reviews-title";
+  setTextContent(reviewsTitle, "Customer Reviews");
+  const reviewsList = document.createElement("div");
+  reviewsList.className = "profile-reviews-list";
+  reviewsSection.append(reviewsTitle, reviewsList);
+  details.append(reviewsSection);
+
+  // Safely render verified public customer reviews
+  try {
+    if (typeof renderWorkerReviews === "function") {
+      renderWorkerReviews(worker.firebaseUid || worker.id, reviewsList);
+    }
+  } catch (err) {
+    console.warn("[JKFixHub Profile] Review mount notice:", err);
+  }
+
   profile.append(aside, details);
 
+  // Modal actions
+  const actions = document.createElement("div");
   actions.className = "modal-actions";
+  const backButton = document.createElement("button");
   backButton.className = "button subtle";
   backButton.type = "button";
   backButton.dataset.close = "profileModal";
   backButton.textContent = "Back to Results";
+  const requestButton = document.createElement("button");
   requestButton.className = "button primary";
   requestButton.type = "button";
   requestButton.dataset.requestWorker = String(worker.id);
   requestButton.textContent = "Request Service";
   actions.append(backButton, requestButton);
+
   profileContent.replaceChildren(profile, actions);
   openModal("profileModal");
 }

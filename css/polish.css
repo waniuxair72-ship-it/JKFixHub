@@ -3633,60 +3633,208 @@ body #webgl-background {
 }
 
 .profile-grid {
-  gap: 16px;
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 20px;
+  align-items: start;
 }
 
 .profile-aside {
-  padding: 19px 15px;
-  border-color: var(--color-border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 24px 18px;
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-page-soft);
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .profile-aside .avatar {
-  width: 64px;
-  height: 64px;
-  margin-bottom: 13px;
-  font-size: 1rem;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  font-size: 1.25rem;
+  font-weight: 750;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 0;
 }
 
-.profile-aside h3 {
+.profile-identity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.profile-name {
   color: var(--color-ink);
-  font-size: 1rem;
+  font-size: clamp(1.1rem, 2.2vw, 1.3rem);
+  font-weight: 750;
+  line-height: 1.25;
+  margin: 0;
+  word-break: normal;
+  overflow-wrap: break-word;
+  hyphens: auto;
 }
 
-.profile-aside p {
-  font-size: 0.78rem;
+.profile-service-text {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.profile-badges-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.profile-badges-row .availability {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-ink-soft);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.profile-badges-row .availability i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-success);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+}
+
+.profile-details {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
 }
 
 .detail-row {
-  padding: 11px 13px;
-  border-color: #e4e7df;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-muted);
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   line-height: 1.5;
 }
 
 .detail-row strong {
   color: var(--color-ink-soft);
   font-weight: 650;
+  flex-shrink: 0;
+}
+
+.detail-row span {
+  text-align: right;
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 .profile-about {
-  border-color: var(--color-border);
-  border-radius: var(--radius-sm);
-  background: #f6f6f1;
+  padding: 16px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-page-soft);
+  margin-top: 6px;
 }
 
-.profile-about strong {
+.profile-about strong,
+.profile-about .profile-about-title {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--color-ink);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.profile-about p,
+.profile-about .profile-about-text {
   color: var(--color-ink-soft);
-  font-size: 0.84rem;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  margin: 0;
 }
 
-.profile-about p {
-  font-size: 0.8rem;
+.profile-reviews-section {
+  margin-top: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.profile-reviews-title {
+  color: var(--color-ink);
+  font-size: 0.95rem;
+  font-weight: 750;
+  margin: 0 0 12px 0;
+  letter-spacing: -0.01em;
+}
+
+.profile-reviews-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.profile-reviews-list .worker-dashboard-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  margin: 0;
+}
+
+.profile-reviews-list .worker-dashboard-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.profile-reviews-list .worker-dashboard-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.05);
 }
 
 .registration-steps span {
@@ -4050,6 +4198,28 @@ body #webgl-background {
   .trust-grid,
   .profile-grid {
     grid-template-columns: 1fr;
+  }
+
+  .profile-aside {
+    flex-direction: row;
+    align-items: center;
+    text-align: left;
+    padding: 16px;
+    gap: 16px;
+  }
+
+  .profile-aside .avatar {
+    width: 60px;
+    height: 60px;
+    font-size: 1.15rem;
+  }
+
+  .profile-identity {
+    align-items: flex-start;
+  }
+
+  .profile-badges-row {
+    justify-content: flex-start;
   }
 
   .search-form {
@@ -7418,6 +7588,20 @@ button.is-loading {
   color: #f8fafc;
 }
 
+[data-theme="dark"] .profile-name {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .profile-service-text {
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .profile-badges-row .availability {
+  background: #1e293b;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+}
+
 [data-theme="dark"] .detail-row {
   background: #151d30;
   border-color: rgba(255, 255, 255, 0.08);
@@ -7426,6 +7610,65 @@ button.is-loading {
 
 [data-theme="dark"] .detail-row strong {
   color: #f8fafc;
+}
+
+[data-theme="dark"] .detail-row span {
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .profile-about {
+  background: #151d30;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+[data-theme="dark"] .profile-about strong,
+[data-theme="dark"] .profile-about .profile-about-title {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .profile-about p,
+[data-theme="dark"] .profile-about .profile-about-text {
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .profile-reviews-section {
+  border-top-color: rgba(255, 255, 255, 0.12);
+}
+
+[data-theme="dark"] .profile-reviews-title {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .profile-reviews-list .worker-dashboard-empty {
+  background: #151d30;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .review-card {
+  background: #151d30;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+[data-theme="dark"] .review-author {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .review-text {
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .worker-reply-box {
+  background: rgba(14, 20, 36, 0.7);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="dark"] .worker-reply-header strong {
+  color: #38bdf8;
+}
+
+[data-theme="dark"] .worker-reply-text {
+  color: #cbd5e1;
 }
 
 /* 7. Worker Dashboard & Chat in Dark Mode */
