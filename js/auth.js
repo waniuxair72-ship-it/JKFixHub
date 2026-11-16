@@ -88,6 +88,15 @@ let activeAuthTab = "signin";
 let pendingRegistrationUid = null;
 let pendingRegistrationEmail = null;
 let customerVerificationDismissed = false;
+let isSigningIn = false;
+
+export function isSigningInActive() {
+  return isSigningIn;
+}
+
+export function setIsSigningInForTesting(val) {
+  isSigningIn = Boolean(val);
+}
 
 try {
   if (typeof sessionStorage !== "undefined" && sessionStorage.getItem("jk_dismiss_verification_customer") === "true") {
@@ -1012,6 +1021,177 @@ export async function registerWorker({ name, email, phone, district, service, ex
 }
 
 /**
+ * Resolves application profile for an authenticated Firebase user.
+ * Diagnoses role and fields across /users, /workers, /admins, and auth metadata.
+ * Safely handles missing or legacy Firestore documents without signing the user out.
+ */
+export async function resolveUserProfile(firebaseUser, { attemptSelfHeal = true } = {}) {
+  if (!firebaseUser?.uid) return null;
+
+  const uid = firebaseUser.uid;
+  const authEmail = firebaseUser.email || "";
+  const authDisplayName = firebaseUser.displayName || "";
+  const isEmailVerified = Boolean(firebaseUser.emailVerified);
+
+  let cachedProfile = getApplicationProfile(uid);
+
+  let role = null;
+  let name = authDisplayName || cachedProfile?.name || null;
+  let email = authEmail || cachedProfile?.email || null;
+  let phone = firebaseUser.phoneNumber || cachedProfile?.phone || null;
+  let district = cachedProfile?.district || null;
+  let service = cachedProfile?.service || null;
+  let experience = cachedProfile?.experience || null;
+  let availability = cachedProfile?.availability || "Available";
+  let workerId = cachedProfile?.workerId || null;
+  let isVerified = Boolean(cachedProfile?.isVerified);
+  let status = cachedProfile?.status || null;
+  let createdAt = cachedProfile?.createdAt || null;
+
+  let userDocExists = false;
+  let db = null;
+  let firestoreMethods = null;
+
+  try {
+    const firestoreClient = await initializeFirestoreClient();
+    db = firestoreClient?.db;
+    firestoreMethods = await getFirestoreMethods();
+
+    if (db && firestoreMethods && typeof firestoreMethods.getDoc === "function") {
+      // 1. Inspect /users/{uid}
+      try {
+        const userDocRef = firestoreMethods.doc(db, "users", uid);
+        const userSnap = await firestoreMethods.getDoc(userDocRef);
+        if (userSnap.exists()) {
+          userDocExists = true;
+          const uData = userSnap.data() || {};
+          name = uData.name || uData.displayName || name;
+          email = uData.email || email;
+          phone = uData.phone || phone;
+          district = uData.district || district;
+          createdAt = uData.createdAt || createdAt;
+
+          const rawRole = uData.role || uData.userType || uData.type;
+          if (typeof rawRole === "string") {
+            const normalized = rawRole.toLowerCase().trim();
+            if (isSupportedRole(normalized)) {
+              role = normalized;
+            }
+          }
+        }
+      } catch (userErr) {
+        console.warn("[JKFixHub Auth] /users lookup notice:", userErr?.message || userErr);
+      }
+
+      // 2. Inspect /workers/{uid} (if worker or if role not established)
+      if (!role || role === "worker") {
+        try {
+          const workerDocRef = firestoreMethods.doc(db, "workers", uid);
+          const workerSnap = await firestoreMethods.getDoc(workerDocRef);
+          if (workerSnap.exists()) {
+            role = "worker";
+            const wData = workerSnap.data() || {};
+            name = name || wData.name;
+            district = district || wData.district;
+            service = wData.service || service;
+            experience = wData.experience || experience;
+            availability = wData.availability || availability;
+            isVerified = Boolean(wData.isVerified);
+            status = wData.status || (isVerified ? "active" : "pending");
+            createdAt = createdAt || wData.createdAt;
+          }
+        } catch (workerErr) {
+          console.warn("[JKFixHub Auth] /workers lookup notice:", workerErr?.message || workerErr);
+        }
+      }
+
+      // 3. Inspect /admins/{uid} (authoritative verification)
+      if (role === "admin" || !role) {
+        try {
+          const adminDocRef = firestoreMethods.doc(db, "admins", uid);
+          const adminSnap = await firestoreMethods.getDoc(adminDocRef);
+          if (adminSnap.exists()) {
+            const aData = adminSnap.data() || {};
+            if (aData.active === true && aData.role === "admin") {
+              role = "admin";
+              name = aData.displayName || name || "Platform Administrator";
+              email = aData.email || email;
+              phone = aData.phone || phone;
+              district = aData.district || district;
+              createdAt = aData.createdAt || createdAt;
+            } else if (role === "admin") {
+              role = null;
+            }
+          } else if (role === "admin") {
+            role = null;
+          }
+        } catch (adminErr) {
+          if (role === "admin") role = null;
+          console.warn("[JKFixHub Auth] /admins lookup notice:", adminErr?.message || adminErr);
+        }
+      }
+    }
+  } catch (fsErr) {
+    console.warn("[JKFixHub Auth] Firestore client unavailable:", fsErr?.message || fsErr);
+  }
+
+  // 4. Default role determination:
+  // If role is still undetermined, check cache, or default safely to customer
+  if (!role) {
+    if (cachedProfile?.role && isSupportedRole(cachedProfile.role)) {
+      role = cachedProfile.role;
+    } else {
+      role = "customer";
+    }
+  }
+
+  name = name || authDisplayName || (role === "worker" ? "Worker" : (role === "admin" ? "Platform Administrator" : "Customer"));
+  email = email || authEmail;
+  createdAt = createdAt || new Date().toISOString();
+
+  // 5. Non-blocking self-healing if /users/{uid} document is missing in Firestore
+  if (attemptSelfHeal && !userDocExists && db && firestoreMethods && typeof firestoreMethods.setDoc === "function") {
+    if (role === "customer" || role === "worker") {
+      try {
+        const healPayload = {
+          uid,
+          name,
+          email,
+          role,
+          emailVerified: isEmailVerified,
+          createdAt
+        };
+        if (phone) healPayload.phone = phone;
+        if (district) healPayload.district = district;
+        const userDocRef = firestoreMethods.doc(db, "users", uid);
+        firestoreMethods.setDoc(userDocRef, healPayload, { merge: true }).catch((err) => {
+          console.warn("[JKFixHub Auth] Non-blocking /users self-heal write notice:", err?.message || err);
+        });
+      } catch (healSyncErr) {
+        console.warn("[JKFixHub Auth] Non-blocking self-heal setup notice:", healSyncErr?.message || healSyncErr);
+      }
+    }
+  }
+
+  return {
+    role,
+    name,
+    email,
+    phone,
+    district,
+    service,
+    experience,
+    availability,
+    workerId: workerId || (role === "worker" ? uid : null),
+    emailVerified: isEmailVerified,
+    isVerified: Boolean(isVerified),
+    status: status || (role === "worker" ? "pending" : null),
+    authProvider: "firebase",
+    createdAt
+  };
+}
+
+/**
  * Signs in an existing user with Email and Password.
  * Routes to Customer or Worker experience based on profile;
  * Admin remains strictly separate via admin.html.
@@ -1030,6 +1210,10 @@ export async function signInUser({ email, password }) {
     return { success: false, error: getSafeErrorMessage("invalidPassword") };
   }
 
+  if (isSigningIn) {
+    return { success: false, inProgress: true };
+  }
+
   const normalizedEmail = email.toLowerCase().trim();
   recordSecurityEvent("LOGIN_ATTEMPT");
 
@@ -1042,6 +1226,7 @@ export async function signInUser({ email, password }) {
   const submitBtn = typeof document !== "undefined" ? document.getElementById("authSignInSubmit") : null;
   const restoreBtn = setButtonLoading(submitBtn, "Signing in...");
   setAuthFeedback("Signing in to your account...", false);
+  isSigningIn = true;
 
   try {
     const firebaseReady = isFirebaseConfigured();
@@ -1058,112 +1243,12 @@ export async function signInUser({ email, password }) {
         const userCredential = await methods.signInWithEmailAndPassword(auth, normalizedEmail, password);
         const user = userCredential.user;
 
-        restoreBtn.updateText("Loading profile...");
+        restoreBtn.updateText("Opening dashboard...");
         setAuthFeedback("Loading your profile...", false);
 
-        let profile = getApplicationProfile(user.uid);
+        const profile = await resolveUserProfile(user, { attemptSelfHeal: true });
 
-        // Try fetching profile from Firestore
-        try {
-          const { db } = await initializeFirestoreClient();
-          const firestoreMethods = await getFirestoreMethods();
-          if (db && firestoreMethods && typeof firestoreMethods.getDoc === "function") {
-            const userDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "users", user.uid));
-            if (userDoc.exists()) {
-              const data = userDoc.data();
-              const role = isSupportedRole(data?.role) ? data.role : null;
-              if (role) {
-                const userEmail = data.email || user.email;
-                const userPhone = data.phone || null;
-                profile = {
-                  role,
-                  name: data.name || user.displayName || (role === "worker" ? "Worker" : "Customer"),
-                  email: userEmail,
-                  phone: userPhone,
-                  district: data.district || null,
-                  createdAt: data.createdAt || new Date().toISOString()
-                };
-
-                if (profile.role === "worker") {
-                  const workerDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "workers", user.uid));
-                  if (workerDoc.exists()) {
-                    const wData = workerDoc.data();
-                    profile.service = wData.service || null;
-                    profile.experience = wData.experience || null;
-                    profile.availability = wData.availability || "Available";
-                    profile.isVerified = Boolean(wData.isVerified);
-                    profile.status = wData.status || "pending";
-                  } else {
-                    profile.status = "pending";
-                    profile.isVerified = false;
-                  }
-                }
-              } else {
-                profile = null;
-              }
-            } else {
-              profile = null;
-            }
-
-            // Authoritative admin verification against /admins/{uid}
-            if (!profile || profile.role === "admin") {
-              try {
-                const adminDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "admins", user.uid));
-                if (adminDoc.exists()) {
-                  const aData = adminDoc.data();
-                  if (aData && aData.active === true && aData.role === "admin") {
-                    profile = {
-                      role: "admin",
-                      name: aData.displayName || profile?.name || user.displayName || "Platform Administrator",
-                      email: aData.email || user.email,
-                      phone: aData.phone || profile?.phone || null,
-                      district: aData.district || profile?.district || null,
-                      createdAt: aData.createdAt || profile?.createdAt || new Date().toISOString()
-                    };
-                  } else if (profile?.role === "admin") {
-                    // User doc claimed admin role but /admins/{uid} is not active admin
-                    profile = null;
-                  }
-                } else if (profile?.role === "admin") {
-                  // User doc claimed admin role but no /admins/{uid} record exists
-                  profile = null;
-                }
-              } catch (adminErr) {
-                if (profile?.role === "admin") {
-                  profile = null;
-                }
-              }
-            }
-          }
-        } catch (e) {
-          // Fallback to local profile cache only if it has a valid supported role
-          if (!profile?.role || !isSupportedRole(profile.role)) {
-            profile = null;
-          }
-        }
-
-        if (!profile || !profile.role || !isSupportedRole(profile.role)) {
-          recordSecurityEvent("FIREBASE_AUTH_ERROR");
-          setAuthStatus(AUTH_STATUS.ERROR, "missing-profile");
-          if (typeof methods.signOut === "function") {
-            try {
-              await methods.signOut(auth);
-            } catch (_) {}
-          }
-          clearCurrentUser();
-          updateAccountControls();
-          const errorMsg = "Account profile not found. Please contact support or register again.";
-          setAuthFeedback(errorMsg, true);
-          return { success: false, error: errorMsg };
-        }
-
-        saveApplicationProfile(user.uid, {
-          ...profile,
-          emailVerified: Boolean(user.emailVerified),
-          authProvider: "firebase"
-        });
-
-        setCurrentUser({
+        const currentUser = {
           id: user.uid,
           firebaseUid: user.uid,
           role: profile.role,
@@ -1180,23 +1265,60 @@ export async function signInUser({ email, password }) {
           status: profile.status || (profile.role === "worker" ? "pending" : null),
           authProvider: "firebase",
           createdAt: profile.createdAt || new Date().toISOString()
+        };
+
+        saveApplicationProfile(user.uid, {
+          ...profile,
+          emailVerified: Boolean(user.emailVerified),
+          authProvider: "firebase"
         });
 
+        setCurrentUser(currentUser);
+        setAuthStatus(AUTH_STATUS.AUTHENTICATED);
+        recordSecurityEvent("AUTH_STATE_CHANGED", currentUser.role);
         updateAccountControls();
-        if (profile.role === "admin") {
-          closeModal("authModal");
-          openAdminDashboard();
+
+        if (currentUser.role === "admin") {
+          try {
+            closeModal("authModal");
+            openAdminDashboard();
+          } catch (uiErr) {
+            console.warn("[JKFixHub Auth] Admin dashboard navigation notice:", uiErr?.message || uiErr);
+          }
           setAuthFeedback("Signed in as Administrator.", false);
-        } else {
-          showAccountView();
+        } else if (currentUser.role === "worker") {
+          try {
+            const signedOutView = document.getElementById("authSignedOutView");
+            if (signedOutView) signedOutView.hidden = true;
+            openWorkerDashboard();
+          } catch (uiErr) {
+            console.warn("[JKFixHub Auth] Worker dashboard navigation notice:", uiErr?.message || uiErr);
+          }
           setAuthFeedback("Signed in successfully.", false);
+        } else {
+          try {
+            closeModal("authModal");
+          } catch (uiErr) {
+            console.warn("[JKFixHub Auth] Modal close notice:", uiErr?.message || uiErr);
+          }
+          setAuthFeedback("Signed in successfully.", false);
+          try {
+            updateRoleBasedHome();
+          } catch (_) {}
+          if (typeof window !== "undefined" && (window.location.hash === "#requests" || window.location.hash === "#my-requests")) {
+            try {
+              openCustomerRequests();
+            } catch (_) {}
+          }
         }
-        return { success: true };
+
+        return { success: true, role: currentUser.role };
       } catch (error) {
         recordSecurityEvent("FIREBASE_AUTH_ERROR");
         setAuthStatus(AUTH_STATUS.ERROR, error?.code || "auth-error");
         const safeMessage = mapFirebaseAuthError(error);
         setAuthFeedback(safeMessage, true);
+        setFieldError("authSignInPassword", "authSignInPasswordError", safeMessage);
         return { success: false, error: safeMessage };
       }
     }
@@ -1208,6 +1330,7 @@ export async function signInUser({ email, password }) {
       error: "Firebase Authentication credentials not configured."
     };
   } finally {
+    isSigningIn = false;
     restoreBtn();
   }
 }
@@ -2624,6 +2747,7 @@ export function initializeAuth() {
   if (signInForm) {
     signInForm.addEventListener("submit", async (e) => {
       e.preventDefault();
+      if (isSigningIn) return;
       const email = document.getElementById("authSignInEmail")?.value || "";
       const password = document.getElementById("authSignInPassword")?.value || "";
       await signInUser({ email, password });
@@ -2918,122 +3042,54 @@ export function initializeAuth() {
             try {
               if (firebaseUser) {
                 if (
+                  isSigningIn ||
                   (pendingRegistrationUid && pendingRegistrationUid === firebaseUser.uid) ||
                   (pendingRegistrationEmail && pendingRegistrationEmail === firebaseUser.email?.toLowerCase().trim())
                 ) {
                   return;
                 }
-                let existingProfile = getApplicationProfile(firebaseUser.uid);
 
-                try {
-                  const { db } = await initializeFirestoreClient();
-                  const firestoreMethods = await getFirestoreMethods();
-                  if (db && firestoreMethods && typeof firestoreMethods.getDoc === "function") {
-                    const userDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "users", firebaseUser.uid));
-                    if (userDoc.exists()) {
-                      const uData = userDoc.data();
-                      const role = isSupportedRole(uData?.role) ? uData.role : null;
-                      if (role) {
-                        const resolvedEmail = uData.email || firebaseUser.email;
-                        const resolvedPhone = uData.phone || null;
-                        existingProfile = {
-                          ...existingProfile,
-                          role,
-                          name: uData.name || existingProfile?.name || firebaseUser.displayName || (role === "worker" ? "Worker" : "Customer"),
-                          email: resolvedEmail,
-                          phone: resolvedPhone,
-                          district: uData.district || null
-                        };
-
-                        if (existingProfile.role === "worker") {
-                          const wDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "workers", firebaseUser.uid));
-                          if (wDoc.exists()) {
-                            const wData = wDoc.data();
-                            existingProfile.service = wData.service || null;
-                            existingProfile.experience = wData.experience || null;
-                            existingProfile.availability = wData.availability || "Available";
-                            existingProfile.isVerified = Boolean(wData.isVerified);
-                            existingProfile.status = wData.status || "pending";
-                          } else {
-                            existingProfile.status = "pending";
-                            existingProfile.isVerified = false;
-                          }
-                        }
-                      } else {
-                        existingProfile = null;
-                      }
-                    } else {
-                      existingProfile = null;
-                    }
-
-                    // Authoritative admin verification against /admins/{uid}
-                    if (!existingProfile || existingProfile.role === "admin") {
-                      try {
-                        const adminDoc = await firestoreMethods.getDoc(firestoreMethods.doc(db, "admins", firebaseUser.uid));
-                        if (adminDoc.exists()) {
-                          const aData = adminDoc.data();
-                          if (aData && aData.active === true && aData.role === "admin") {
-                            existingProfile = {
-                              ...existingProfile,
-                              role: "admin",
-                              name: aData.displayName || existingProfile?.name || firebaseUser.displayName || "Platform Administrator",
-                              email: aData.email || firebaseUser.email,
-                              phone: aData.phone || existingProfile?.phone || null,
-                              district: aData.district || existingProfile?.district || null,
-                              createdAt: aData.createdAt || existingProfile?.createdAt || new Date().toISOString()
-                            };
-                          } else if (existingProfile?.role === "admin") {
-                            existingProfile = null;
-                          }
-                        } else if (existingProfile?.role === "admin") {
-                          existingProfile = null;
-                        }
-                      } catch (adminErr) {
-                        if (existingProfile?.role === "admin") {
-                          existingProfile = null;
-                        }
-                      }
-                    }
-                  }
-                } catch (fetchErr) {
-                  console.warn("[JKFixHub Auth] Firestore background profile sync notice:", fetchErr?.message || fetchErr);
-                }
-
-                if (!existingProfile?.role || !isSupportedRole(existingProfile.role)) {
-                  console.warn("[JKFixHub Auth] Missing valid Firestore profile for authenticated user:", firebaseUser.uid);
-                  clearCurrentUser();
-                  if (typeof methods.signOut === "function") {
-                    try {
-                      await methods.signOut(auth);
-                    } catch (_) {}
-                  }
-                  updateAccountControls();
-                  return;
-                }
+                const profile = await resolveUserProfile(firebaseUser, { attemptSelfHeal: true });
 
                 const currentUser = {
                   id: firebaseUser.uid,
                   firebaseUid: firebaseUser.uid,
-                  role: existingProfile.role,
-                  name: existingProfile.name || firebaseUser.displayName || (existingProfile.role === "worker" ? "Worker" : "Customer"),
-                  email: existingProfile.email || firebaseUser.email,
-                  phone: existingProfile.phone || null,
-                  district: existingProfile.district || null,
-                  service: existingProfile.service || null,
-                  experience: existingProfile.experience || null,
-                  availability: existingProfile.availability || "Available",
+                  role: profile.role,
+                  name: profile.name,
+                  email: profile.email || firebaseUser.email,
+                  phone: profile.phone || null,
+                  district: profile.district || null,
+                  service: profile.service || null,
+                  experience: profile.experience || null,
+                  availability: profile.availability || "Available",
                   emailVerified: Boolean(firebaseUser.emailVerified),
-                  workerId: existingProfile.workerId || null,
-                  isVerified: Boolean(existingProfile.isVerified),
-                  status: existingProfile.status || (existingProfile.role === "worker" ? "pending" : null),
+                  workerId: profile.workerId || null,
+                  isVerified: Boolean(profile.isVerified),
+                  status: profile.status || (profile.role === "worker" ? "pending" : null),
                   authProvider: "firebase",
-                  createdAt: existingProfile.createdAt || new Date().toISOString()
+                  createdAt: profile.createdAt || new Date().toISOString()
                 };
+
+                saveApplicationProfile(firebaseUser.uid, {
+                  ...profile,
+                  emailVerified: Boolean(firebaseUser.emailVerified),
+                  authProvider: "firebase"
+                });
+
                 setCurrentUser(currentUser);
+                setAuthStatus(AUTH_STATUS.AUTHENTICATED);
                 recordSecurityEvent("AUTH_STATE_CHANGED", currentUser.role);
                 updateAccountControls();
-                if (currentUser.role === "admin" && (window.location.hash === "#admin" || window.location.hash === "#admin-dashboard")) {
-                  openAdminDashboard();
+
+                if (typeof window !== "undefined") {
+                  if (currentUser.role === "admin" && (window.location.hash === "#admin" || window.location.hash === "#admin-dashboard")) {
+                    openAdminDashboard();
+                  } else if (currentUser.role === "worker" && (window.location.hash === "#worker-dashboard" || window.location.hash === "#dashboard")) {
+                    openModal("authModal");
+                    openWorkerDashboard();
+                  } else if (currentUser.role === "customer" && (window.location.hash === "#requests" || window.location.hash === "#my-requests")) {
+                    openCustomerRequests();
+                  }
                 }
               } else {
                 const current = getCurrentUser();

@@ -815,6 +815,8 @@ export function openWorkerDashboard() {
   document.getElementById("authRoleSelection").hidden = true;
   document.getElementById("authAccountView").hidden = true;
   document.getElementById("workerDashboardView").hidden = false;
+  const signedOutView = document.getElementById("authSignedOutView");
+  if (signedOutView) signedOutView.hidden = true;
   const modal = document.querySelector("#authModal .modal");
   modal.classList.add("worker-dashboard-open");
   modal.setAttribute("aria-labelledby", "workerDashboardTitle");
