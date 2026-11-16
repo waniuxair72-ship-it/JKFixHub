@@ -466,7 +466,7 @@ describe("Account Deletion, Privacy & Failure-Handling Architecture", () => {
       assert.strictEqual(jobSnap.data().state, "COMPLETED");
     });
 
-    test("Fails closed and records FAILED state on unexpected auth service error", async () => {
+    test("Preserves AUTH_DELETING state and records lastError on unexpected auth service error", async () => {
       const uid = "cust-auth-error";
       db.seed("users", uid, { uid, role: "customer", name: "Irfan" });
 
@@ -490,8 +490,9 @@ describe("Account Deletion, Privacy & Failure-Handling Architecture", () => {
       );
 
       const jobSnap = await db.collection("deletionJobs").doc(uid).get();
-      assert.strictEqual(jobSnap.data().state, "FAILED");
-      assert.match(jobSnap.data().error, /Internal Auth Backend Error/);
+      // Crucial: state must remain AUTH_DELETING so scheduled recovery or retry can finish it
+      assert.strictEqual(jobSnap.data().state, "AUTH_DELETING");
+      assert.match(jobSnap.data().lastError, /Internal Auth Backend Error/);
     });
   });
 
@@ -639,9 +640,9 @@ describe("Account Deletion, Privacy & Failure-Handling Architecture", () => {
         initiatedAt: pastTime,
         updatedAt: pastTime
       });
-      db.seed("deletionJobs", "job-san", {
-        uid: "job-san",
-        state: "SANITIZING",
+      db.seed("deletionJobs", "job-unknown", {
+        uid: "job-unknown",
+        state: "PENDING_VERIFICATION",
         initiatedAt: pastTime,
         updatedAt: pastTime
       });
@@ -674,7 +675,7 @@ describe("Account Deletion, Privacy & Failure-Handling Architecture", () => {
 
       // Verify all non-target states are untouched
       assert.strictEqual((await db.collection("deletionJobs").doc("job-init").get()).data().state, "INITIATED");
-      assert.strictEqual((await db.collection("deletionJobs").doc("job-san").get()).data().state, "SANITIZING");
+      assert.strictEqual((await db.collection("deletionJobs").doc("job-unknown").get()).data().state, "PENDING_VERIFICATION");
       assert.strictEqual((await db.collection("deletionJobs").doc("job-fail").get()).data().state, "FAILED");
       assert.strictEqual((await db.collection("deletionJobs").doc("job-comp").get()).data().state, "COMPLETED");
     });
@@ -920,6 +921,466 @@ describe("Account Deletion, Privacy & Failure-Handling Architecture", () => {
       const jobSnap = await db.collection("deletionJobs").doc(uid).get();
       assert.strictEqual(jobSnap.data().state, "COMPLETED");
       assert.strictEqual(jobSnap.data().reconciledReason, "auth_user_confirmed_deleted");
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // 7. Failure-Injection & Edge Case Resilience
+  // --------------------------------------------------------------------------
+  describe("7. Failure-Injection & Edge Case Resilience", () => {
+    test("Mid-sanitization Firestore write failure followed by retry", async () => {
+      const uid = "cust-mid-fail";
+      db.seed("users", uid, {
+        uid,
+        role: "customer",
+        name: "Midway Customer"
+      });
+
+      db.seed("requests", "req-mid-1", {
+        id: "req-mid-1",
+        customerId: uid,
+        customerName: "Midway Customer",
+        customerLocation: "Srinagar",
+        problemDescription: "Issue 1",
+        status: "Completed"
+      });
+
+      db.seed("requests", "req-mid-2", {
+        id: "req-mid-2",
+        customerId: uid,
+        customerName: "Midway Customer",
+        customerLocation: "Srinagar",
+        problemDescription: "Issue 2",
+        status: "Completed"
+      });
+
+      db.seed("requests", "req-mid-3", {
+        id: "req-mid-3",
+        customerId: uid,
+        customerName: "Midway Customer",
+        customerLocation: "Srinagar",
+        problemDescription: "Issue 3",
+        status: "Completed"
+      });
+
+      // Inject a transient failure specifically on req-mid-2
+      let failDocId = "req-mid-2";
+      const sampleDocRef = db.collection("requests").doc("req-mid-2");
+      const MockDocRefClass = sampleDocRef.constructor;
+      const origUpdate = MockDocRefClass.prototype.update;
+
+      MockDocRefClass.prototype.update = async function (updates) {
+        if (failDocId && this.id === failDocId) {
+          throw new Error("Simulated Firestore write failure on " + this.id);
+        }
+        return origUpdate.call(this, updates);
+      };
+
+      try {
+        const request = makeCallableRequest(uid, 15);
+
+        // Run 1: Fails mid-sanitization on req-mid-2
+        await assert.rejects(
+          async () => {
+            await deleteUserAccount(db, request, mockAuthService);
+          },
+          {
+            code: "internal",
+            message: /Simulated Firestore write failure on req-mid-2/
+          }
+        );
+
+        // Job records FAILED with sanitization error
+        const jobMidSnap = await db.collection("deletionJobs").doc(uid).get();
+        assert.strictEqual(jobMidSnap.data().state, "FAILED");
+        assert.match(jobMidSnap.data().error, /Simulated Firestore write failure/);
+
+        // Clear failure injection
+        failDocId = null;
+
+        // Run 2: User retries deletion
+        const retryResult = await deleteUserAccount(db, request, mockAuthService);
+        assert.strictEqual(retryResult.success, true);
+        assert.strictEqual(retryResult.status, "COMPLETED");
+
+        // Verify ALL requests are now fully sanitized
+        const r1 = (await db.collection("requests").doc("req-mid-1").get()).data();
+        const r2 = (await db.collection("requests").doc("req-mid-2").get()).data();
+        const r3 = (await db.collection("requests").doc("req-mid-3").get()).data();
+        assert.strictEqual(r1.customerName, "Former Customer");
+        assert.strictEqual(r2.customerName, "Former Customer");
+        assert.strictEqual(r3.customerName, "Former Customer");
+
+        // Verify user document deleted and auth purged
+        assert.strictEqual((await db.collection("users").doc(uid).get()).exists, false);
+        assert.strictEqual(deletedAuthUids.includes(uid), true);
+
+        const jobFinalSnap = await db.collection("deletionJobs").doc(uid).get();
+        assert.strictEqual(jobFinalSnap.data().state, "COMPLETED");
+      } finally {
+        MockDocRefClass.prototype.update = origUpdate;
+      }
+    });
+
+    test("Firebase Auth deletion failure followed by successful scheduled recovery", async () => {
+      const uid = "cust-auth-recovery";
+      db.seed("users", uid, {
+        uid,
+        role: "customer",
+        name: "Auth Recovery User"
+      });
+      db.seed("requests", "req-ar-1", {
+        customerId: uid,
+        customerName: "Auth Recovery User",
+        status: "Completed"
+      });
+
+      let authFail = true;
+      const recoverableAuth = {
+        getUser: async (targetUid) => {
+          return { uid: targetUid };
+        },
+        deleteUser: async (targetUid) => {
+          if (authFail) {
+            const err = new Error("Auth service 503 unavailable");
+            err.code = "auth/internal-error";
+            throw err;
+          }
+          deletedAuthUids.push(targetUid);
+        }
+      };
+
+      const request = makeCallableRequest(uid, 20);
+
+      // 1. Initial deleteUserAccount attempt: Auth fails
+      await assert.rejects(
+        async () => {
+          await deleteUserAccount(db, request, recoverableAuth);
+        },
+        {
+          code: "internal",
+          message: /Auth service 503 unavailable/
+        }
+      );
+
+      // Verify state is preserved as AUTH_DELETING (NOT FAILED!) with lastError
+      const jobSnap1 = await db.collection("deletionJobs").doc(uid).get();
+      assert.strictEqual(jobSnap1.data().state, "AUTH_DELETING");
+      assert.match(jobSnap1.data().lastError, /503 unavailable/);
+      assert.strictEqual(deletedAuthUids.includes(uid), false);
+
+      // 2. Simulate 20 minutes elapsed (> 15m staleness threshold)
+      const pastTime = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+      await db.collection("deletionJobs").doc(uid).set({
+        initiatedAt: pastTime,
+        updatedAt: pastTime
+      }, { merge: true });
+
+      // Service recovers!
+      authFail = false;
+
+      // 3. Scheduled recovery runs
+      const reconcileResult = await reconcileStaleDeletionJobs(db, recoverableAuth);
+      assert.strictEqual(reconcileResult.checkedCount, 1);
+      assert.strictEqual(reconcileResult.reconciledCount, 1);
+
+      // Verify user was deleted from Auth and job is COMPLETED
+      assert.strictEqual(deletedAuthUids.includes(uid), true);
+      const jobSnap2 = await db.collection("deletionJobs").doc(uid).get();
+      assert.strictEqual(jobSnap2.data().state, "COMPLETED");
+      assert.strictEqual(jobSnap2.data().reconciledReason, "surviving_auth_user_sanitized_and_deleted");
+    });
+
+    test("Legacy workerId reference sanitization", async () => {
+      const workerId = "worker-legacy-test";
+      db.seed("users", workerId, {
+        uid: workerId,
+        role: "worker",
+        name: "Legacy Worker"
+      });
+      db.seed("workers", workerId, {
+        name: "Legacy Worker",
+        service: "Carpentry",
+        status: "active",
+        isVerified: true
+      });
+
+      // Request 1: Uses legacy workerId (workerUid is omitted/undefined)
+      db.seed("requests", "req-legacy-only", {
+        customerId: "cust-other",
+        workerId: workerId,
+        workerName: "Legacy Worker",
+        status: "Completed"
+      });
+
+      // Request 2: Uses modern workerUid
+      db.seed("requests", "req-modern-only", {
+        customerId: "cust-other",
+        workerUid: workerId,
+        workerName: "Legacy Worker",
+        status: "Completed"
+      });
+
+      const request = makeCallableRequest(workerId, 15);
+      const result = await deleteUserAccount(db, request, mockAuthService);
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(result.status, "COMPLETED");
+
+      // Verify legacy workerId request is sanitized
+      const reqLegacy = (await db.collection("requests").doc("req-legacy-only").get()).data();
+      assert.strictEqual(reqLegacy.workerName, "Former Professional");
+      assert.strictEqual(reqLegacy.workerDeleted, true);
+
+      // Verify modern workerUid request is sanitized
+      const reqModern = (await db.collection("requests").doc("req-modern-only").get()).data();
+      assert.strictEqual(reqModern.workerName, "Former Professional");
+      assert.strictEqual(reqModern.workerDeleted, true);
+    });
+
+    test("Recovery of a SANITIZING job older than 15 minutes", async () => {
+      const uid = "cust-stale-sanitizing";
+      const pastTime = new Date(Date.now() - 25 * 60 * 1000).toISOString(); // 25 mins ago
+
+      db.seed("deletionJobs", uid, {
+        uid,
+        state: "SANITIZING",
+        initiatedAt: pastTime,
+        updatedAt: pastTime
+      });
+
+      // User profile and completed request that were NOT sanitized yet (simulating container crash)
+      db.seed("users", uid, {
+        uid,
+        name: "Stale Sanitizing Customer",
+        role: "customer"
+      });
+      db.seed("requests", "req-stale-san", {
+        customerId: uid,
+        customerName: "Stale Sanitizing Customer",
+        customerLocation: "Baramulla",
+        problemDescription: "Interrupted sanitization request",
+        status: "Completed"
+      });
+
+      let deleteUserCalled = false;
+      const authService = {
+        getUser: async (targetUid) => {
+          return { uid: targetUid };
+        },
+        deleteUser: async (targetUid) => {
+          deleteUserCalled = true;
+          deletedAuthUids.push(targetUid);
+        }
+      };
+
+      const result = await reconcileStaleDeletionJobs(db, authService);
+
+      assert.strictEqual(result.checkedCount, 1);
+      assert.strictEqual(result.reconciledCount, 1);
+      assert.strictEqual(deleteUserCalled, true);
+
+      // Verify sanitization ran and user profile was deleted
+      const userSnap = await db.collection("users").doc(uid).get();
+      assert.strictEqual(userSnap.exists, false);
+
+      // Verify request was sanitized
+      const reqSnap = await db.collection("requests").doc("req-stale-san").get();
+      assert.strictEqual(reqSnap.data().customerName, "Former Customer");
+      assert.strictEqual(reqSnap.data().problemDescription, "[Description redacted upon account deletion]");
+
+      // Verify job is COMPLETED
+      const jobSnap = await db.collection("deletionJobs").doc(uid).get();
+      assert.strictEqual(jobSnap.data().state, "COMPLETED");
+      assert.strictEqual(jobSnap.data().reconciledReason, "surviving_auth_user_sanitized_and_deleted");
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // 8. Concurrent Request Creation and Deletion Prevention
+  // --------------------------------------------------------------------------
+  describe("8. Concurrent Request Creation and Deletion Prevention", () => {
+    test("Aborts customer deletion if an active request is created concurrently during processing", async () => {
+      const uid = "cust-concurrent-req";
+      db.seed("users", uid, {
+        uid,
+        role: "customer",
+        name: "Concurrent Customer"
+      });
+      db.seed("requests", "req-c-existing", {
+        customerId: uid,
+        customerName: "Concurrent Customer",
+        status: "Completed"
+      });
+
+      // Hook MockDocRef.prototype.update to simulate a concurrent request creation
+      // while sanitizeUserData is updating the completed request
+      const sampleDocRef = db.collection("requests").doc("req-c-existing");
+      const MockDocRefClass = sampleDocRef.constructor;
+      const origUpdate = MockDocRefClass.prototype.update;
+
+      let injectedConcurrentRequest = false;
+      MockDocRefClass.prototype.update = async function (updates) {
+        if (!injectedConcurrentRequest && this.id === "req-c-existing") {
+          injectedConcurrentRequest = true;
+          // Concurrently insert a new Pending request for this customer
+          db.seed("requests", "req-concurrent-new", {
+            id: "req-concurrent-new",
+            customerId: uid,
+            workerUid: "worker-99",
+            status: "Pending"
+          });
+        }
+        return origUpdate.call(this, updates);
+      };
+
+      try {
+        const request = makeCallableRequest(uid, 15);
+
+        await assert.rejects(
+          async () => {
+            await deleteUserAccount(db, request, mockAuthService);
+          },
+          {
+            code: "failed-precondition",
+            message: /Cannot delete account while you have active service requests/
+          }
+        );
+
+        // Crucial assertions:
+        // 1. Auth user must NOT have been deleted
+        assert.strictEqual(deletedAuthUids.includes(uid), false);
+
+        // 2. Job must be marked FAILED with clear reason
+        const jobSnap = await db.collection("deletionJobs").doc(uid).get();
+        assert.strictEqual(jobSnap.data().state, "FAILED");
+        assert.match(jobSnap.data().error, /active service request detected during processing/);
+      } finally {
+        MockDocRefClass.prototype.update = origUpdate;
+      }
+    });
+
+    test("Aborts worker deletion if an active request is assigned concurrently during processing", async () => {
+      const workerId = "worker-concurrent-req";
+      db.seed("users", workerId, {
+        uid: workerId,
+        role: "worker",
+        name: "Concurrent Worker"
+      });
+      db.seed("workers", workerId, {
+        name: "Concurrent Worker",
+        service: "Plumbing",
+        status: "active",
+        isVerified: true
+      });
+      db.seed("requests", "req-w-existing", {
+        customerId: "cust-other",
+        workerUid: workerId,
+        workerName: "Concurrent Worker",
+        status: "Completed"
+      });
+
+      const sampleDocRef = db.collection("requests").doc("req-w-existing");
+      const MockDocRefClass = sampleDocRef.constructor;
+      const origUpdate = MockDocRefClass.prototype.update;
+
+      let injectedConcurrentWorkerRequest = false;
+      MockDocRefClass.prototype.update = async function (updates) {
+        if (!injectedConcurrentWorkerRequest && this.id === "req-w-existing") {
+          injectedConcurrentWorkerRequest = true;
+          // Concurrently assign a new Accepted request to this worker
+          db.seed("requests", "req-concurrent-assigned", {
+            id: "req-concurrent-assigned",
+            customerId: "cust-other-2",
+            workerUid: workerId,
+            status: "Accepted"
+          });
+        }
+        return origUpdate.call(this, updates);
+      };
+
+      try {
+        const request = makeCallableRequest(workerId, 15);
+
+        await assert.rejects(
+          async () => {
+            await deleteUserAccount(db, request, mockAuthService);
+          },
+          {
+            code: "failed-precondition",
+            message: /Cannot delete account while you have active service requests/
+          }
+        );
+
+        // Worker was NOT deleted from Auth
+        assert.strictEqual(deletedAuthUids.includes(workerId), false);
+
+        const jobSnap = await db.collection("deletionJobs").doc(workerId).get();
+        assert.strictEqual(jobSnap.data().state, "FAILED");
+        assert.match(jobSnap.data().error, /active service request detected during processing/);
+      } finally {
+        MockDocRefClass.prototype.update = origUpdate;
+      }
+    });
+
+    test("Scheduled recovery aborts and preserves Auth user if active request created during reconciliation", async () => {
+      const uid = "cust-reconcile-race";
+      const pastTime = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+
+      db.seed("deletionJobs", uid, {
+        uid,
+        state: "AUTH_DELETING",
+        initiatedAt: pastTime,
+        updatedAt: pastTime
+      });
+
+      db.seed("users", uid, {
+        uid,
+        name: "Reconcile Race Customer",
+        role: "customer"
+      });
+
+      // Hook to inject a new Pending request right during sanitization
+      const sampleDocRef = db.collection("users").doc(uid);
+      const MockDocRefClass = sampleDocRef.constructor;
+      const origDelete = MockDocRefClass.prototype.delete;
+
+      let injectedReconcileRequest = false;
+      MockDocRefClass.prototype.delete = async function () {
+        if (!injectedReconcileRequest && this.id === uid) {
+          injectedReconcileRequest = true;
+          db.seed("requests", "req-reconcile-active", {
+            customerId: uid,
+            workerUid: "worker-50",
+            status: "Pending"
+          });
+        }
+        return origDelete.call(this);
+      };
+
+      let deleteUserCalled = false;
+      const authService = {
+        getUser: async (targetUid) => ({ uid: targetUid }),
+        deleteUser: async (targetUid) => {
+          deleteUserCalled = true;
+          deletedAuthUids.push(targetUid);
+        }
+      };
+
+      try {
+        const result = await reconcileStaleDeletionJobs(db, authService);
+
+        assert.strictEqual(result.reconciledCount, 0);
+        assert.strictEqual(result.errorCount, 1);
+        // Crucial: Auth user must NOT be deleted
+        assert.strictEqual(deleteUserCalled, false);
+        assert.strictEqual(deletedAuthUids.includes(uid), false);
+
+        const jobSnap = await db.collection("deletionJobs").doc(uid).get();
+        assert.strictEqual(jobSnap.data().state, "FAILED");
+        assert.match(jobSnap.data().error, /active service request detected/);
+      } finally {
+        MockDocRefClass.prototype.delete = origDelete;
+      }
     });
   });
 });

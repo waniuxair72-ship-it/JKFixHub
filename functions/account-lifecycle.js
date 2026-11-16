@@ -147,7 +147,21 @@ async function deleteUserAccount(db, request, authServiceOverride = null) {
     }
   }
 
-  // 2. Active Requests Pre-condition Guard
+  // 2. Lockout Guard: Mark INITIATED immediately to block concurrent service request creation in Firestore rules
+  await jobRef.set(
+    {
+      uid,
+      state: "INITIATED",
+      initiatedAt: existingJobSnap.exists && existingJobSnap.data()?.initiatedAt
+        ? existingJobSnap.data().initiatedAt
+        : FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      error: null
+    },
+    { merge: true }
+  );
+
+  // 3. Active Requests Pre-condition Guard
   try {
     await assertNoActiveRequests(db, uid);
   } catch (err) {
@@ -163,43 +177,86 @@ async function deleteUserAccount(db, request, authServiceOverride = null) {
     throw err;
   }
 
-  // Initialize or resume job state
+  // 4. Advance to SANITIZING
   await jobRef.set(
     {
-      uid,
       state: "SANITIZING",
-      initiatedAt: existingJobSnap.exists && existingJobSnap.data()?.initiatedAt
-        ? existingJobSnap.data().initiatedAt
-        : FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-      error: null
+      updatedAt: FieldValue.serverTimestamp()
     },
     { merge: true }
   );
 
-  // 3. Data Sanitization & Minimization
+  // 5. Data Sanitization & Minimization
+  let sanitizationStats;
   try {
-    const sanitizationStats = await sanitizeUserData(db, uid);
-
-    // 4. Identity Erasure in Firebase Authentication
+    sanitizationStats = await sanitizeUserData(db, uid);
+  } catch (sanErr) {
     await jobRef.set(
       {
-        state: "AUTH_DELETING",
+        state: "FAILED",
+        error: `Data sanitization failed: ${sanErr?.message || sanErr}`,
         updatedAt: FieldValue.serverTimestamp()
       },
       { merge: true }
     );
-
-    try {
-      await authService.deleteUser(uid);
-    } catch (authErr) {
-      // Defensive recovery: if user was already deleted from Auth, treat as success
-      if (authErr?.code !== "auth/user-not-found") {
-        throw authErr;
-      }
+    if (sanErr instanceof HttpsError) {
+      throw sanErr;
     }
+    throw new HttpsError(
+      "internal",
+      `Data sanitization failed: ${sanErr?.message || sanErr}`
+    );
+  }
 
-    // 5. Immutable Audit Trail
+  // 6. Concurrency Guard: Double-check for active requests created during sanitization!
+  try {
+    await assertNoActiveRequests(db, uid);
+  } catch (raceErr) {
+    await jobRef.set(
+      {
+        state: "FAILED",
+        error: `Account deletion aborted: active service request detected during processing (${raceErr.message})`,
+        updatedAt: FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
+    throw raceErr;
+  }
+
+  // 7. Transition to AUTH_DELETING
+  await jobRef.set(
+    {
+      state: "AUTH_DELETING",
+      updatedAt: FieldValue.serverTimestamp()
+    },
+    { merge: true }
+  );
+
+  // 5. Identity Erasure in Firebase Authentication
+  try {
+    await authService.deleteUser(uid);
+  } catch (authErr) {
+    // Defensive recovery: if user was already deleted from Auth, treat as success
+    if (authErr?.code !== "auth/user-not-found") {
+      const errorMsg = authErr?.message || String(authErr);
+      // Preserve AUTH_DELETING state so scheduled recovery or user retry can finalize it
+      await jobRef.set(
+        {
+          state: "AUTH_DELETING",
+          lastError: errorMsg,
+          updatedAt: FieldValue.serverTimestamp()
+        },
+        { merge: true }
+      );
+      throw new HttpsError(
+        "internal",
+        `Account deletion encountered an unexpected authentication service error: ${errorMsg}`
+      );
+    }
+  }
+
+  // 6. Immutable Audit Trail
+  try {
     await recordAuditEvent(db, {
       auditId: `account-deletion-${uid}`,
       actorUid: uid,
@@ -210,13 +267,14 @@ async function deleteUserAccount(db, request, authServiceOverride = null) {
       details: sanitizationStats
     });
 
-    // 6. Complete Deletion Job State Machine
+    // 7. Complete Deletion Job State Machine
     await jobRef.set(
       {
         state: "COMPLETED",
         completedAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
-        error: null
+        error: null,
+        lastError: null
       },
       { merge: true }
     );
@@ -226,23 +284,22 @@ async function deleteUserAccount(db, request, authServiceOverride = null) {
       message: "Account successfully deleted and personal data redacted.",
       status: "COMPLETED"
     };
-
-  } catch (err) {
+  } catch (finalErr) {
+    const errorMsg = finalErr?.message || String(finalErr);
     await jobRef.set(
       {
-        state: "FAILED",
-        error: err?.message || String(err),
+        state: "AUTH_DELETING",
+        lastError: errorMsg,
         updatedAt: FieldValue.serverTimestamp()
       },
       { merge: true }
     );
-
-    if (err instanceof HttpsError) {
-      throw err;
+    if (finalErr instanceof HttpsError) {
+      throw finalErr;
     }
     throw new HttpsError(
       "internal",
-      `Account deletion encountered an unexpected failure: ${err?.message || err}`
+      `Finalizing account deletion failed: ${errorMsg}`
     );
   }
 }
@@ -421,9 +478,9 @@ async function reconcileStaleDeletionJobs(db, authService, options = {}) {
     return results;
   }
 
-  // 1. Query candidate jobs strictly in AUTH_DELETING or RECONCILING state
+  // 1. Query candidate jobs in SANITIZING, AUTH_DELETING, or RECONCILING state
   const snapshot = await db.collection("deletionJobs")
-    .where("state", "in", ["AUTH_DELETING", "RECONCILING"])
+    .where("state", "in", ["SANITIZING", "AUTH_DELETING", "RECONCILING"])
     .get();
 
   for (const doc of snapshot.docs) {
@@ -442,7 +499,7 @@ async function reconcileStaleDeletionJobs(db, authService, options = {}) {
           if (!freshSnap.exists) return;
           const current = freshSnap.data() || {};
 
-          if (current.state !== "AUTH_DELETING" && current.state !== "RECONCILING") {
+          if (current.state !== "SANITIZING" && current.state !== "AUTH_DELETING" && current.state !== "RECONCILING") {
             return;
           }
 
@@ -472,7 +529,7 @@ async function reconcileStaleDeletionJobs(db, authService, options = {}) {
         const freshSnap = await doc.ref.get();
         if (freshSnap.exists) {
           const current = freshSnap.data() || {};
-          if (current.state === "AUTH_DELETING" || current.state === "RECONCILING") {
+          if (current.state === "SANITIZING" || current.state === "AUTH_DELETING" || current.state === "RECONCILING") {
             let isStale = false;
             if (current.state === "RECONCILING") {
               const reconcilingMs = extractTimestampMs(current.reconcilingAt) || extractTimestampMs(current.updatedAt);
@@ -518,7 +575,7 @@ async function reconcileStaleDeletionJobs(db, authService, options = {}) {
         results.errorCount++;
         try {
           await doc.ref.set({
-            state: "AUTH_DELETING",
+            state: jobData?.state === "SANITIZING" ? "SANITIZING" : "AUTH_DELETING",
             reconcileError: err?.message || String(err),
             reconcilingAt: null
           }, { merge: true });
@@ -530,6 +587,21 @@ async function reconcileStaleDeletionJobs(db, authService, options = {}) {
     // 4. Resolve Job Based on Concrete Auth State
     if (userMissing) {
       // User is confirmed deleted from Firebase Auth.
+      // Ensure data minimization is complete across all collections.
+      try {
+        await sanitizeUserData(db, uid);
+      } catch (sanErr) {
+        results.errorCount++;
+        try {
+          await doc.ref.set({
+            state: jobData?.state === "SANITIZING" ? "SANITIZING" : "AUTH_DELETING",
+            reconcileError: `Sanitization during missing user reconciliation failed: ${sanErr?.message || sanErr}`,
+            reconcilingAt: null
+          }, { merge: true });
+        } catch (_) {}
+        continue;
+      }
+
       // Use deterministic auditId to guarantee idempotency across retries.
       await recordAuditEvent(db, {
         auditId: `reconcile-${uid}`,
@@ -586,6 +658,22 @@ async function reconcileStaleDeletionJobs(db, authService, options = {}) {
           {
             state: "FAILED",
             error: `Reconciliation sanitization failed: ${sanErr?.message || sanErr}`,
+            updatedAt: FieldValue.serverTimestamp()
+          },
+          { merge: true }
+        );
+        results.errorCount++;
+        continue;
+      }
+
+      // Re-verify no active requests were created during processing
+      try {
+        await assertNoActiveRequests(db, uid);
+      } catch (activeReqErr) {
+        await doc.ref.set(
+          {
+            state: "FAILED",
+            error: `Reconciliation aborted: active service request detected after sanitization (${activeReqErr.message})`,
             updatedAt: FieldValue.serverTimestamp()
           },
           { merge: true }

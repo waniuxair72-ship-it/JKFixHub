@@ -58,6 +58,7 @@ import { stopRequestSuccessSubscription } from "./request.js";
 import { stopCustomerDetailsSubscription } from "./customer-requests.js";
 import { unsubscribeAllFirestoreListeners } from "./firestore-service.js";
 import { closeChat } from "./chat.js";
+import { callDeleteUserAccount } from "./functions-client.js";
 
 const ALLOWED_DISTRICTS = Object.freeze([
   "Shopian",
@@ -2303,6 +2304,311 @@ export async function saveCustomerProfile({ name, email, phone, district }) {
 }
 
 /**
+ * Displays a transient toast message on the UI.
+ *
+ * @param {string} message
+ */
+export function showAppToast(message) {
+  if (typeof document === "undefined") return;
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  setTextContent(toast, message);
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("show"));
+  setTimeout(() => {
+    toast.classList.remove("show");
+    setTimeout(() => toast.remove(), 220);
+  }, 3200);
+}
+
+/**
+ * Re-authenticates the currently signed-in user with their current password.
+ * Required for sensitive security operations like account deletion.
+ *
+ * Security Principles:
+ * 1. Password presence validation before network execution.
+ * 2. Password is never logged, printed, or persisted in storage.
+ * 3. Safely maps Firebase Auth error codes without exposing backend internals.
+ *
+ * @param {string} password
+ * @returns {Promise<{ success: boolean, error?: string, code?: string }>}
+ */
+export async function reauthenticateCurrentUser(password) {
+  if (!password || typeof password !== "string" || password.trim().length === 0) {
+    return {
+      success: false,
+      error: "Please enter your current password to confirm account deletion."
+    };
+  }
+
+  const user = getCurrentUser();
+  if (!user) {
+    return {
+      success: false,
+      error: "No active user session found. Please sign in again."
+    };
+  }
+
+  if (user.authProvider === "demo" || (typeof user.id === "string" && user.id.startsWith("demo-"))) {
+    return {
+      success: false,
+      error: "Demo accounts cannot be deleted via Cloud Functions."
+    };
+  }
+
+  let auth = getFirebaseAuth();
+  if (!auth && isFirebaseConfigured()) {
+    const client = await initializeFirebaseClient();
+    auth = client?.auth;
+  }
+
+  const currentUser = auth?.currentUser;
+  if (!currentUser || !currentUser.email) {
+    return {
+      success: false,
+      error: "Authentication session not found. Please sign in again."
+    };
+  }
+
+  if (
+    Array.isArray(currentUser.providerData) &&
+    currentUser.providerData.length > 0 &&
+    !currentUser.providerData.some((p) => p && p.providerId === "password")
+  ) {
+    return {
+      success: false,
+      error: "Password re-authentication is not supported for this account type. Please contact support to manage account deletion."
+    };
+  }
+
+  const methods = await getFirebaseAuthMethods();
+  if (!methods) {
+    return {
+      success: false,
+      error: "Authentication service unavailable. Please check your connection."
+    };
+  }
+
+  try {
+    let credential = null;
+    if (methods.EmailAuthProvider && typeof methods.EmailAuthProvider.credential === "function") {
+      credential = methods.EmailAuthProvider.credential(currentUser.email, password);
+    } else if (typeof methods.getAuthCredential === "function") {
+      credential = methods.getAuthCredential(currentUser.email, password);
+    } else {
+      credential = { email: currentUser.email, password, providerId: "password" };
+    }
+
+    if (typeof methods.reauthenticateWithCredential === "function") {
+      await methods.reauthenticateWithCredential(currentUser, credential);
+    } else if (typeof currentUser.reauthenticateWithCredential === "function") {
+      await currentUser.reauthenticateWithCredential(credential);
+    } else if (typeof methods.signInWithEmailAndPassword === "function") {
+      await methods.signInWithEmailAndPassword(auth, currentUser.email, password);
+    }
+
+    try {
+      if (typeof methods.getIdToken === "function") {
+        await methods.getIdToken(currentUser, true);
+      } else if (typeof currentUser.getIdToken === "function") {
+        await currentUser.getIdToken(true);
+      }
+    } catch (_) {}
+
+    return { success: true };
+  } catch (error) {
+    const code = error?.code || "";
+    let safeError = "Authentication failed. Please verify your password and retry.";
+
+    if (
+      code === "auth/wrong-password" ||
+      code === "auth/invalid-credential" ||
+      code === "auth/invalid-login-credentials"
+    ) {
+      safeError = "Incorrect password. Please enter your current account password.";
+    } else if (code === "auth/too-many-requests") {
+      safeError = "Too many failed attempts. Please wait a few moments before trying again.";
+    } else if (code === "auth/user-mismatch") {
+      safeError = "Credential mismatch. Please sign in again.";
+    } else if (code === "auth/user-not-found") {
+      safeError = "Account not found. Please sign in again.";
+    } else if (code === "auth/network-request-failed") {
+      safeError = "Network error. Please check your internet connection.";
+    }
+
+    return {
+      success: false,
+      error: safeError,
+      code
+    };
+  }
+}
+
+/**
+ * Opens account deletion modal and populates current user's email confirmation field.
+ */
+export function openAccountDeletionModal() {
+  if (typeof document === "undefined") return;
+  const user = getCurrentUser();
+  if (!user) return;
+
+  const emailField = document.getElementById("deleteAccountUserEmail");
+  if (emailField) {
+    emailField.value = user.email || "";
+  }
+
+  const passwordField = document.getElementById("deleteAccountPassword");
+  if (passwordField) {
+    passwordField.value = "";
+  }
+
+  const feedbackEl = document.getElementById("accountDeletionFeedback");
+  if (feedbackEl) {
+    feedbackEl.hidden = true;
+    setTextContent(feedbackEl, "");
+  }
+
+  const passwordErrorEl = document.getElementById("deleteAccountPasswordError");
+  if (passwordErrorEl) {
+    passwordErrorEl.hidden = true;
+    setTextContent(passwordErrorEl, "");
+  }
+
+  closeModal("customerProfileEditModal");
+  closeModal("workerProfileEditModal");
+  openModal("accountDeletionModal");
+}
+
+/**
+ * Handles account deletion execution:
+ * 1. Validates password presence.
+ * 2. Re-authenticates with Firebase Auth.
+ * 3. Calls Cloud Function deleteUserAccount.
+ * 4. On active request rejection, directs user to My Requests or Worker Dashboard.
+ * 5. On failure, presents clear safe error without signing out.
+ * 6. On confirmed success (status === "COMPLETED"), tears down session, signs out,
+ *    updates home view, and presents confirmation toast.
+ *
+ * @param {string} password
+ * @returns {Promise<{ success: boolean, error?: string, data?: any }>}
+ */
+export async function executeAccountDeletion(password) {
+  const form = document.getElementById("accountDeletionForm");
+  const feedbackEl = document.getElementById("accountDeletionFeedback");
+  const submitBtn = document.getElementById("confirmDeleteAccountBtn");
+  const passwordErrorEl = document.getElementById("deleteAccountPasswordError");
+
+  function setFeedback(msg, isErr = true) {
+    if (feedbackEl) {
+      setTextContent(feedbackEl, msg || "");
+      feedbackEl.hidden = !msg;
+      if (isErr) {
+        feedbackEl.classList.remove("auth-success-feedback");
+        feedbackEl.classList.add("auth-feedback");
+      } else {
+        feedbackEl.classList.remove("auth-feedback");
+        feedbackEl.classList.add("auth-success-feedback");
+      }
+    }
+  }
+
+  function setPasswordError(msg) {
+    if (passwordErrorEl) {
+      setTextContent(passwordErrorEl, msg || "");
+      passwordErrorEl.hidden = !msg;
+    }
+  }
+
+  setFeedback("", false);
+  setPasswordError("");
+
+  const trimmedPassword = typeof password === "string" ? password.trim() : "";
+  if (!trimmedPassword) {
+    setPasswordError("Please enter your current password to confirm deletion.");
+    return { success: false, error: "Password required" };
+  }
+
+  const user = getCurrentUser();
+  if (!user) {
+    setFeedback("No active account session found. Please sign in again.", true);
+    return { success: false, error: "No user" };
+  }
+
+  // Prevent duplicate clicks while loading
+  if (submitBtn?.disabled || submitBtn?.dataset?.loading === "true") {
+    return { success: false, error: "Deletion already in progress." };
+  }
+
+  const restoreBtn = setButtonLoading(submitBtn, "Verifying password...");
+
+  try {
+    // 1. Fresh re-authentication gate
+    const reauthResult = await reauthenticateCurrentUser(trimmedPassword);
+    if (!reauthResult.success) {
+      setPasswordError(reauthResult.error || "Incorrect password.");
+      setFeedback(reauthResult.error || "Password verification failed. Account was not deleted.", true);
+      return { success: false, error: reauthResult.error };
+    }
+
+    restoreBtn.updateText("Deleting account...");
+    setFeedback("Permanently deleting your account and sanitizing personal data...", false);
+
+    // 2. Authoritative backend Cloud Function invocation
+    const result = await callDeleteUserAccount();
+
+    if (!result.success || (result.data?.status !== "COMPLETED" && result.data?.success !== true)) {
+      let errorMsg = result.error || "Account deletion failed on server. Your account remains active.";
+
+      if (
+        result.code?.includes("failed-precondition") ||
+        (result.error && result.error.toLowerCase().includes("active service request"))
+      ) {
+        const dest = user.role === "worker" ? "Worker Dashboard" : "My Requests";
+        errorMsg = `Cannot delete account while you have active service requests. Please go to ${dest} to complete ongoing work or cancel pending requests before deleting your account.`;
+      }
+
+      setFeedback(errorMsg, true);
+      return { success: false, error: errorMsg };
+    }
+
+    // 3. Confirmed success: teardown session and notify user
+    restoreBtn.updateText("Account Deleted");
+
+    closeModal("accountDeletionModal");
+    closeModal("customerProfileEditModal");
+    closeModal("workerProfileEditModal");
+    closeModal("authModal");
+
+    try {
+      const auth = getFirebaseAuth();
+      const methods = await getFirebaseAuthMethods();
+      if (methods && auth && typeof methods.signOut === "function") {
+        await methods.signOut(auth);
+      }
+    } catch (signOutErr) {
+      console.warn("[JKFixHub Auth] Post-deletion sign-out notice:", signOutErr?.message || signOutErr);
+    }
+
+    demoLogout();
+    clearCurrentUser();
+    clearRequestState();
+    clearAuthHash();
+    showSignedOutView(false);
+
+    if (typeof updateRoleBasedHome === "function") {
+      try {
+        updateRoleBasedHome();
+      } catch (_) {}
+    }
+
+    showAppToast("Your account has been deleted and personal data removed.");
+    return { success: true, data: result.data };
+  } finally {
+    restoreBtn();
+  }
+}
+
+/**
  * Initializes Firebase Auth state observer and DOM listeners.
  */
 export function initializeAuth() {
@@ -2555,6 +2861,49 @@ export function initializeAuth() {
   window.addEventListener("admin:logout", () => {
     signOutUser();
   });
+
+  // Account Deletion Flow Listeners
+  const openCustomerDelBtn = document.getElementById("openCustomerAccountDeletionBtn");
+  if (openCustomerDelBtn) {
+    openCustomerDelBtn.addEventListener("click", () => {
+      openAccountDeletionModal();
+    });
+  }
+
+  const openWorkerDelBtn = document.getElementById("openWorkerAccountDeletionBtn");
+  if (openWorkerDelBtn) {
+    openWorkerDelBtn.addEventListener("click", () => {
+      openAccountDeletionModal();
+    });
+  }
+
+  const accountDeletionForm = document.getElementById("accountDeletionForm");
+  if (accountDeletionForm) {
+    accountDeletionForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const pwdInput = document.getElementById("deleteAccountPassword");
+      const password = pwdInput ? pwdInput.value : "";
+      await executeAccountDeletion(password);
+    });
+  }
+
+  const accountDeletionModalEl = document.getElementById("accountDeletionModal");
+  if (accountDeletionModalEl) {
+    accountDeletionModalEl.addEventListener("modal:close", () => {
+      const pwdInput = document.getElementById("deleteAccountPassword");
+      if (pwdInput) pwdInput.value = "";
+      const fb = document.getElementById("accountDeletionFeedback");
+      if (fb) {
+        fb.hidden = true;
+        setTextContent(fb, "");
+      }
+      const err = document.getElementById("deleteAccountPasswordError");
+      if (err) {
+        err.hidden = true;
+        setTextContent(err, "");
+      }
+    });
+  }
 
   // Initialize Firebase client in background without blocking UI
   (async () => {
