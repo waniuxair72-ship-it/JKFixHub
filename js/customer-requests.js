@@ -66,7 +66,10 @@ function startCustomerDetailsSubscription(requestId) {
 
     const chatButton = document.getElementById("customerRequestDetailsChat");
     if (chatButton) {
-      chatButton.hidden = updatedRequest.status !== "Accepted";
+      const isAccepted = updatedRequest.status === "Accepted";
+      const isClosed = updatedRequest.status === "Completed" || updatedRequest.status === "Cancelled";
+      chatButton.hidden = !isAccepted && !isClosed;
+      setTextContent(chatButton, isAccepted ? "Chat with Worker" : "View Chat History");
       chatButton.dataset.openCustomerChat = updatedRequest.id;
     }
 
@@ -254,10 +257,12 @@ function buildRequestCard(request) {
       setTextContent(reviewButton, "Leave a Review");
     }
     actions.append(reviewButton);
-    const chatClosed = document.createElement("span");
-    chatClosed.className = "customer-chat-locked";
-    setTextContent(chatClosed, "Chat closed · Service completed");
-    actions.append(chatClosed);
+    const chatHistoryBtn = document.createElement("button");
+    chatHistoryBtn.type = "button";
+    chatHistoryBtn.className = "button subtle btn-customer-chat-history";
+    chatHistoryBtn.dataset.openCustomerChat = request.id;
+    setTextContent(chatHistoryBtn, "Chat History");
+    actions.append(chatHistoryBtn);
   } else {
     const unavailable = document.createElement("span");
     unavailable.className = "customer-chat-locked";
@@ -339,7 +344,10 @@ function showRequestDetails(id) {
 
   const chatButton = document.getElementById("customerRequestDetailsChat");
   if (chatButton) {
-    chatButton.hidden = request.status !== "Accepted";
+    const isAccepted = request.status === "Accepted";
+    const isClosed = request.status === "Completed" || request.status === "Cancelled";
+    chatButton.hidden = !isAccepted && !isClosed;
+    setTextContent(chatButton, isAccepted ? "Chat with Worker" : "View Chat History");
     chatButton.dataset.openCustomerChat = request.id;
   }
 

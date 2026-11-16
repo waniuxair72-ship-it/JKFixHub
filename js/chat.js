@@ -319,6 +319,10 @@ function renderMessages(messages) {
   }
 }
 
+export function getCurrentChatConversation() {
+  return currentChatConversation;
+}
+
 export function closeChat(returnToList = true) {
   if (chatMessagesUnsubscribe) {
     try {
@@ -343,7 +347,11 @@ export function closeChat(returnToList = true) {
   if (input) {
     input.value = "";
     input.style.height = "";
+    input.disabled = false;
+    input.placeholder = "Write a message...";
   }
+  const sendBtn = document.querySelector("#chatForm button[type='submit']");
+  if (sendBtn) sendBtn.disabled = false;
   if (feedbackTimer) {
     clearTimeout(feedbackTimer);
     feedbackTimer = null;
@@ -390,17 +398,29 @@ export async function openChatForRequest(requestId) {
   // 1. Resolve request from Firestore ONLY (Fail-closed: no in-memory or demo fallback)
   const request = await getFirestoreRequestById(requestId);
 
-  // 2. Chat must open only when the selected Firestore request exists and status === "Accepted"
-  if (!request || request.status !== "Accepted") {
+  // 2. Chat access validation (Accepted allows messaging; Completed/Cancelled allows read-only history)
+  if (!request) {
     recordSecurityEvent("CHAT_ACCESS_DENIED", role);
-    const reason = !request
-      ? "Request details could not be found."
-      : request.status === "Pending"
-        ? "Chat is locked while request is Pending review."
-        : request.status === "Rejected"
-          ? "Chat is unavailable because this request was declined."
-          : `Chat is locked (request is ${request.status}). Available only when Accepted.`;
-    setChatFeedback(reason);
+    setChatFeedback("Request details could not be found.");
+    return false;
+  }
+
+  if (request.status === "Pending") {
+    recordSecurityEvent("CHAT_ACCESS_DENIED", role);
+    setChatFeedback("Chat is locked while request is Pending review.");
+    return false;
+  }
+
+  if (request.status === "Rejected") {
+    recordSecurityEvent("CHAT_ACCESS_DENIED", role);
+    setChatFeedback("Chat is unavailable because this request was declined.");
+    return false;
+  }
+
+  const isClosedRequest = request.status === "Completed" || request.status === "Cancelled";
+  if (!isClosedRequest && request.status !== "Accepted") {
+    recordSecurityEvent("CHAT_ACCESS_DENIED", role);
+    setChatFeedback(`Chat is locked (request is ${request.status}). Available only when Accepted.`);
     return false;
   }
 
@@ -459,14 +479,38 @@ export async function openChatForRequest(requestId) {
 
   setTextContent(document.getElementById("chatService"), currentChatConversation.service || "");
   setTextContent(document.getElementById("chatDistrict"), currentChatConversation.district || "");
-  setTextContent(document.getElementById("chatRequestStatus"), `Request ${request.status || "Accepted"}`);
+  const isClosed = isClosedRequest || currentChatConversation.status === "archived";
+  setTextContent(
+    document.getElementById("chatRequestStatus"),
+    isClosed ? `Request ${request.status} • Closed` : `Request ${request.status || "Accepted"}`
+  );
 
-  // 8. Reset composer & render quick response chips
+  // 8. Configure composer & quick response chips
   const form = document.getElementById("chatForm");
   if (form) form.reset();
   updateMessageCounter();
-  renderQuickMessages(role);
-  setChatFeedback("Direct communication channel is open.");
+
+  const input = document.getElementById("chatMessageInput");
+  const sendBtn = document.querySelector("#chatForm button[type='submit']");
+  const quickResponses = document.getElementById("chatQuickResponses");
+
+  if (isClosed) {
+    if (input) {
+      input.disabled = true;
+      input.placeholder = `Conversation closed (request is ${request.status.toLowerCase()}).`;
+    }
+    if (sendBtn) sendBtn.disabled = true;
+    if (quickResponses) quickResponses.replaceChildren();
+    setChatFeedback(`Conversation archived. New messages are disabled because this request is ${request.status}.`);
+  } else {
+    if (input) {
+      input.disabled = false;
+      input.placeholder = "Write a message...";
+    }
+    if (sendBtn) sendBtn.disabled = false;
+    renderQuickMessages(role);
+    setChatFeedback("Direct communication channel is open.");
+  }
 
   // 9. Open modal and focus input
   renderedMessageIds.clear();
@@ -486,8 +530,7 @@ export async function openChatForRequest(requestId) {
   }
 
   openModal("chatModal");
-  const input = document.getElementById("chatMessageInput");
-  if (input) input.focus();
+  if (input && !isClosed) input.focus();
 
   // 10. Subscribe to real-time Firestore messages
   chatMessagesUnsubscribe = await subscribeToFirestoreChatMessages(
@@ -523,6 +566,12 @@ async function sendChatMessage(rawText) {
     recordSecurityEvent("CHAT_ACCESS_DENIED", getUserRole());
     setChatFeedback("Chat is not available yet.", "error");
     closeChat(false);
+    return;
+  }
+
+  if (currentChatConversation.status === "archived") {
+    recordSecurityEvent("CHAT_ACCESS_DENIED", getUserRole());
+    setChatFeedback("This conversation is archived. Messaging is disabled.", "error");
     return;
   }
 
