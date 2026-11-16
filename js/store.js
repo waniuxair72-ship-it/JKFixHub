@@ -104,7 +104,19 @@ const reviewIdPattern = /^[A-Za-z0-9_-]{8,128}$/;
 const reportIdPattern = /^rep-[a-z0-9-]{8,80}$/;
 const markupPattern = /<\s*\/?\s*[a-z!][^>]*>/i;
 const allowedReportTargetTypes = Object.freeze(["worker", "customer", "review", "message"]);
-const allowedReportReasons = Object.freeze(["spam", "harassment", "scam", "inappropriate", "fake", "abusive", "other"]);
+const allowedReportReasons = Object.freeze([
+  "spam",
+  "harassment",
+  "scam",
+  "inappropriate",
+  "fake",
+  "abusive",
+  "unprofessional_conduct",
+  "fraud",
+  "inappropriate_content",
+  "safety_hazard",
+  "other"
+]);
 
 function requireCustomerId() {
   const user = state.currentUser;
@@ -913,7 +925,17 @@ export function getActiveConversation() {
 }
 
 export function getConversationMessages(conversationId) {
-  const access = canAccessConversation(conversationId);
+  let access = canAccessConversation(conversationId);
+  if (!access) {
+    const user = state.currentUser;
+    if (user && (user.role === "customer" || user.role === "worker")) {
+      const conv = state.conversations.find((item) => item.id === conversationId);
+      if (conv) {
+        const belongs = user.role === "customer" ? conv.customerId === user.id : conv.workerId === user.id;
+        if (belongs) access = { conversation: conv };
+      }
+    }
+  }
   if (!access) return [];
   const messages = state.messages.filter((message) => message.conversationId === conversationId);
   const readAt = new Date().toISOString();
@@ -1036,6 +1058,12 @@ export function createCustomerReview(data) {
     throw new Error("You can only review your own requests.");
   }
 
+  const effectiveWorkerUid = request.workerUid || (request.workerId ? String(request.workerId) : null);
+  if (user.id === effectiveWorkerUid || (request.workerId && String(user.id) === String(request.workerId))) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user.role);
+    throw new Error("Workers cannot submit reviews for their own services.");
+  }
+
   if (request.status !== "Completed") {
     recordSecurityEvent("INVALID_REQUEST", user.role);
     throw new Error("Reviews can only be submitted for completed requests.");
@@ -1062,11 +1090,12 @@ export function createCustomerReview(data) {
   }
 
   const review = {
-    id: `rev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+    id: request.id,
     requestId: request.id,
     customerId: user.id,
     customerName: request.customerName,
     workerId: request.workerId,
+    workerUid: effectiveWorkerUid,
     workerName: request.workerName,
     rating: normalizedRating,
     text: text.trim(),
@@ -1103,6 +1132,76 @@ export function getReviewsForWorker(workerId) {
     })
     .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
     .map(copyReview);
+}
+
+/**
+ * Accurately calculates aggregated worker rating and review count from a list of reviews.
+ *
+ * Integrity Rules:
+ * 1. Only counts reviews with status "published".
+ * 2. Only considers valid integer ratings between 1 and 5.
+ * 3. Deduplicates reviews by requestId (or review id) to prevent double counting.
+ * 4. Handles zero-review workers cleanly (rating: null, reviewCount: 0, displayRating: "No ratings yet").
+ * 5. Arithmetic mean rounded to 1 decimal place.
+ *
+ * @param {Array<object>} reviews
+ * @returns {{ rating: number|null, reviewCount: number, average: number, displayRating: string }}
+ */
+export function calculateWorkerRating(reviews) {
+  if (!Array.isArray(reviews) || reviews.length === 0) {
+    return {
+      rating: null,
+      reviewCount: 0,
+      average: 0,
+      displayRating: "No ratings yet"
+    };
+  }
+
+  const seenKeys = new Set();
+  let totalRating = 0;
+  let validCount = 0;
+
+  for (const r of reviews) {
+    if (!r || typeof r !== "object") continue;
+
+    // Must be published (not hidden or flagged by moderation)
+    if (r.status && r.status !== "published") continue;
+
+    // Deduplicate by requestId if present, else by review id
+    const dedupKey = r.requestId || r.id;
+    if (dedupKey) {
+      if (seenKeys.has(dedupKey)) continue;
+      seenKeys.add(dedupKey);
+    }
+
+    const val = Number(r.rating);
+    if (!Number.isInteger(val) || val < 1 || val > 5) continue;
+
+    totalRating += val;
+    validCount += 1;
+  }
+
+  if (validCount === 0) {
+    return {
+      rating: null,
+      reviewCount: 0,
+      average: 0,
+      displayRating: "No ratings yet"
+    };
+  }
+
+  const avg = Number((totalRating / validCount).toFixed(1));
+  return {
+    rating: avg,
+    reviewCount: validCount,
+    average: avg,
+    displayRating: `${avg.toFixed(1)} ★`
+  };
+}
+
+export function getWorkerRatingSummary(workerId) {
+  const reviews = getReviewsForWorker(workerId);
+  return calculateWorkerRating(reviews);
 }
 
 export function upsertStoredReview(review) {
@@ -1229,9 +1328,16 @@ export function createReport(data) {
     throw new TypeError("Target ID is required.");
   }
 
+  if (user.id === targetIdStr || (user.workerId && String(user.workerId) === targetIdStr) || (user.firebaseUid && user.firebaseUid === targetIdStr)) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user.role);
+    throw new Error("You cannot submit a report targeting yourself.");
+  }
+
   if (targetType === "worker") {
+    const foundWorker = getWorkerById(targetIdStr);
     const workerId = Number(targetIdStr);
-    if (!Number.isSafeInteger(workerId) || !getWorkerById(workerId)) {
+    const isNumericValid = Number.isSafeInteger(workerId) && getWorkerById(workerId);
+    if (!foundWorker && !isNumericValid && !customerIdPattern.test(targetIdStr)) {
       recordSecurityEvent("INVALID_REQUEST", user.role);
       throw new TypeError("Invalid worker target ID.");
     }
@@ -1266,11 +1372,11 @@ export function createReport(data) {
   }
 
   const duplicate = state.reports.some(
-    (item) => item.reporterId === user.id && item.targetId === targetIdStr && item.targetType === targetType
+    (item) => item.reporterId === user.id && item.targetId === targetIdStr && item.targetType === targetType && item.status !== "resolved" && item.status !== "dismissed"
   );
   if (duplicate) {
     recordSecurityEvent("VALIDATION_FAILURE", user.role);
-    throw new Error("You have already submitted a report for this target.");
+    throw new Error("You already have an active report submitted for this target.");
   }
 
   const report = {
@@ -1295,7 +1401,12 @@ export function hasReportedTarget(targetId, targetType) {
   if (!user) return false;
   const targetIdStr = String(targetId).trim();
   return state.reports.some(
-    (item) => item.reporterId === user.id && item.targetId === targetIdStr && (!targetType || item.targetType === targetType)
+    (item) =>
+      item.reporterId === user.id &&
+      item.targetId === targetIdStr &&
+      (!targetType || item.targetType === targetType) &&
+      item.status !== "resolved" &&
+      item.status !== "dismissed"
   );
 }
 
@@ -1313,17 +1424,19 @@ export function getReportsByReporter(reporterId) {
 
 const MAX_AUDIT_LOGS = 100;
 
-export function recordAuditEvent(action, targetType, targetId, result = "success") {
+export function recordAuditEvent(action, targetType, targetId, result = "success", details = {}) {
   const user = state.currentUser;
   const adminId = user?.role === "admin" ? user.id : "system";
   const entry = {
     id: `aud-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     adminId,
+    adminUid: user?.firebaseUid || user?.uid || adminId,
     action: String(action),
     targetType: String(targetType),
     targetId: String(targetId),
     timestamp: new Date().toISOString(),
-    result: String(result)
+    result: String(result),
+    details: typeof details === "object" && details !== null ? details : {}
   };
   state.auditLogs.unshift(entry);
   if (state.auditLogs.length > MAX_AUDIT_LOGS) {
@@ -1469,9 +1582,13 @@ export function updateReportStatusForDemo(reportId, newStatus) {
     recordSecurityEvent("INVALID_ADMIN_TARGET", "admin");
     throw new Error("Report not found.");
   }
+  const previousStatus = report.status;
   report.status = newStatus;
   recordSecurityEvent("REPORT_MODERATION_ACTION", "admin");
-  recordAuditEvent("REPORT_MODERATION_ACTION", "report", reportId, newStatus);
+  recordAuditEvent("REPORT_MODERATION_ACTION", "report", reportId, newStatus, {
+    previousStatus,
+    newStatus
+  });
   return { ...report };
 }
 
@@ -1504,9 +1621,13 @@ export function updateReviewStatusForDemo(reviewId, newStatus) {
     recordSecurityEvent("INVALID_ADMIN_TARGET", "admin");
     throw new Error("Review not found.");
   }
+  const previousStatus = review.status;
   review.status = newStatus;
   recordSecurityEvent("REVIEW_MODERATION_ACTION", "admin");
-  recordAuditEvent("REVIEW_MODERATION_ACTION", "review", reviewId, newStatus);
+  recordAuditEvent("REVIEW_MODERATION_ACTION", "review", reviewId, newStatus, {
+    previousStatus,
+    newStatus
+  });
   return { ...review };
 }
 

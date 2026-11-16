@@ -156,6 +156,9 @@ async function adminModerateReport(db, request) {
     throw new HttpsError("not-found", `Report #${reportId} not found.`);
   }
 
+  const previousStatus = snap.data()?.status || "open";
+  const note = request.data?.note ? String(request.data.note).slice(0, 500) : null;
+
   const updates = {
     status,
     resolvedAt: FieldValue.serverTimestamp(),
@@ -171,7 +174,11 @@ async function adminModerateReport(db, request) {
     targetType: "report",
     targetId: reportId,
     result: "success",
-    details: { newStatus: status }
+    details: {
+      previousStatus,
+      newStatus: status,
+      ...(note ? { note } : {})
+    }
   });
 
   return { success: true, reportId, status };
@@ -214,6 +221,9 @@ async function adminModerateReview(db, request) {
     throw new HttpsError("not-found", `Review #${reviewId} not found.`);
   }
 
+  const previousStatus = snap.data()?.status || "published";
+  const note = request.data?.note ? String(request.data.note).slice(0, 500) : null;
+
   const updates = {
     status,
     moderatedAt: FieldValue.serverTimestamp(),
@@ -229,7 +239,11 @@ async function adminModerateReview(db, request) {
     targetType: "review",
     targetId: reviewId,
     result: "success",
-    details: { newStatus: status }
+    details: {
+      previousStatus,
+      newStatus: status,
+      ...(note ? { note } : {})
+    }
   });
 
   return { success: true, reviewId, status };

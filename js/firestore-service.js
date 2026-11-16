@@ -744,7 +744,7 @@ export async function getAdminReports() {
  * @param {string} adminUid
  * @returns {Promise<{ success: boolean, error: string|null }>}
  */
-export async function updateAdminReportStatus(reportId, status, adminUid) {
+export async function updateAdminReportStatus(reportId, status, adminUid, note = "") {
   if (!isSessionAuthorizedAdmin()) {
     return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
   }
@@ -757,6 +757,16 @@ export async function updateAdminReportStatus(reportId, status, adminUid) {
     }
 
     const reportRef = methods.doc(db, "reports", String(reportId));
+    let previousStatus = "open";
+    if (typeof methods.getDoc === "function") {
+      try {
+        const snap = await methods.getDoc(reportRef);
+        if (snap.exists()) {
+          previousStatus = snap.data()?.status || "open";
+        }
+      } catch {}
+    }
+
     await methods.updateDoc(reportRef, {
       status,
       resolvedAt: new Date().toISOString(),
@@ -769,7 +779,11 @@ export async function updateAdminReportStatus(reportId, status, adminUid) {
       targetType: "report",
       targetId: reportId,
       result: "success",
-      details: { newStatus: status }
+      details: {
+        previousStatus,
+        newStatus: status,
+        ...(note ? { note: String(note).slice(0, 500) } : {})
+      }
     });
 
     invalidateAdminStatsCache();
@@ -811,7 +825,7 @@ export async function getAdminReviews() {
  * @param {string} adminUid
  * @returns {Promise<{ success: boolean, error: string|null }>}
  */
-export async function updateAdminReviewStatus(reviewId, status, adminUid) {
+export async function updateAdminReviewStatus(reviewId, status, adminUid, note = "") {
   if (!isSessionAuthorizedAdmin()) {
     return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
   }
@@ -824,6 +838,16 @@ export async function updateAdminReviewStatus(reviewId, status, adminUid) {
     }
 
     const reviewRef = methods.doc(db, "reviews", String(reviewId));
+    let previousStatus = "published";
+    if (typeof methods.getDoc === "function") {
+      try {
+        const snap = await methods.getDoc(reviewRef);
+        if (snap.exists()) {
+          previousStatus = snap.data()?.status || "published";
+        }
+      } catch {}
+    }
+
     await methods.updateDoc(reviewRef, {
       status,
       moderatedAt: new Date().toISOString(),
@@ -836,7 +860,11 @@ export async function updateAdminReviewStatus(reviewId, status, adminUid) {
       targetType: "review",
       targetId: reviewId,
       result: "success",
-      details: { newStatus: status }
+      details: {
+        previousStatus,
+        newStatus: status,
+        ...(note ? { note: String(note).slice(0, 500) } : {})
+      }
     });
 
     invalidateAdminStatsCache();
@@ -1331,6 +1359,22 @@ export async function updateFirestoreRequestStatus(requestId, newStatus, actorUi
 
     await methods.updateDoc(docRef, updatePayload);
 
+    if (newStatus === "Completed" || newStatus === "Cancelled") {
+      try {
+        const chatDocRef = methods.doc(db, "chats", requestId);
+        const chatSnap = await methods.getDoc(chatDocRef);
+        if (chatSnap && (typeof chatSnap.exists === "function" ? chatSnap.exists() : chatSnap.exists)) {
+          await methods.updateDoc(chatDocRef, {
+            status: "archived",
+            closedReason: newStatus,
+            archivedAt: nowIso
+          });
+        }
+      } catch (_) {
+        // Non-fatal if chat document was not initialized
+      }
+    }
+
     return {
       success: true,
       requestId,
@@ -1734,6 +1778,18 @@ export async function sendFirestoreChatMessage({ chatId, text, senderUid, sender
       return { success: false, message: null, error: "Firestore service is unavailable." };
     }
 
+    try {
+      const request = await getFirestoreRequestById(chatId);
+      if (request && request.status !== "Accepted") {
+        return {
+          success: false,
+          message: null,
+          error: `Cannot send message. Service request is ${request.status || "closed"}.`
+        };
+      }
+    } catch (_) {
+    }
+
     const messagesCol = methods.collection(db, "chats", chatId, "messages");
     const docRef = await methods.addDoc(messagesCol, messagePayload);
 
@@ -1927,13 +1983,32 @@ export async function createFirestoreReport(reportData) {
     };
   }
 
-  const allowedTargetTypes = ["worker", "customer", "review", "message"];
+  const allowedTargetTypes = ["worker", "customer", "review", "message", "chat"];
   if (!allowedTargetTypes.includes(targetType)) {
     return {
       success: false,
       reportId: null,
       report: null,
       error: "Invalid report target type."
+    };
+  }
+
+  const cleanTargetId = String(targetId).trim();
+  if (cleanTargetId === String(reporterUid)) {
+    return {
+      success: false,
+      reportId: null,
+      report: null,
+      error: "You cannot report your own account."
+    };
+  }
+
+  if (cleanTargetId.length === 0 || cleanTargetId.length > 128 || /[/\\.\0]/.test(cleanTargetId)) {
+    return {
+      success: false,
+      reportId: null,
+      report: null,
+      error: "Invalid target identifier."
     };
   }
 
@@ -2078,6 +2153,16 @@ export async function createFirestoreReview(reviewData) {
       };
     }
 
+    // 2b. Self-review prevention: caller cannot be the assigned worker
+    if (requestDoc.workerUid === customerId || (requestDoc.workerId && String(requestDoc.workerId) === String(customerId))) {
+      return {
+        success: false,
+        reviewId: null,
+        review: null,
+        error: "Workers cannot submit reviews for their own service requests."
+      };
+    }
+
     // 3. Completion check: request must be Completed
     if (requestDoc.status !== "Completed") {
       return {
@@ -2088,8 +2173,8 @@ export async function createFirestoreReview(reviewData) {
       };
     }
 
-    // 4. Duplicate check: verify no review exists for this request
-    const finalReviewId = reviewData.reviewId || reviewData.id || requestId;
+    // 4. Duplicate check: verify no review exists for this request (deterministic doc ID requestId)
+    const finalReviewId = requestId;
     const reviewRef = methods.doc(db, "reviews", finalReviewId);
     const existingSnap = await methods.getDoc(reviewRef);
 
@@ -2102,7 +2187,7 @@ export async function createFirestoreReview(reviewData) {
       };
     }
 
-    const workerId = requestDoc.workerUid || requestDoc.workerId || reviewData.workerId || null;
+    const workerId = requestDoc.workerUid || (requestDoc.workerId ? String(requestDoc.workerId) : null) || reviewData.workerId || null;
     const workerName = requestDoc.workerName || reviewData.workerName || "Service Professional";
     const customerName = requestDoc.customerName || reviewData.customerName || "Customer";
 
@@ -2174,6 +2259,22 @@ export async function getWorkerFirestoreReviews(workerId) {
         methods.where("status", "==", "published")
       );
       snapshot = await methods.getDocs(q);
+
+      if (!snapshot || snapshot.empty) {
+        try {
+          const qLegacy = methods.query(
+            colRef,
+            methods.where("workerId", "==", String(workerId)),
+            methods.where("status", "==", "published")
+          );
+          const legacySnap = await methods.getDocs(qLegacy);
+          if (legacySnap && !legacySnap.empty) {
+            snapshot = legacySnap;
+          }
+        } catch {
+          // Legacy fallback non-fatal
+        }
+      }
     } else {
       snapshot = await methods.getDocs(colRef);
     }
@@ -2206,6 +2307,23 @@ export async function getWorkerFirestoreReviews(workerId) {
  * @param {string} workerUid
  * @returns {Promise<{ success: boolean, error: string|null }>}
  */
+/**
+ * Fetches and calculates authoritative client-side rating aggregation for a worker
+ * without requiring Cloud Functions or Blaze billing.
+ *
+ * @param {string|number} workerId
+ * @returns {Promise<{ rating: number|null, reviewCount: number, average: number, displayRating: string, reviews: Array<object> }>}
+ */
+export async function getAggregatedFirestoreWorkerRating(workerId) {
+  const reviews = await getWorkerFirestoreReviews(workerId);
+  const { calculateWorkerRating } = await import("./store.js");
+  const summary = calculateWorkerRating(reviews);
+  return {
+    ...summary,
+    reviews
+  };
+}
+
 export async function addFirestoreWorkerReviewReply(reviewId, replyText, workerUid) {
   if (!reviewId || !replyText || !workerUid) {
     return { success: false, error: "Missing required parameters." };

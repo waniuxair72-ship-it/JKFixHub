@@ -22,6 +22,7 @@ import {
   validateReport
 } from "./security.js";
 import { createFirestoreReport } from "./firestore-service.js";
+import { getCurrentChatConversation } from "./chat.js";
 
 const markupPattern = /<\s*\/?\s*[a-z!][^>]*>/i;
 const MAX_REPORT_LENGTH = 2000;
@@ -58,6 +59,14 @@ export function openReportModal({ targetType, targetId, targetLabel = "" }) {
   }
 
   const targetIdStr = String(targetId).trim();
+
+  if (user && (user.id === targetIdStr || (user.workerId && String(user.workerId) === targetIdStr) || (user.firebaseUid && user.firebaseUid === targetIdStr))) {
+    if (toastHandler) {
+      toastHandler("You cannot report your own account.");
+    }
+    return false;
+  }
+
   if (hasReportedTarget(targetIdStr, targetType)) {
     if (toastHandler) {
       toastHandler("You have already submitted a report for this target.");
@@ -180,25 +189,29 @@ async function handleReportSubmit(event) {
 }
 
 export function handleChatReport() {
-  const conversation = getActiveConversation();
+  const conversation = (typeof getCurrentChatConversation === "function" ? getCurrentChatConversation() : null) || getActiveConversation();
   const user = getCurrentUser();
   if (!conversation || !user) return;
 
   if (user.role === "customer") {
     // Customer reporting the worker
-    const workerId = Number(conversation.workerId.replace(/^demo-worker-/, ""));
-    const worker = getWorkerById(workerId);
+    const rawWorkerId = conversation.workerId || conversation.workerUid || "";
+    const parsedId = Number(String(rawWorkerId).replace(/^demo-worker-/, ""));
+    const worker = Number.isSafeInteger(parsedId) ? getWorkerById(parsedId) : null;
+    const targetId = worker ? String(parsedId) : String(rawWorkerId);
     openReportModal({
       targetType: "worker",
-      targetId: String(workerId),
-      targetLabel: worker ? `${worker.name} (${worker.service})` : conversation.workerName
+      targetId,
+      targetLabel: worker ? `${worker.name} (${worker.service})` : (conversation.workerName || `Worker #${targetId}`)
     });
   } else if (user.role === "worker") {
     // Worker reporting the customer
+    const customerId = conversation.customerId || conversation.customerUid;
+    if (!customerId) return;
     openReportModal({
       targetType: "customer",
-      targetId: conversation.customerId,
-      targetLabel: `Customer: ${conversation.customerName}`
+      targetId: String(customerId),
+      targetLabel: `Customer: ${conversation.customerName || customerId}`
     });
   }
 }

@@ -17,18 +17,21 @@ const { recordAuditEvent, recordSecurityEvent } = require("./audit-logger");
 
 const ALLOWED_TARGET_TYPES = Object.freeze([
   "worker",
-  "customer",
   "review",
-  "message"
+  "chat"
 ]);
 
 const ALLOWED_REPORT_REASONS = Object.freeze([
   "harassment",
   "unprofessional_conduct",
   "fraud",
+  "scam",
   "spam",
+  "inappropriate",
   "inappropriate_content",
   "safety_hazard",
+  "fake",
+  "abusive",
   "other"
 ]);
 
@@ -112,6 +115,22 @@ async function submitReport(db, request) {
   const { targetType, targetId, reason, cleanDescription } = validateReportInput(
     request.data
   );
+
+  // Users cannot report their own account
+  if (targetId.trim() === uid) {
+    await recordSecurityEvent(db, {
+      type: "SELF_REPORT_ATTEMPT",
+      actorUid: uid,
+      targetType,
+      targetId,
+      severity: "Low",
+      details: { caller: uid }
+    });
+    throw new HttpsError(
+      "invalid-argument",
+      "You cannot submit a safety report targeting your own account."
+    );
+  }
 
   // Check duplicate open report for same target by same reporter
   const existingSnap = await db

@@ -22,6 +22,10 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isEmailVerified() {
+      return isAuthenticated() && request.auth.token.email_verified == true;
+    }
+
     function isUser(uid) {
       return isAuthenticated() && request.auth.uid == uid;
     }
@@ -48,6 +52,16 @@ service cloud.firestore {
           request.auth.uid == get(/databases/$(database)/documents/requests/$(requestId)).data.customerId ||
           request.auth.uid == get(/databases/$(database)/documents/requests/$(requestId)).data.workerUid
         );
+    }
+
+    // Authoritative Account Deletion In-Progress Check:
+    // Returns true if the user or worker is currently undergoing account deletion,
+    // locking out new service requests and status alterations.
+    function isAccountDeletionInProgress(uid) {
+      return exists(/databases/$(database)/documents/deletionJobs/$(uid)) &&
+        get(/databases/$(database)/documents/deletionJobs/$(uid)).data.state in [
+          "INITIATED", "SANITIZING", "AUTH_DELETING", "RECONCILING"
+        ];
     }
 
     // Core Service Request Protection:
@@ -91,6 +105,7 @@ service cloud.firestore {
     // - Accepted -> Completed
     function isValidWorkerRequestUpdate() {
       return isAuthenticated() &&
+        !isAccountDeletionInProgress(request.auth.uid) &&
         resource.data.workerUid == request.auth.uid &&
         requestCoreFieldsUnchanged() &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -141,6 +156,8 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/requests/$(request.resource.data.requestId)) &&
         get(/databases/$(database)/documents/requests/$(request.resource.data.requestId)).data.status == "Completed" &&
         get(/databases/$(database)/documents/requests/$(request.resource.data.requestId)).data.customerId == request.auth.uid &&
+        get(/databases/$(database)/documents/requests/$(request.resource.data.requestId)).data.workerUid == request.resource.data.workerUid &&
+        get(/databases/$(database)/documents/requests/$(request.resource.data.requestId)).data.workerUid != request.auth.uid &&
         request.resource.data.rating is int &&
         request.resource.data.rating >= 1 &&
         request.resource.data.rating <= 5 &&
@@ -177,8 +194,11 @@ service cloud.firestore {
     function isValidReportCreation() {
       return isAuthenticated() &&
         request.resource.data.reporterUid == request.auth.uid &&
-        request.resource.data.targetType in ['worker', 'customer', 'review', 'message'] &&
+        request.resource.data.targetType in ['worker', 'customer', 'review', 'message', 'chat'] &&
         request.resource.data.targetId is string &&
+        request.resource.data.targetId.size() > 0 &&
+        request.resource.data.targetId.size() <= 128 &&
+        request.resource.data.targetId != request.auth.uid &&
         request.resource.data.reason is string &&
         request.resource.data.description is string &&
         request.resource.data.status == "open" &&
@@ -238,15 +258,19 @@ service cloud.firestore {
         !('email' in request.resource.data) &&
         !('phone' in request.resource.data) &&
         request.resource.data.isVerified == false &&
-        request.resource.data.status == "pending"
+        request.resource.data.status == "pending" &&
+        (!('rating' in request.resource.data) || request.resource.data.rating == null) &&
+        (!('reviewCount' in request.resource.data) || request.resource.data.reviewCount == 0)
       ) || isAdmin();
       allow update: if (
-        isAuthenticated() &&
+        isEmailVerified() &&
         request.auth.uid == workerId &&
         !('email' in request.resource.data) &&
         !('phone' in request.resource.data) &&
         request.resource.data.isVerified == resource.data.isVerified &&
-        request.resource.data.status == resource.data.status
+        request.resource.data.status == resource.data.status &&
+        resource.data.get('rating', null) == request.resource.data.get('rating', null) &&
+        resource.data.get('reviewCount', 0) == request.resource.data.get('reviewCount', 0)
       ) || isAdmin();
       allow delete: if isAdmin();
     }
@@ -268,8 +292,10 @@ service cloud.firestore {
         resource.data.workerUid == request.auth.uid ||
         isAdmin()
       );
-      allow create: if (isAuthenticated() &&
+      allow create: if (isEmailVerified() &&
                     request.resource.data.customerId == request.auth.uid &&
+                    !isAccountDeletionInProgress(request.auth.uid) &&
+                    !isAccountDeletionInProgress(request.resource.data.workerUid) &&
                     request.resource.data.status == "Pending" &&
                     request.resource.data.workerUid is string &&
                     request.resource.data.workerUid.size() > 0) || isAdmin();
@@ -331,16 +357,21 @@ service cloud.firestore {
                     ]) &&
                     request.resource.data.participants.size() == 2;
       allow update: if isAuthenticated() && (
-        (resource != null && request.auth.uid in resource.data.participants) || isAdmin()
+        (resource != null &&
+         request.auth.uid in resource.data.participants &&
+         (!('isArchived' in resource.data) || resource.data.isArchived != true) &&
+         !('isArchived' in request.resource.data)) || isAdmin()
       );
 
       match /messages/{messageId} {
         allow read: if isAuthenticated() && (
           request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants || isAdmin()
         );
-        allow create: if isAuthenticated() &&
+        allow create: if isAcceptedRequestParticipant(chatId) &&
                       request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants &&
-                      request.resource.data.senderId == request.auth.uid;
+                      request.resource.data.senderId == request.auth.uid &&
+                      (!('isArchived' in get(/databases/$(database)/documents/chats/$(chatId)).data) ||
+                       get(/databases/$(database)/documents/chats/$(chatId)).data.isArchived != true);
         allow update, delete: if isAdmin();
       }
     }
