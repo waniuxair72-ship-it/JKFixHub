@@ -8,7 +8,7 @@
 // Modal behavior is kept separate from the main
 // application logic so the project remains easier
 // to understand and maintain.
-import { getWorkerById } from "./store.js";
+import { getWorkerById, getReviewsForWorker, calculateWorkerRating } from "./store.js";
 import {
   getSafeErrorMessage,
   recordSecurityEvent,
@@ -124,9 +124,15 @@ export function openWorkerProfile(id) {
   const details = document.createElement("div");
   details.className = "profile-details";
 
-  // Rating and review count: only show what is supported by actual worker data
+  // Rating and review count: accurately aggregate from reviews, or fall back to verified worker data
   let ratingText = "No ratings yet";
-  if (worker.rating) {
+  const workerUid = worker.firebaseUid || worker.workerUid || worker.id;
+  const workerReviews = typeof getReviewsForWorker === "function" ? getReviewsForWorker(workerUid) : [];
+  const agg = typeof calculateWorkerRating === "function" ? calculateWorkerRating(workerReviews) : null;
+
+  if (agg && agg.reviewCount > 0) {
+    ratingText = `${agg.average.toFixed(1)} ★ (${agg.reviewCount} ${agg.reviewCount === 1 ? "review" : "reviews"})`;
+  } else if (worker.rating && (worker.reviewCount === undefined || worker.reviewCount > 0)) {
     const reviewCount = worker.reviewCount ?? worker.reviewsCount;
     if (typeof reviewCount === "number" && reviewCount > 0) {
       ratingText = `${worker.rating} ★ (${reviewCount} ${reviewCount === 1 ? "review" : "reviews"})`;

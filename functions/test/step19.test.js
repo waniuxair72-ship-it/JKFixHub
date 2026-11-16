@@ -565,4 +565,290 @@ describe("Step 19: Trusted Backend Logic & Cloud Functions Security", () => {
     assert.ok(db instanceof MockFirestore);
     assert.ok(typeof db.dump === "function");
   });
+
+  // --------------------------------------------------------------------------
+  // TEST 19: Review creation uses deterministic ID and cannot overwrite existing review
+  // --------------------------------------------------------------------------
+  test("19. Review creation uses deterministic ID and cannot overwrite existing review", async () => {
+    db.seed("requests", "req-det-review-1", {
+      customerId: CUSTOMER_A_UID,
+      workerUid: WORKER_A_UID,
+      status: "Completed",
+      customerName: "Customer Alpha",
+      workerName: "Tariq Ahmad"
+    });
+
+    const reviewReq = {
+      auth: { uid: CUSTOMER_A_UID },
+      data: {
+        requestId: "req-det-review-1",
+        rating: 5,
+        text: "Deterministic ID review test"
+      }
+    };
+
+    const res = await submitReview(db, reviewReq);
+    assert.equal(res.success, true);
+    assert.equal(res.reviewId, "req-det-review-1");
+
+    // Document must exist at key "req-det-review-1"
+    const reviews = db.dump("reviews");
+    assert.ok(reviews["req-det-review-1"], "Review must be stored with requestId as document key");
+    assert.equal(reviews["req-det-review-1"].id, "req-det-review-1");
+    assert.equal(reviews["req-det-review-1"].rating, 5);
+
+    // Attempting to submit again for same requestId must be rejected
+    await assert.rejects(
+      async () => submitReview(db, reviewReq),
+      (err) => {
+        assert.equal(err.code, "already-exists");
+        return true;
+      }
+    );
+
+    // Ensure existing document was not overwritten or tampered
+    assert.equal(db.dump("reviews")["req-det-review-1"].rating, 5);
+    assert.equal(db.dump("reviews")["req-det-review-1"].text, "Deterministic ID review test");
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 20: submitReport - valid submission, invalid target type, and duplicate open report
+  // --------------------------------------------------------------------------
+  test("20. submitReport: valid submission, invalid target type, and duplicate open report", async () => {
+    // 20a. Valid submission for worker, review, and chat targets
+    const validWorkerReport = {
+      auth: { uid: CUSTOMER_A_UID },
+      data: {
+        targetType: "worker",
+        targetId: WORKER_A_UID,
+        reason: "unprofessional_conduct",
+        description: "Worker was significantly delayed without prior notification."
+      }
+    };
+    const resWorker = await submitReport(db, validWorkerReport);
+    assert.equal(resWorker.success, true);
+    assert.ok(resWorker.reportId);
+
+    const validChatReport = {
+      auth: { uid: CUSTOMER_A_UID },
+      data: {
+        targetType: "chat",
+        targetId: "req-chat-999",
+        reason: "harassment",
+        description: "Inappropriate communication in private chat messages."
+      }
+    };
+    const resChat = await submitReport(db, validChatReport);
+    assert.equal(resChat.success, true);
+    assert.ok(resChat.reportId);
+
+    // 20b. Invalid target type rejected (customer, message, admin)
+    const invalidTargetReport = {
+      auth: { uid: CUSTOMER_A_UID },
+      data: {
+        targetType: "customer",
+        targetId: CUSTOMER_B_UID,
+        reason: "harassment",
+        description: "Attempting to report unsupported customer target."
+      }
+    };
+    await assert.rejects(
+      async () => submitReport(db, invalidTargetReport),
+      (err) => {
+        assert.equal(err.code, "invalid-argument");
+        assert.match(err.message, /Invalid target type/);
+        return true;
+      }
+    );
+
+    const invalidAdminTarget = {
+      auth: { uid: CUSTOMER_A_UID },
+      data: {
+        targetType: "admin",
+        targetId: ADMIN_UID,
+        reason: "spam",
+        description: "Attempting to report admin directly."
+      }
+    };
+    await assert.rejects(
+      async () => submitReport(db, invalidAdminTarget),
+      (err) => {
+        assert.equal(err.code, "invalid-argument");
+        return true;
+      }
+    );
+
+    // 20c. Duplicate open report for same target by same reporter is rejected
+    await assert.rejects(
+      async () => submitReport(db, validWorkerReport),
+      (err) => {
+        assert.equal(err.code, "already-exists");
+        assert.match(err.message, /already have an active report/);
+        return true;
+      }
+    );
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 21: adminModerateReport - unauthorized caller denied & authorized admin permitted
+  // --------------------------------------------------------------------------
+  test("21. adminModerateReport: unauthorized caller denied & authorized admin permitted", async () => {
+    db.seed("reports", "rep-mod-101", {
+      reporterUid: CUSTOMER_A_UID,
+      targetType: "worker",
+      targetId: WORKER_A_UID,
+      status: "open",
+      reason: "spam",
+      description: "Report waiting for moderation."
+    });
+
+    // 21a. Non-admin caller is rejected
+    const nonAdminReq = {
+      auth: { uid: CUSTOMER_A_UID },
+      data: { reportId: "rep-mod-101", status: "resolved" }
+    };
+    await assert.rejects(
+      async () => adminModerateReport(db, nonAdminReq),
+      (err) => {
+        assert.equal(err.code, "permission-denied");
+        return true;
+      }
+    );
+
+    // 21b. Authorized admin resolves report
+    const adminReq = {
+      auth: { uid: ADMIN_UID },
+      data: { reportId: "rep-mod-101", status: "resolved" }
+    };
+    const res = await adminModerateReport(db, adminReq);
+    assert.equal(res.success, true);
+    assert.equal(res.status, "resolved");
+
+    const updated = db.dump("reports")["rep-mod-101"];
+    assert.equal(updated.status, "resolved");
+    assert.equal(updated.resolvedBy, ADMIN_UID);
+    assert.ok(updated.resolvedAt);
+
+    // 21c. Invalid status is rejected
+    const invalidStatusReq = {
+      auth: { uid: ADMIN_UID },
+      data: { reportId: "rep-mod-101", status: "invalid_status" }
+    };
+    await assert.rejects(
+      async () => adminModerateReport(db, invalidStatusReq),
+      (err) => {
+        assert.equal(err.code, "invalid-argument");
+        return true;
+      }
+    );
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 22: adminModerateReview - unauthorized caller denied & authorized admin permitted
+  // --------------------------------------------------------------------------
+  test("22. adminModerateReview: unauthorized caller denied & authorized admin permitted", async () => {
+    db.seed("reviews", "rev-mod-202", {
+      requestId: "req-mod-202",
+      customerId: CUSTOMER_A_UID,
+      rating: 1,
+      text: "Defamatory review content",
+      status: "published"
+    });
+
+    // 22a. Non-admin caller is rejected
+    const nonAdminReq = {
+      auth: { uid: WORKER_A_UID },
+      data: { reviewId: "rev-mod-202", status: "hidden" }
+    };
+    await assert.rejects(
+      async () => adminModerateReview(db, nonAdminReq),
+      (err) => {
+        assert.equal(err.code, "permission-denied");
+        return true;
+      }
+    );
+
+    // 22b. Authorized admin hides review
+    const adminReq = {
+      auth: { uid: ADMIN_UID },
+      data: { reviewId: "rev-mod-202", status: "hidden" }
+    };
+    const res = await adminModerateReview(db, adminReq);
+    assert.equal(res.success, true);
+    assert.equal(res.status, "hidden");
+
+    const updated = db.dump("reviews")["rev-mod-202"];
+    assert.equal(updated.status, "hidden");
+    assert.equal(updated.moderatedBy, ADMIN_UID);
+    assert.ok(updated.moderatedAt);
+
+    // 22c. Invalid status is rejected
+    const invalidStatusReq = {
+      auth: { uid: ADMIN_UID },
+      data: { reviewId: "rev-mod-202", status: "destroyed" }
+    };
+    await assert.rejects(
+      async () => adminModerateReview(db, invalidStatusReq),
+      (err) => {
+        assert.equal(err.code, "invalid-argument");
+        return true;
+      }
+    );
+  });
+
+  // --------------------------------------------------------------------------
+  // TEST 23: Review integrity - worker self-review attempt denied & invalid ratings rejected
+  // --------------------------------------------------------------------------
+  test("23. Review integrity: worker self-review attempt denied & invalid ratings rejected", async () => {
+    // 23a. Worker trying to submit review on request where they are assigned worker
+    db.seed("requests", "req-self-review", {
+      customerId: WORKER_A_UID,
+      workerUid: WORKER_A_UID,
+      status: "Completed"
+    });
+
+    const selfReviewReq = {
+      auth: { uid: WORKER_A_UID },
+      data: {
+        requestId: "req-self-review",
+        rating: 5,
+        text: "I did an awesome job myself!"
+      }
+    };
+
+    await assert.rejects(
+      async () => submitReview(db, selfReviewReq),
+      (err) => {
+        assert.equal(err.code, "failed-precondition");
+        assert.match(err.message, /Workers cannot submit reviews for their own service requests/i);
+        return true;
+      }
+    );
+
+    // 23b. Rating validation (< 1, > 5, float)
+    db.seed("requests", "req-valid-review-target", {
+      customerId: CUSTOMER_A_UID,
+      workerUid: WORKER_A_UID,
+      status: "Completed"
+    });
+
+    const invalidRatings = [0, 6, -1, 3.5, "five"];
+    for (const badRating of invalidRatings) {
+      const badReq = {
+        auth: { uid: CUSTOMER_A_UID },
+        data: {
+          requestId: "req-valid-review-target",
+          rating: badRating,
+          text: "Great work provided on time."
+        }
+      };
+      await assert.rejects(
+        async () => submitReview(db, badReq),
+        (err) => {
+          assert.equal(err.code, "invalid-argument");
+          return true;
+        }
+      );
+    }
+  });
 });

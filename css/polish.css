@@ -3455,6 +3455,42 @@ body #webgl-background {
   gap: 12px;
 }
 
+.worker-reviews-aggregate-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  margin-bottom: 4px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.reviews-aggregate-score {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.reviews-aggregate-number {
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
+.reviews-aggregate-stars {
+  color: #f59e0b;
+  font-size: 1.1rem;
+  letter-spacing: 2px;
+}
+
+.reviews-aggregate-count {
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--color-ink-muted);
+}
+
 .review-card {
   padding: 16px;
   border: 1px solid var(--color-border);
@@ -7676,6 +7712,19 @@ button.is-loading {
   color: #94a3b8;
 }
 
+[data-theme="dark"] .worker-reviews-aggregate-card {
+  background: #151d30;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+[data-theme="dark"] .reviews-aggregate-number {
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .reviews-aggregate-count {
+  color: #94a3b8;
+}
+
 [data-theme="dark"] .review-card {
   background: #151d30;
   border-color: rgba(255, 255, 255, 0.12);
@@ -8754,4 +8803,136 @@ button.is-loading {
 [data-theme="dark"] .customer-request-status {
   background: #151d30;
   border-color: rgba(255, 255, 255, 0.12);
+}
+
+
+/* ==========================================
+   #DANGER_ZONE & ACCOUNT_DELETION
+   ==========================================
+*/
+.danger-zone-card {
+  margin-top: 32px;
+  padding: 20px;
+  border-radius: var(--radius-md, 18px);
+  border: 1.5px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.04);
+}
+
+[data-theme="dark"] .danger-zone-card {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.danger-zone-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.danger-zone-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.danger-zone-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #dc2626;
+}
+
+[data-theme="dark"] .danger-zone-title {
+  color: #f87171;
+}
+
+.danger-zone-subtitle {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.danger-zone-desc {
+  margin: 0 0 16px;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.danger-zone-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.button-danger {
+  background: #dc2626 !important;
+  color: #ffffff !important;
+  border-color: #dc2626 !important;
+  font-weight: 700 !important;
+  transition: all 0.2s ease !important;
+}
+
+.button-danger:hover {
+  background: #b91c1c !important;
+  border-color: #b91c1c !important;
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25) !important;
+}
+
+.button-danger:active {
+  transform: translateY(1px) scale(0.985);
+}
+
+.danger-tag {
+  background: rgba(239, 68, 68, 0.12) !important;
+  color: #dc2626 !important;
+  border: 1px solid rgba(239, 68, 68, 0.3) !important;
+}
+
+[data-theme="dark"] .danger-tag {
+  background: rgba(239, 68, 68, 0.2) !important;
+  color: #fca5a5 !important;
+}
+
+.account-deletion-modal {
+  max-width: 520px;
+}
+
+.deletion-consequences-list {
+  margin: 14px 0 18px;
+  padding-left: 20px;
+  font-size: 0.88rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.deletion-consequences-list li {
+  margin-bottom: 6px;
+}
+
+.deletion-active-req-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm, 12px);
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  margin-bottom: 18px;
+}
+
+.deletion-active-req-warning strong {
+  color: #d97706;
+}
+
+[data-theme="dark"] .deletion-active-req-warning strong {
+  color: #fbbf24;
+}
+
+.input-readonly {
+  background: var(--surface-2, #f1f5f9) !important;
+  color: var(--muted) !important;
+  cursor: not-allowed !important;
 }

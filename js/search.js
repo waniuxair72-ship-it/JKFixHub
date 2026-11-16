@@ -86,7 +86,11 @@ function buildWorkerCard(worker) {
 
   metadata.className = "worker-meta";
   setTextContent(district, worker.district);
-  setTextContent(rating, worker.rating ? `${worker.rating} ★` : "5.0 ★");
+  let ratingDisplay = "No ratings yet";
+  if (worker.rating && (worker.reviewCount === undefined || worker.reviewCount > 0)) {
+    ratingDisplay = `${Number(worker.rating).toFixed(1)} ★`;
+  }
+  setTextContent(rating, ratingDisplay);
   availability.className = "availability";
   availabilityIcon.setAttribute("aria-hidden", "true");
   setTextContent(availability, worker.availability || "Available");
@@ -258,7 +262,9 @@ export function initializeSearch({ showToast } = {}) {
           Number(second.availability === "Available") - Number(first.availability === "Available");
         if (availabilityDifference) return availabilityDifference;
 
-        const ratingDifference = Number(second.rating || 5.0) - Number(first.rating || 5.0);
+        const firstEffectiveRating = (first.rating && first.reviewCount !== 0) ? Number(first.rating) : 0;
+        const secondEffectiveRating = (second.rating && second.reviewCount !== 0) ? Number(second.rating) : 0;
+        const ratingDifference = secondEffectiveRating - firstEffectiveRating;
         if (ratingDifference) return ratingDifference;
 
         const relevanceDifference =

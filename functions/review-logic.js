@@ -95,6 +95,22 @@ async function submitReview(db, request) {
     );
   }
 
+  // 1b. Verify worker is not reviewing themselves
+  if (requestData.workerUid === uid || (requestData.workerId && String(requestData.workerId) === String(uid))) {
+    await recordSecurityEvent(db, {
+      type: "SELF_REVIEW_ATTEMPT",
+      actorUid: uid,
+      targetType: "request",
+      targetId: requestId,
+      severity: "High",
+      details: { caller: uid, worker: requestData.workerUid }
+    });
+    throw new HttpsError(
+      "failed-precondition",
+      "Workers cannot submit reviews for their own service requests."
+    );
+  }
+
   // 2. Verify authoritative completion
   if (requestData.status !== "Completed") {
     await recordSecurityEvent(db, {
@@ -112,6 +128,24 @@ async function submitReview(db, request) {
   }
 
   // 3. Verify exactly one review per request (duplicate prevention)
+  const reviewRef = db.collection("reviews").doc(requestId);
+  const existingDocSnap = await reviewRef.get();
+
+  if (existingDocSnap.exists) {
+    await recordSecurityEvent(db, {
+      type: "DUPLICATE_REVIEW_ATTEMPT",
+      actorUid: uid,
+      targetType: "request",
+      targetId: requestId,
+      severity: "Low",
+      details: { existingReviewId: requestId }
+    });
+    throw new HttpsError(
+      "already-exists",
+      "A review has already been submitted for this service request."
+    );
+  }
+
   const existingSnap = await db
     .collection("reviews")
     .where("requestId", "==", requestId)
@@ -135,6 +169,7 @@ async function submitReview(db, request) {
 
   const workerId = requestData.workerUid || requestData.workerId || null;
   const reviewDoc = {
+    id: requestId,
     requestId,
     customerId: uid,
     customerName: requestData.customerName || "Customer",
@@ -150,20 +185,35 @@ async function submitReview(db, request) {
     workerReplyAt: null
   };
 
-  const docRef = await db.collection("reviews").add(reviewDoc);
+  // Atomically create review document with deterministic requestId
+  try {
+    if (typeof reviewRef.create === "function") {
+      await reviewRef.create(reviewDoc);
+    } else {
+      await reviewRef.set(reviewDoc);
+    }
+  } catch (err) {
+    if (err.code === 6 || err.message?.includes("already exists")) {
+      throw new HttpsError(
+        "already-exists",
+        "A review has already been submitted for this service request."
+      );
+    }
+    throw err;
+  }
 
   await recordAuditEvent(db, {
     actorUid: uid,
     action: "REVIEW_SUBMITTED",
     targetType: "review",
-    targetId: docRef.id,
+    targetId: requestId,
     result: "success",
     details: { requestId, workerId, rating }
   });
 
   return {
     success: true,
-    reviewId: docRef.id,
+    reviewId: requestId,
     message: "Review successfully submitted."
   };
 }

@@ -8,6 +8,7 @@
 import { closeModal, openModal } from "./modals.js";
 import {
   addWorkerReviewReply,
+  calculateWorkerRating,
   createCustomerReview,
   getCustomerRequestById,
   getCurrentUser,
@@ -116,6 +117,14 @@ export async function openLeaveReviewModal(requestId) {
   const request = getCustomerRequestById(requestId);
   if (!request || request.status !== "Completed") {
     recordSecurityEvent("INVALID_REQUEST", "customer");
+    return false;
+  }
+
+  const user = getCurrentUser();
+  const callerUid = user?.firebaseUid || user?.uid || user?.id;
+  const workerTargetUid = request.workerUid || (request.workerId ? String(request.workerId) : null);
+  if (callerUid && workerTargetUid && callerUid === workerTargetUid) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || null);
     return false;
   }
 
@@ -382,7 +391,40 @@ export async function renderWorkerReviews(workerId, container) {
   }
 
   const user = getCurrentUser();
-  container.replaceChildren(...allReviews.map((rev) => buildReviewCard(rev, isReviewForWorker(rev, user))));
+  const summary = calculateWorkerRating(allReviews);
+
+  const elementsToMount = [];
+
+  if (summary.reviewCount > 0) {
+    const summaryCard = document.createElement("div");
+    summaryCard.className = "worker-reviews-aggregate-card";
+
+    const scoreWrap = document.createElement("div");
+    scoreWrap.className = "reviews-aggregate-score";
+
+    const avgNumber = document.createElement("span");
+    avgNumber.className = "reviews-aggregate-number";
+    setTextContent(avgNumber, summary.average.toFixed(1));
+
+    const avgStars = document.createElement("span");
+    avgStars.className = "reviews-aggregate-stars";
+    setTextContent(avgStars, renderStarSymbols(summary.average));
+
+    scoreWrap.append(avgNumber, avgStars);
+
+    const countWrap = document.createElement("div");
+    countWrap.className = "reviews-aggregate-count";
+    setTextContent(
+      countWrap,
+      `Based on ${summary.reviewCount} ${summary.reviewCount === 1 ? "verified review" : "verified reviews"}`
+    );
+
+    summaryCard.append(scoreWrap, countWrap);
+    elementsToMount.push(summaryCard);
+  }
+
+  elementsToMount.push(...allReviews.map((rev) => buildReviewCard(rev, isReviewForWorker(rev, user))));
+  container.replaceChildren(...elementsToMount);
 }
 
 async function handleReviewFormSubmit(event) {

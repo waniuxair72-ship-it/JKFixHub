@@ -5,7 +5,9 @@
 // Dashboard state and controls are connected to real Cloud Firestore data.
 import { closeModal, openModal, openMaintenanceNotice } from "./modals.js";
 import {
+  calculateWorkerRating,
   getCurrentUser,
+  getReviewsForWorker,
   getWorkerById,
   getWorkerCustomerRequests,
   getWorkers,
@@ -112,7 +114,7 @@ function getActiveWorker() {
     name: user.name || "Worker",
     service: user.service || "Electrician",
     district: user.district || "Srinagar",
-    rating: user.rating || "5.0",
+    rating: user.rating || null,
     availability: user.availability || "Available",
     initials,
     experience: user.experience || "1 year",
@@ -219,6 +221,18 @@ function buildRequestCard(request) {
 
     actions.append(completeBtn, chatBtn);
     aside.append(actions);
+  } else if (request.status === "Completed") {
+    const actions = document.createElement("div");
+    actions.className = "dashboard-request-actions";
+
+    const chatBtn = document.createElement("button");
+    chatBtn.type = "button";
+    chatBtn.className = "button subtle btn-chat-request";
+    chatBtn.dataset.openWorkerChat = request.id;
+    setTextContent(chatBtn, "View Chat History");
+
+    actions.append(chatBtn);
+    aside.append(actions);
   }
 
   card.append(main, aside);
@@ -301,13 +315,20 @@ export function renderWorkerRequestsList(requests, worker) {
     const accepted = requests.filter((r) => r.status === "Accepted").length;
     const completed = requests.filter((r) => r.status === "Completed").length;
     const rejected = requests.filter((r) => r.status === "Rejected").length;
+    const workerUid = worker.workerUid || worker.uid || worker.id;
+    const workerReviews = getReviewsForWorker(workerUid);
+    const agg = calculateWorkerRating(workerReviews);
+    const ratingDisplay = agg.reviewCount > 0
+      ? `${agg.average.toFixed(1)} ★`
+      : (worker?.rating ? `${Number(worker.rating).toFixed(1)} ★` : "No ratings yet");
+
     const stats = {
       total,
       pending,
       accepted,
       completed,
       rejected,
-      rating: `${worker?.rating || "5.0"} ★`
+      rating: ratingDisplay
     };
     statistics.replaceChildren(...statDefinitions.map(([label, key]) => buildStatCard(label, stats[key], key)));
   }
@@ -417,12 +438,18 @@ async function handleWorkerRequestAction(requestId, newStatus, worker, actionBut
 function renderDashboard(worker) {
   const view = document.getElementById("workerDashboardView");
   const initials = document.getElementById("workerDashboardInitials");
+  const workerReviews = getReviewsForWorker(worker.workerUid || worker.uid || worker.id);
+  const agg = calculateWorkerRating(workerReviews);
+  const ratingDetail = agg.reviewCount > 0
+    ? `${agg.average.toFixed(1)} ★ (${agg.reviewCount} ${agg.reviewCount === 1 ? "review" : "reviews"})`
+    : (worker.rating ? `${Number(worker.rating).toFixed(1)} ★` : "No ratings yet");
+
   const fields = [
     ["workerDashboardName", worker.name],
     ["workerDashboardService", worker.service],
     ["workerDashboardDistrict", worker.district],
     ["workerDashboardExperience", worker.experience],
-    ["workerDashboardRating", `${worker.rating} ★`],
+    ["workerDashboardRating", ratingDetail],
     ["workerDashboardAvailabilityLabel", worker.availability],
     ["workerDashboardVerification", getCurrentUser()?.isVerified ? "Verified worker" : "Pending verification"]
   ];
