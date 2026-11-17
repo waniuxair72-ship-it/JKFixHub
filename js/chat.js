@@ -701,7 +701,7 @@ function handleChatActions(event) {
   }
 
   if (target.closest("#chatBlockUser")) {
-    openMaintenanceNotice("Safety controls");
+    openModal("destinyBlockModal");
     return;
   }
 
