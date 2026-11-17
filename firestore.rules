@@ -55,12 +55,12 @@ service cloud.firestore {
     }
 
     // Authoritative Account Deletion In-Progress Check:
-    // Returns true if the user or worker is currently undergoing account deletion,
-    // locking out new service requests and status alterations.
+    // Returns true if the user or worker is currently undergoing account deletion or completed,
+    // locking out new service requests, status alterations, and user profile recreation.
     function isAccountDeletionInProgress(uid) {
       return exists(/databases/$(database)/documents/deletionJobs/$(uid)) &&
         get(/databases/$(database)/documents/deletionJobs/$(uid)).data.state in [
-          "INITIATED", "SANITIZING", "AUTH_DELETING", "RECONCILING"
+          "INITIATED", "SANITIZING", "AUTH_DELETING", "RECONCILING", "COMPLETED"
         ];
     }
 
@@ -231,12 +231,26 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if isUser(uid) || isAdmin();
       allow create: if isUser(uid) &&
+                    !isAccountDeletionInProgress(uid) &&
                     request.resource.data.uid == uid &&
                     request.resource.data.role in ['customer', 'worker'];
       allow update: if (isUser(uid) &&
+                       !isAccountDeletionInProgress(uid) &&
                        request.resource.data.uid == resource.data.uid &&
                        request.resource.data.role == resource.data.role) || isAdmin();
       allow delete: if isAdmin();
+    }
+
+    // ------------------------------------------------------------------------
+    // Deletion Jobs: /deletionJobs/{jobId}
+    // ------------------------------------------------------------------------
+    // - Authenticated users can read their own deletion job status.
+    // - Admins can inspect all deletion jobs.
+    // - Client-side creation, update, and deletion are strictly denied.
+    // ------------------------------------------------------------------------
+    match /deletionJobs/{jobId} {
+      allow read: if isUser(jobId) || isAdmin();
+      allow write: if false;
     }
 
     // ------------------------------------------------------------------------
@@ -255,6 +269,7 @@ service cloud.firestore {
       allow create: if (
         isAuthenticated() &&
         request.auth.uid == workerId &&
+        !isAccountDeletionInProgress(workerId) &&
         !('email' in request.resource.data) &&
         !('phone' in request.resource.data) &&
         request.resource.data.isVerified == false &&
@@ -265,6 +280,7 @@ service cloud.firestore {
       allow update: if (
         isEmailVerified() &&
         request.auth.uid == workerId &&
+        !isAccountDeletionInProgress(workerId) &&
         !('email' in request.resource.data) &&
         !('phone' in request.resource.data) &&
         request.resource.data.isVerified == resource.data.isVerified &&

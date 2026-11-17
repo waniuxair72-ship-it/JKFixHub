@@ -848,7 +848,7 @@ export async function registerWorker({ name, email, phone, district, service, ex
           service,
           experience: experience.trim(),
           availability: safeAvailability,
-          rating: "5.0",
+          rating: null,
           reviewCount: 0,
           isVerified: false,
           status: "pending",
@@ -874,7 +874,7 @@ export async function registerWorker({ name, email, phone, district, service, ex
           service,
           experience: experience.trim(),
           availability: safeAvailability,
-          rating: "5.0",
+          rating: null,
           reviewCount: 0,
           isVerified: false,
           status: "pending",
@@ -947,17 +947,30 @@ export async function registerWorker({ name, email, phone, district, service, ex
       setAuthStatus(AUTH_STATUS.ERROR, error?.code || "auth-error");
 
       if (createdUser) {
-        console.warn("[JKFixHub Auth] Worker registration profile creation failed:", error?.message || error);
-        clearCurrentUser();
-        if (typeof methods.signOut === "function") {
-          try {
-            await methods.signOut(auth);
-          } catch (_) {}
+        console.warn("[JKFixHub Auth] Worker registration profile creation notice:", error?.message || error);
+        
+        const isRecoverable = error?.code === "unavailable" ||
+          error?.code === "deadline-exceeded" ||
+          error?.code === "network-request-failed" ||
+          (typeof navigator !== "undefined" && navigator.onLine === false) ||
+          error?.message?.toLowerCase().includes("network") ||
+          error?.message?.toLowerCase().includes("fetch");
+
+        if (!isRecoverable) {
+          clearCurrentUser();
+          if (typeof methods.signOut === "function") {
+            try {
+              await methods.signOut(auth);
+            } catch (_) {}
+          }
+          updateAccountControls();
+        } else {
+          console.info("[JKFixHub Auth] Preserving authenticated worker session for recovery after recoverable error.");
         }
-        updateAccountControls();
+        
         const safeMessage = "Worker account was created, but setting up your profile encountered an error. Please try signing in or contact support.";
         setAuthFeedback(safeMessage, true);
-        return { success: false, error: safeMessage, partialFailure: true };
+        return { success: false, error: safeMessage, partialFailure: true, recoverable: isRecoverable };
       }
 
       const safeMessage = mapFirebaseAuthError(error);
@@ -1048,9 +1061,16 @@ export async function resolveUserProfile(firebaseUser, { attemptSelfHeal = true 
   let status = cachedProfile?.status || null;
   let createdAt = cachedProfile?.createdAt || null;
 
-  let userDocExists = false;
   let db = null;
   let firestoreMethods = null;
+
+  // Track each collection lookup explicitly: { exists, data, error }
+  const adminLookup = { exists: false, data: null, error: null };
+  const workerLookup = { exists: false, data: null, error: null };
+  const userLookup = { exists: false, data: null, error: null };
+  const deletionLookup = { exists: false, data: null, error: null, isActive: false };
+
+  let roleResolutionUncertain = false;
 
   try {
     const firestoreClient = await initializeFirestoreClient();
@@ -1058,88 +1078,172 @@ export async function resolveUserProfile(firebaseUser, { attemptSelfHeal = true 
     firestoreMethods = await getFirestoreMethods();
 
     if (db && firestoreMethods && typeof firestoreMethods.getDoc === "function") {
-      // 1. Inspect /users/{uid}
+      // 1. Authoritative Deletion Check (/deletionJobs/{uid})
+      // Prevents profile self-healing and personal info restoration during active deletion
+      try {
+        const delDocRef = firestoreMethods.doc(db, "deletionJobs", uid);
+        const delSnap = await firestoreMethods.getDoc(delDocRef);
+        if (delSnap.exists()) {
+          deletionLookup.exists = true;
+          deletionLookup.data = delSnap.data() || {};
+          const dState = deletionLookup.data.state || "";
+          if (["INITIATED", "SANITIZING", "AUTH_DELETING", "RECONCILING", "COMPLETED"].includes(dState)) {
+            deletionLookup.isActive = true;
+          }
+        }
+      } catch (delErr) {
+        deletionLookup.error = delErr;
+        console.warn("[JKFixHub Auth] /deletionJobs lookup notice:", delErr?.message || delErr);
+      }
+
+      // 2. Authoritative Admin Check (/admins/{uid})
+      // Always inspect /admins/{uid} first to ensure a customer role in /users/{uid}
+      // never masks a valid active administrator account.
+      try {
+        const adminDocRef = firestoreMethods.doc(db, "admins", uid);
+        const adminSnap = await firestoreMethods.getDoc(adminDocRef);
+        if (adminSnap.exists()) {
+          adminLookup.exists = true;
+          adminLookup.data = adminSnap.data() || {};
+        }
+      } catch (adminErr) {
+        adminLookup.error = adminErr;
+        console.warn("[JKFixHub Auth] /admins lookup notice:", adminErr?.message || adminErr);
+      }
+
+      // 3. Authoritative Worker Check (/workers/{uid})
+      // Always inspect /workers/{uid} to ensure an existing worker profile is never
+      // masked by a customer role in /users/{uid}.
+      try {
+        const workerDocRef = firestoreMethods.doc(db, "workers", uid);
+        const workerSnap = await firestoreMethods.getDoc(workerDocRef);
+        if (workerSnap.exists()) {
+          workerLookup.exists = true;
+          workerLookup.data = workerSnap.data() || {};
+        }
+      } catch (workerErr) {
+        workerLookup.error = workerErr;
+        console.warn("[JKFixHub Auth] /workers lookup notice:", workerErr?.message || workerErr);
+      }
+
+      // 4. Inspect /users/{uid}
       try {
         const userDocRef = firestoreMethods.doc(db, "users", uid);
         const userSnap = await firestoreMethods.getDoc(userDocRef);
         if (userSnap.exists()) {
-          userDocExists = true;
-          const uData = userSnap.data() || {};
-          name = uData.name || uData.displayName || name;
-          email = uData.email || email;
-          phone = uData.phone || phone;
-          district = uData.district || district;
-          createdAt = uData.createdAt || createdAt;
-
-          const rawRole = uData.role || uData.userType || uData.type;
-          if (typeof rawRole === "string") {
-            const normalized = rawRole.toLowerCase().trim();
-            if (isSupportedRole(normalized)) {
-              role = normalized;
-            }
-          }
+          userLookup.exists = true;
+          userLookup.data = userSnap.data() || {};
         }
       } catch (userErr) {
+        userLookup.error = userErr;
         console.warn("[JKFixHub Auth] /users lookup notice:", userErr?.message || userErr);
-      }
-
-      // 2. Inspect /workers/{uid} (if worker or if role not established)
-      if (!role || role === "worker") {
-        try {
-          const workerDocRef = firestoreMethods.doc(db, "workers", uid);
-          const workerSnap = await firestoreMethods.getDoc(workerDocRef);
-          if (workerSnap.exists()) {
-            role = "worker";
-            const wData = workerSnap.data() || {};
-            name = name || wData.name;
-            district = district || wData.district;
-            service = wData.service || service;
-            experience = wData.experience || experience;
-            availability = wData.availability || availability;
-            isVerified = Boolean(wData.isVerified);
-            status = wData.status || (isVerified ? "active" : "pending");
-            createdAt = createdAt || wData.createdAt;
-          }
-        } catch (workerErr) {
-          console.warn("[JKFixHub Auth] /workers lookup notice:", workerErr?.message || workerErr);
-        }
-      }
-
-      // 3. Inspect /admins/{uid} (authoritative verification)
-      if (role === "admin" || !role) {
-        try {
-          const adminDocRef = firestoreMethods.doc(db, "admins", uid);
-          const adminSnap = await firestoreMethods.getDoc(adminDocRef);
-          if (adminSnap.exists()) {
-            const aData = adminSnap.data() || {};
-            if (aData.active === true && aData.role === "admin") {
-              role = "admin";
-              name = aData.displayName || name || "Platform Administrator";
-              email = aData.email || email;
-              phone = aData.phone || phone;
-              district = aData.district || district;
-              createdAt = aData.createdAt || createdAt;
-            } else if (role === "admin") {
-              role = null;
-            }
-          } else if (role === "admin") {
-            role = null;
-          }
-        } catch (adminErr) {
-          if (role === "admin") role = null;
-          console.warn("[JKFixHub Auth] /admins lookup notice:", adminErr?.message || adminErr);
-        }
       }
     }
   } catch (fsErr) {
     console.warn("[JKFixHub Auth] Firestore client unavailable:", fsErr?.message || fsErr);
   }
 
-  // 4. Default role determination:
-  // If role is still undetermined, check cache, or default safely to customer
+  // Populate basic user details from /users/{uid} if available
+  if (userLookup.exists && userLookup.data) {
+    const uData = userLookup.data;
+    name = uData.name || uData.displayName || name;
+    email = uData.email || email;
+    phone = uData.phone || phone;
+    district = uData.district || district;
+    createdAt = uData.createdAt || createdAt;
+  }
+
+  // ==========================================
+  // AUTHORITATIVE ROLE RESOLUTION HIERARCHY
+  // ==========================================
+
+  // A. Admin Role Resolution (Requires authoritative /admins/{uid} active === true)
+  if (adminLookup.exists && adminLookup.data?.active === true && adminLookup.data?.role === "admin") {
+    role = "admin";
+    name = adminLookup.data.displayName || name || "Platform Administrator";
+    email = adminLookup.data.email || email;
+    phone = adminLookup.data.phone || phone;
+    district = adminLookup.data.district || district;
+    createdAt = adminLookup.data.createdAt || createdAt;
+  }
+
+  // B. Worker Role Resolution (Requires authoritative /workers/{uid} or valid worker profile)
+  if (!role) {
+    if (workerLookup.exists && workerLookup.data) {
+      role = "worker";
+      const wData = workerLookup.data;
+      name = name || wData.name;
+      district = district || wData.district;
+      service = wData.service || service;
+      experience = wData.experience || experience;
+      availability = wData.availability || availability;
+      isVerified = Boolean(wData.isVerified);
+      status = wData.status || (isVerified ? "active" : "pending");
+      createdAt = createdAt || wData.createdAt;
+    } else if (workerLookup.error) {
+      // Failed Firestore read - distinguish from a missing document!
+      // Do not permanently downgrade a worker because of a temporary network error.
+      if (cachedProfile?.role === "worker" || userLookup.data?.role === "worker") {
+        role = "worker";
+        service = cachedProfile?.service || service;
+        experience = cachedProfile?.experience || experience;
+        availability = cachedProfile?.availability || availability;
+        isVerified = Boolean(cachedProfile?.isVerified);
+        status = cachedProfile?.status || status;
+        roleResolutionUncertain = true;
+      }
+    }
+  }
+
+  // C. Customer / User Document Role Fallback
+  if (!role) {
+    if (userLookup.exists && userLookup.data) {
+      const rawRole = userLookup.data.role || userLookup.data.userType || userLookup.data.type;
+      if (typeof rawRole === "string") {
+        const normalized = rawRole.toLowerCase().trim();
+        // ORDINARY USERS CANNOT ASSIGN THEMSELVES ADMIN PRIVILEGES
+        if (normalized === "admin") {
+          // If adminLookup was false or failed, reject self-assigned admin
+          console.warn("[JKFixHub Auth] Self-assigned or unverified admin role in /users rejected for:", uid);
+          role = "customer";
+        } else if (normalized === "worker") {
+          if (workerLookup.exists) {
+            role = "worker";
+          } else if (workerLookup.error) {
+            role = "worker";
+            roleResolutionUncertain = true;
+          } else {
+            // Worker document confirmed missing; treat as customer
+            role = "customer";
+          }
+        } else if (isSupportedRole(normalized)) {
+          role = normalized;
+        }
+      }
+    }
+  }
+
+  // D. Offline / Cached Role Handling
   if (!role) {
     if (cachedProfile?.role && isSupportedRole(cachedProfile.role)) {
-      role = cachedProfile.role;
+      // Do not treat cached client-side role data as authoritative admin permission!
+      if (cachedProfile.role === "admin") {
+        if (adminLookup.exists === false && !adminLookup.error) {
+          console.warn("[JKFixHub Auth] Cached admin role discarded because /admins document is missing:", uid);
+          role = "customer";
+        } else if (adminLookup.error) {
+          // Offline session with cached admin: do not grant unverified admin access
+          console.warn("[JKFixHub Auth] Offline admin session unverified; defaulting to customer for safety:", uid);
+          role = "customer";
+        } else {
+          role = "customer";
+        }
+      } else {
+        role = cachedProfile.role;
+        if (role === "worker" && workerLookup.error) {
+          roleResolutionUncertain = true;
+        }
+      }
     } else {
       role = "customer";
     }
@@ -1149,28 +1253,50 @@ export async function resolveUserProfile(firebaseUser, { attemptSelfHeal = true 
   email = email || authEmail;
   createdAt = createdAt || new Date().toISOString();
 
-  // 5. Non-blocking self-healing if /users/{uid} document is missing in Firestore
-  if (attemptSelfHeal && !userDocExists && db && firestoreMethods && typeof firestoreMethods.setDoc === "function") {
-    if (role === "customer" || role === "worker") {
-      try {
-        const healPayload = {
-          uid,
-          name,
-          email,
-          role,
-          emailVerified: isEmailVerified,
-          createdAt
-        };
-        if (phone) healPayload.phone = phone;
-        if (district) healPayload.district = district;
-        const userDocRef = firestoreMethods.doc(db, "users", uid);
-        firestoreMethods.setDoc(userDocRef, healPayload, { merge: true }).catch((err) => {
-          console.warn("[JKFixHub Auth] Non-blocking /users self-heal write notice:", err?.message || err);
-        });
-      } catch (healSyncErr) {
-        console.warn("[JKFixHub Auth] Non-blocking self-heal setup notice:", healSyncErr?.message || healSyncErr);
-      }
+  // ==========================================
+  // SAFE PROFILE SELF-HEALING (FAIL-CLOSED)
+  // ==========================================
+  // Self-heal is strictly gated:
+  // 1. attemptSelfHeal must be enabled
+  // 2. /users/{uid} document must be authoritatively confirmed missing (userLookup.exists === false and no userLookup.error)
+  // 3. No active or completed account deletion in progress (deletionLookup.isActive === false)
+  // 4. Role resolution must NOT be uncertain (e.g., worker lookup must not have failed with network error)
+  // 5. Only "customer" or "worker" can self-heal; NEVER "admin"
+  const canSelfHeal =
+    attemptSelfHeal &&
+    userLookup.exists === false &&
+    !userLookup.error &&
+    !deletionLookup.isActive &&
+    !roleResolutionUncertain &&
+    !workerLookup.error &&
+    (role === "customer" || role === "worker") &&
+    db &&
+    firestoreMethods &&
+    typeof firestoreMethods.setDoc === "function";
+
+  if (canSelfHeal) {
+    try {
+      const healPayload = {
+        uid,
+        name,
+        email,
+        role,
+        emailVerified: isEmailVerified,
+        createdAt
+      };
+      if (phone) healPayload.phone = phone;
+      if (district) healPayload.district = district;
+      const userDocRef = firestoreMethods.doc(db, "users", uid);
+      firestoreMethods.setDoc(userDocRef, healPayload, { merge: true }).catch((err) => {
+        console.warn("[JKFixHub Auth] Non-blocking /users self-heal write notice:", err?.message || err);
+      });
+    } catch (healSyncErr) {
+      console.warn("[JKFixHub Auth] Non-blocking self-heal setup notice:", healSyncErr?.message || healSyncErr);
     }
+  } else if (deletionLookup.isActive) {
+    console.info("[JKFixHub Auth] Self-heal suppressed: Account deletion is in progress or completed for:", uid);
+  } else if (roleResolutionUncertain || workerLookup.error) {
+    console.info("[JKFixHub Auth] Self-heal suppressed: Role resolution is uncertain or transient network error occurred for:", uid);
   }
 
   return {
@@ -1187,6 +1313,7 @@ export async function resolveUserProfile(firebaseUser, { attemptSelfHeal = true 
     isVerified: Boolean(isVerified),
     status: status || (role === "worker" ? "pending" : null),
     authProvider: "firebase",
+    deletionActive: deletionLookup.isActive,
     createdAt
   };
 }
