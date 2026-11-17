@@ -10,6 +10,7 @@
 // and maintain.
 import { openModal } from "./modals.js";
 import { updateRoleBasedHome } from "./smart-home.js";
+import { handleAuthHashNavigation } from "./auth.js";
 
 export function setView(viewName) {
   const homeView = document.getElementById("homeView");
@@ -173,12 +174,35 @@ export function initializeNavigation() {
     "#support": "supportModal"
   };
 
+  const PROTECTED_AUTH_HASHES = new Set([
+    "#worker-dashboard",
+    "#dashboard",
+    "#requests",
+    "#my-requests",
+    "#account",
+    "#admin",
+    "#admin-dashboard",
+    "#signin",
+    "#login",
+    "#register",
+    "#customer-register",
+    "#worker-register",
+    "#forgot-password",
+    "#password-reset"
+  ]);
+
   function handleNavHash() {
     const hash = (window.location.hash || "").toLowerCase();
 
     if (hash === "#find-worker" || hash === "#search") {
       updateMenuState(false);
       setView("search");
+      return;
+    }
+
+    if (PROTECTED_AUTH_HASHES.has(hash)) {
+      updateMenuState(false);
+      handleAuthHashNavigation();
       return;
     }
 

@@ -90,6 +90,60 @@ let pendingRegistrationEmail = null;
 let customerVerificationDismissed = false;
 let isSigningIn = false;
 
+let isAuthInitialized = false;
+let authReadyResolver = null;
+const authReadyPromise = new Promise((resolve) => {
+  authReadyResolver = resolve;
+});
+
+export function isAuthReady() {
+  return isAuthInitialized;
+}
+
+export function whenAuthReady() {
+  if (isAuthInitialized) {
+    return Promise.resolve(getCurrentUser());
+  }
+  return authReadyPromise;
+}
+
+export function resolveAuthReady(user) {
+  if (!isAuthInitialized) {
+    isAuthInitialized = true;
+    if (typeof authReadyResolver === "function") {
+      authReadyResolver(user !== undefined ? user : getCurrentUser());
+    }
+  }
+}
+
+export function getPersistedSessionRole() {
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      return sessionStorage.getItem("jkfixhub_last_auth_role") || null;
+    }
+  } catch (_) {}
+  return null;
+}
+
+export function persistSessionUser(user) {
+  try {
+    if (typeof sessionStorage !== "undefined" && user) {
+      sessionStorage.setItem("jkfixhub_last_auth_role", user.role);
+      sessionStorage.setItem("jkfixhub_last_auth_uid", user.id || user.uid || user.firebaseUid || "");
+    }
+  } catch (_) {}
+}
+
+export function clearPersistedSession() {
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.removeItem("jkfixhub_last_auth_role");
+      sessionStorage.removeItem("jkfixhub_last_auth_uid");
+      sessionStorage.removeItem("jk_dismiss_verification_customer");
+    }
+  } catch (_) {}
+}
+
 export function isSigningInActive() {
   return isSigningIn;
 }
@@ -228,7 +282,7 @@ function syncAuthHash(tab) {
 export function clearAuthHash() {
   if (typeof window === "undefined" || !window.history?.replaceState) return;
   try {
-    const hash = window.location.hash;
+    const hash = (window.location.hash || "").toLowerCase();
     const authHashes = [
       "#signin",
       "#login",
@@ -240,7 +294,11 @@ export function clearAuthHash() {
       "#account",
       "#forgot-password",
       "#password-reset",
-      "#reset-password"
+      "#reset-password",
+      "#worker-dashboard",
+      "#dashboard",
+      "#requests",
+      "#my-requests"
     ];
     if (authHashes.includes(hash)) {
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
@@ -250,10 +308,11 @@ export function clearAuthHash() {
 
 /**
  * Handles direct hash routing on page load or hashchange events.
+ * Uses whenAuthReady() to prevent race conditions and preserve user destination.
  */
-export function handleAuthHashNavigation() {
+export async function handleAuthHashNavigation() {
   if (typeof window === "undefined") return;
-  const hash = window.location.hash;
+  const hash = (window.location.hash || "").toLowerCase();
   if (!hash) return;
 
   if (hash === "#signin" || hash === "#login") {
@@ -269,17 +328,58 @@ export function handleAuthHashNavigation() {
     showPasswordReset();
     openModal("authModal");
   } else if (hash === "#account") {
+    await whenAuthReady();
     if (isAuthenticated()) {
       showAccountView();
     } else {
       showSignIn();
     }
     openModal("authModal");
+  } else if (hash === "#worker-dashboard" || hash === "#dashboard") {
+    await whenAuthReady();
+    const role = getUserRole();
+    if (role === "worker") {
+      closeModal("customerRequestsModal");
+      closeModal("customerRequestDetailsModal");
+      openModal("authModal");
+      openWorkerDashboard();
+    } else if (role === "customer") {
+      recordSecurityEvent("UNAUTHORIZED_UI_ACTION", "customer");
+      window.history?.replaceState?.(null, "", `${window.location.pathname}${window.location.search}#requests`);
+      const modal = document.querySelector("#authModal .modal");
+      if (modal?.classList.contains("worker-dashboard-open")) {
+        modal.classList.remove("worker-dashboard-open");
+      }
+      closeModal("authModal");
+      await openCustomerRequests();
+    } else {
+      showSignIn();
+      openModal("authModal");
+    }
+  } else if (hash === "#requests" || hash === "#my-requests") {
+    await whenAuthReady();
+    const role = getUserRole();
+    if (role === "customer") {
+      closeModal("authModal");
+      await openCustomerRequests();
+    } else if (role === "worker") {
+      recordSecurityEvent("UNAUTHORIZED_UI_ACTION", "worker");
+      window.history?.replaceState?.(null, "", `${window.location.pathname}${window.location.search}#worker-dashboard`);
+      closeModal("customerRequestsModal");
+      closeModal("customerRequestDetailsModal");
+      openModal("authModal");
+      openWorkerDashboard();
+    } else {
+      showSignIn();
+      openModal("authModal");
+    }
   } else if (hash === "#admin" || hash === "#admin-dashboard") {
+    await whenAuthReady();
     if (canAccessAdmin()) {
       closeModal("authModal");
       openAdminDashboard();
-    } else if (!isAuthenticated()) {
+    } else {
+      closeModal("adminDashboardModal");
       showSignIn();
       openModal("authModal");
     }
@@ -1400,6 +1500,8 @@ export async function signInUser({ email, password }) {
           authProvider: "firebase"
         });
 
+        persistSessionUser(currentUser);
+        resolveAuthReady(currentUser);
         setCurrentUser(currentUser);
         setAuthStatus(AUTH_STATUS.AUTHENTICATED);
         recordSecurityEvent("AUTH_STATE_CHANGED", currentUser.role);
@@ -1408,6 +1510,9 @@ export async function signInUser({ email, password }) {
         if (currentUser.role === "admin") {
           try {
             closeModal("authModal");
+            if (typeof window !== "undefined") {
+              window.history?.replaceState?.(null, "", `${window.location.pathname}${window.location.search}#admin`);
+            }
             openAdminDashboard();
           } catch (uiErr) {
             console.warn("[JKFixHub Auth] Admin dashboard navigation notice:", uiErr?.message || uiErr);
@@ -1415,16 +1520,28 @@ export async function signInUser({ email, password }) {
           setAuthFeedback("Signed in as Administrator.", false);
         } else if (currentUser.role === "worker") {
           try {
+            closeModal("customerRequestsModal");
+            closeModal("customerRequestDetailsModal");
             const signedOutView = document.getElementById("authSignedOutView");
             if (signedOutView) signedOutView.hidden = true;
+            if (typeof window !== "undefined") {
+              window.history?.replaceState?.(null, "", `${window.location.pathname}${window.location.search}#worker-dashboard`);
+            }
+            openModal("authModal");
             openWorkerDashboard();
           } catch (uiErr) {
             console.warn("[JKFixHub Auth] Worker dashboard navigation notice:", uiErr?.message || uiErr);
           }
           setAuthFeedback("Signed in successfully.", false);
+          try {
+            updateRoleBasedHome();
+          } catch (_) {}
         } else {
           try {
             closeModal("authModal");
+            if (typeof window !== "undefined") {
+              window.history?.replaceState?.(null, "", `${window.location.pathname}${window.location.search}#requests`);
+            }
           } catch (uiErr) {
             console.warn("[JKFixHub Auth] Modal close notice:", uiErr?.message || uiErr);
           }
@@ -1432,11 +1549,9 @@ export async function signInUser({ email, password }) {
           try {
             updateRoleBasedHome();
           } catch (_) {}
-          if (typeof window !== "undefined" && (window.location.hash === "#requests" || window.location.hash === "#my-requests")) {
-            try {
-              openCustomerRequests();
-            } catch (_) {}
-          }
+          try {
+            await openCustomerRequests();
+          } catch (_) {}
         }
 
         return { success: true, role: currentUser.role };
@@ -1769,9 +1884,34 @@ export async function signOutUser() {
       }
     }
 
+    clearPersistedSession();
     demoLogout();
-    updateAccountControls();
+
+    closeModal("authModal");
+    const modalEl = document.querySelector("#authModal .modal");
+    if (modalEl?.classList.contains("worker-dashboard-open")) {
+      modalEl.classList.remove("worker-dashboard-open");
+    }
+    closeModal("customerRequestsModal");
+    closeModal("customerRequestDetailsModal");
+    closeModal("chatModal");
+    closeModal("adminDashboardModal");
+
     clearAuthHash();
+    if (typeof window !== "undefined" && window.history?.replaceState) {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    }
+
+    try {
+      const navModule = await import("./navigation.js");
+      if (typeof navModule.setView === "function") navModule.setView("home");
+    } catch (_) {}
+
+    try {
+      updateRoleBasedHome();
+    } catch (_) {}
+
+    updateAccountControls();
     showSignedOutView(false);
     setAuthFeedback("Signed out.", false);
   } finally {
@@ -1792,7 +1932,7 @@ export function demoLogin(role) {
   const createdAt = new Date().toISOString();
 
   if (role === "customer") {
-    setCurrentUser({
+    const custUser = {
       id: "demo-customer",
       firebaseUid: null,
       role: "customer",
@@ -1805,15 +1945,21 @@ export function demoLogin(role) {
       isVerified: false,
       authProvider: "demo",
       createdAt
-    });
+    };
+    setCurrentUser(custUser);
+    persistSessionUser(custUser);
+    resolveAuthReady(custUser);
     updateAccountControls();
+    try {
+      updateRoleBasedHome();
+    } catch (_) {}
     return true;
   }
 
   if (role === "worker") {
     const worker = getWorkerById(1);
     if (!worker) throw new Error("The demo worker account is unavailable.");
-    setCurrentUser({
+    const wrkUser = {
       id: `demo-worker-${worker.id}`,
       firebaseUid: null,
       role: "worker",
@@ -1827,8 +1973,14 @@ export function demoLogin(role) {
       isVerified: true,
       authProvider: "demo",
       createdAt
-    });
+    };
+    setCurrentUser(wrkUser);
+    persistSessionUser(wrkUser);
+    resolveAuthReady(wrkUser);
     updateAccountControls();
+    try {
+      updateRoleBasedHome();
+    } catch (_) {}
     return true;
   }
 
@@ -3204,44 +3356,86 @@ export function initializeAuth() {
                 });
 
                 setCurrentUser(currentUser);
+                persistSessionUser(currentUser);
                 setAuthStatus(AUTH_STATUS.AUTHENTICATED);
+                resolveAuthReady(currentUser);
                 recordSecurityEvent("AUTH_STATE_CHANGED", currentUser.role);
                 updateAccountControls();
+                try {
+                  updateRoleBasedHome();
+                } catch (_) {}
 
                 if (typeof window !== "undefined") {
-                  if (currentUser.role === "admin" && (window.location.hash === "#admin" || window.location.hash === "#admin-dashboard")) {
-                    openAdminDashboard();
-                  } else if (currentUser.role === "worker" && (window.location.hash === "#worker-dashboard" || window.location.hash === "#dashboard")) {
-                    openModal("authModal");
-                    openWorkerDashboard();
-                  } else if (currentUser.role === "customer" && (window.location.hash === "#requests" || window.location.hash === "#my-requests")) {
-                    openCustomerRequests();
+                  const currentHash = (window.location.hash || "").toLowerCase();
+                  if (currentUser.role === "admin") {
+                    if (currentHash === "#admin" || currentHash === "#admin-dashboard") {
+                      closeModal("authModal");
+                      openAdminDashboard();
+                    }
+                  } else if (currentUser.role === "worker") {
+                    if (currentHash === "#worker-dashboard" || currentHash === "#dashboard") {
+                      closeModal("customerRequestsModal");
+                      closeModal("customerRequestDetailsModal");
+                      openModal("authModal");
+                      openWorkerDashboard();
+                    } else if (currentHash === "#requests" || currentHash === "#my-requests") {
+                      recordSecurityEvent("UNAUTHORIZED_UI_ACTION", "worker");
+                      window.history?.replaceState?.(null, "", `${window.location.pathname}${window.location.search}#worker-dashboard`);
+                      closeModal("customerRequestsModal");
+                      closeModal("customerRequestDetailsModal");
+                      openModal("authModal");
+                      openWorkerDashboard();
+                    }
+                  } else if (currentUser.role === "customer") {
+                    if (currentHash === "#requests" || currentHash === "#my-requests") {
+                      closeModal("authModal");
+                      await openCustomerRequests();
+                    } else if (currentHash === "#worker-dashboard" || currentHash === "#dashboard") {
+                      recordSecurityEvent("UNAUTHORIZED_UI_ACTION", "customer");
+                      window.history?.replaceState?.(null, "", `${window.location.pathname}${window.location.search}#requests`);
+                      const modal = document.querySelector("#authModal .modal");
+                      if (modal?.classList.contains("worker-dashboard-open")) {
+                        modal.classList.remove("worker-dashboard-open");
+                      }
+                      closeModal("authModal");
+                      await openCustomerRequests();
+                    }
                   }
                 }
               } else {
+                clearPersistedSession();
                 const current = getCurrentUser();
                 if (current?.authProvider === "firebase") {
                   clearCurrentUser();
                   recordSecurityEvent("AUTH_STATE_CHANGED", null);
                   updateAccountControls();
+                  try {
+                    updateRoleBasedHome();
+                  } catch (_) {}
                   // Guard: do NOT reset panel or close modal if user is actively filling out a registration, login, or password reset form
                   const isInteractingWithForm = ["signin", "customer-register", "worker-register", "password-reset"].includes(activeAuthTab);
                   if (!isInteractingWithForm) {
                     showSignedOutView(false);
                   }
                 }
+                resolveAuthReady(null);
               }
             } catch (observerErr) {
               console.warn("[JKFixHub Auth] Auth observer handler notice:", observerErr?.message || observerErr);
+              resolveAuthReady(getCurrentUser());
             }
           },
           (authError) => {
             console.warn("[JKFixHub Auth] onAuthStateChanged background notice:", authError?.message || authError);
+            resolveAuthReady(getCurrentUser());
           }
         );
+      } else {
+        resolveAuthReady(getCurrentUser());
       }
     } catch (e) {
       console.warn("[JKFixHub Auth] Background Firebase observer setup notice:", e?.message || e);
+      resolveAuthReady(getCurrentUser());
     }
   })();
 }

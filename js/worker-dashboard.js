@@ -812,6 +812,14 @@ export function openWorkerDashboard() {
   const worker = getActiveWorker();
   if (!worker) return false;
 
+  if (typeof window !== "undefined" && window.location.hash !== "#worker-dashboard") {
+    if (window.history?.replaceState) {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#worker-dashboard`);
+    } else {
+      window.location.hash = "#worker-dashboard";
+    }
+  }
+
   document.getElementById("authRoleSelection").hidden = true;
   document.getElementById("authAccountView").hidden = true;
   document.getElementById("workerDashboardView").hidden = false;
@@ -879,6 +887,13 @@ export function initializeWorkerDashboard() {
   if (authModal) {
     authModal.addEventListener("modal:close", () => {
       stopWorkerDashboardSubscription();
+      const modal = document.querySelector("#authModal .modal");
+      if (modal?.classList.contains("worker-dashboard-open")) {
+        modal.classList.remove("worker-dashboard-open");
+      }
+      if (typeof window !== "undefined" && (window.location.hash === "#worker-dashboard" || window.location.hash === "#dashboard")) {
+        window.history?.replaceState?.(null, "", `${window.location.pathname}${window.location.search}`);
+      }
     });
   }
 

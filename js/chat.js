@@ -29,6 +29,15 @@ let chatMessagesUnsubscribe = null;
 let feedbackTimer = null;
 const renderedMessageIds = new Set();
 let hasLoadedInitialConversation = false;
+let activeChatOpToken = 0;
+let chatLoadingTimer = null;
+
+function clearChatLoadingTimer() {
+  if (chatLoadingTimer) {
+    clearTimeout(chatLoadingTimer);
+    chatLoadingTimer = null;
+  }
+}
 
 const CUSTOMER_QUICK_MESSAGES = [
   "When can you visit?",
@@ -256,6 +265,58 @@ function buildMessage(message, currentUid, isNew = false, allMessages = []) {
   return article;
 }
 
+function buildChatEmptyState() {
+  const container = document.createElement("div");
+  container.className = "chat-empty-state";
+
+  const iconEl = document.createElement("div");
+  iconEl.className = "chat-empty-icon";
+  iconEl.setAttribute("aria-hidden", "true");
+  setTextContent(iconEl, "💬");
+
+  const titleEl = document.createElement("h3");
+  titleEl.className = "chat-empty-title";
+  setTextContent(titleEl, "Direct Conversation");
+
+  const descEl = document.createElement("p");
+  descEl.className = "chat-empty-desc";
+  setTextContent(descEl, "Send a message or pick a suggestion below to discuss your service details securely.");
+
+  container.append(iconEl, titleEl, descEl);
+  return container;
+}
+
+function buildChatErrorState(title, desc, retryRequestId = null, icon = "⚠️") {
+  const container = document.createElement("div");
+  container.className = "chat-error-state";
+
+  const iconEl = document.createElement("div");
+  iconEl.className = `chat-empty-icon${icon === "⚠️" || icon === "✕" || icon === "🔒" ? " chat-error-icon" : ""}`;
+  iconEl.setAttribute("aria-hidden", "true");
+  setTextContent(iconEl, icon);
+
+  const titleEl = document.createElement("h3");
+  titleEl.className = "chat-empty-title";
+  setTextContent(titleEl, title);
+
+  const descEl = document.createElement("p");
+  descEl.className = "chat-empty-desc";
+  setTextContent(descEl, desc);
+
+  container.append(iconEl, titleEl, descEl);
+
+  if (retryRequestId) {
+    const retryBtn = document.createElement("button");
+    retryBtn.type = "button";
+    retryBtn.className = "button primary btn-chat-retry";
+    retryBtn.dataset.retryChat = retryRequestId;
+    setTextContent(retryBtn, "Retry Connection");
+    container.append(retryBtn);
+  }
+
+  return container;
+}
+
 function renderMessages(messages) {
   const messageList = document.getElementById("chatMessages");
   if (!messageList) return;
@@ -265,19 +326,7 @@ function renderMessages(messages) {
   if (!messages || messages.length === 0) {
     renderedMessageIds.clear();
     hasLoadedInitialConversation = true;
-    const emptyState = document.createElement("div");
-    emptyState.className = "chat-empty-state";
-    emptyState.innerHTML = `
-      <div class="chat-empty-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="36" height="36">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-          <path d="M8 10h.01M12 10h.01M16 10h.01"></path>
-        </svg>
-      </div>
-      <h3 class="chat-empty-title">Direct Conversation</h3>
-      <p class="chat-empty-desc">Send a message or pick a suggestion below to discuss your service details securely.</p>
-    `;
-    messageList.replaceChildren(emptyState);
+    messageList.replaceChildren(buildChatEmptyState());
     const feedbackEl = document.getElementById("chatFeedback");
     const currentFeedback = feedbackEl ? feedbackEl.textContent : "";
     if (!currentFeedback || currentFeedback === "Connecting to conversation...") {
@@ -324,6 +373,8 @@ export function getCurrentChatConversation() {
 }
 
 export function closeChat(returnToList = true) {
+  activeChatOpToken++;
+  clearChatLoadingTimer();
   if (chatMessagesUnsubscribe) {
     try {
       chatMessagesUnsubscribe();
@@ -380,6 +431,9 @@ export function closeChat(returnToList = true) {
 
 export async function openChatForRequest(requestId) {
   if (!requestId) return false;
+  const currentToken = ++activeChatOpToken;
+  clearChatLoadingTimer();
+
   const role = getUserRole();
   if (role !== "customer" && role !== "worker") {
     recordSecurityEvent("CHAT_ACCESS_DENIED", role);
@@ -395,64 +449,19 @@ export async function openChatForRequest(requestId) {
   }
   const currentUid = currentUser.firebaseUid || currentUser.id;
 
-  // 1. Resolve request from Firestore ONLY (Fail-closed: no in-memory or demo fallback)
-  const request = await getFirestoreRequestById(requestId);
-
-  // 2. Chat access validation (Accepted allows messaging; Completed/Cancelled allows read-only history)
-  if (!request) {
-    recordSecurityEvent("CHAT_ACCESS_DENIED", role);
-    setChatFeedback("Request details could not be found.");
-    return false;
-  }
-
-  if (request.status === "Pending") {
-    recordSecurityEvent("CHAT_ACCESS_DENIED", role);
-    setChatFeedback("Chat is locked while request is Pending review.");
-    return false;
-  }
-
-  if (request.status === "Rejected") {
-    recordSecurityEvent("CHAT_ACCESS_DENIED", role);
-    setChatFeedback("Chat is unavailable because this request was declined.");
-    return false;
-  }
-
-  const isClosedRequest = request.status === "Completed" || request.status === "Cancelled";
-  if (!isClosedRequest && request.status !== "Accepted") {
-    recordSecurityEvent("CHAT_ACCESS_DENIED", role);
-    setChatFeedback(`Chat is locked (request is ${request.status}). Available only when Accepted.`);
-    return false;
-  }
-
-  // 3. Current authenticated user must be either request.customerId or request.workerUid
-  const customerId = request.customerId || request.customerUid;
-  const workerUid = request.workerUid || request.workerId;
-  if (currentUid !== customerId && currentUid !== workerUid) {
-    recordSecurityEvent("CHAT_ACCESS_DENIED", role);
-    setChatFeedback("Unauthorized: You are not a participant in this request.");
-    return false;
-  }
-
-  // 4. Clean up any previous chat listener
+  // Clean up any previous chat listener immediately before starting new conversation
   if (chatMessagesUnsubscribe) {
     try {
       chatMessagesUnsubscribe();
     } catch (_) {}
     chatMessagesUnsubscribe = null;
   }
-
-  // 5. Ensure private Firestore conversation exists (Fail-closed)
-  setChatFeedback("Connecting to conversation...");
-  const convResult = await getOrCreateFirestoreConversation(request, currentUid);
-  if (!convResult?.success || !convResult.conversation) {
-    setChatFeedback(convResult?.error || "Could not open chat session.");
-    return false;
-  }
-
-  currentChatConversation = convResult.conversation;
+  currentChatConversation = null;
   returnTo = role;
+  renderedMessageIds.clear();
+  hasLoadedInitialConversation = false;
 
-  // 6. Dismiss any open source modals
+  // Dismiss any open source modals and open chatModal immediately in loading state
   if (role === "customer") {
     closeModal("customerRequestsModal");
     closeModal("customerRequestDetailsModal");
@@ -461,7 +470,139 @@ export async function openChatForRequest(requestId) {
     closeModal("authModal");
   }
 
-  // 7. Populate header
+  const messageList = document.getElementById("chatMessages");
+  if (messageList) {
+    const loadingState = document.createElement("div");
+    loadingState.className = "chat-loading-state";
+    loadingState.setAttribute("role", "status");
+    loadingState.setAttribute("aria-live", "polite");
+    loadingState.innerHTML = `
+      <span class="btn-spinner" aria-hidden="true"></span>
+      <span>Connecting to secure conversation...</span>
+    `;
+    messageList.replaceChildren(loadingState);
+  }
+
+  const form = document.getElementById("chatForm");
+  if (form) form.reset();
+  updateMessageCounter();
+  const input = document.getElementById("chatMessageInput");
+  const sendBtn = document.querySelector("#chatForm button[type='submit']");
+  if (input) {
+    input.disabled = true;
+    input.placeholder = "Connecting to conversation...";
+  }
+  if (sendBtn) sendBtn.disabled = true;
+  setChatFeedback("Connecting to conversation...");
+
+  openModal("chatModal");
+
+  // Fetch request with timeout protection
+  let request = null;
+  try {
+    const fetchPromise = getFirestoreRequestById(requestId);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Request fetch timeout")), 8000)
+    );
+    request = await Promise.race([fetchPromise, timeoutPromise]);
+  } catch (err) {
+    console.warn(`[JKFixHub Chat] Error fetching request #${requestId}:`, err?.message || err);
+  }
+
+  if (currentToken !== activeChatOpToken) return false;
+
+  if (!request) {
+    recordSecurityEvent("CHAT_ACCESS_DENIED", role);
+    setChatFeedback("Could not load request details. Check your connection.", "error");
+    if (messageList) {
+      messageList.replaceChildren(
+        buildChatErrorState("Unable to Load Conversation", "Request details could not be found or connection timed out.", requestId, "⚠️")
+      );
+    }
+    return false;
+  }
+
+  if (request.status === "Pending") {
+    recordSecurityEvent("CHAT_ACCESS_DENIED", role);
+    setChatFeedback("Chat is locked while request is Pending review.", "error");
+    if (messageList) {
+      messageList.replaceChildren(
+        buildChatErrorState("Request Pending Review", "Chat will unlock as soon as the service request is accepted.", null, "⏳")
+      );
+    }
+    return false;
+  }
+
+  if (request.status === "Rejected") {
+    recordSecurityEvent("CHAT_ACCESS_DENIED", role);
+    setChatFeedback("Chat is unavailable because this request was declined.", "error");
+    if (messageList) {
+      messageList.replaceChildren(
+        buildChatErrorState("Request Declined", "Chat is unavailable because this service request was declined.", null, "✕")
+      );
+    }
+    return false;
+  }
+
+  const isClosedRequest = request.status === "Completed" || request.status === "Cancelled";
+  if (!isClosedRequest && request.status !== "Accepted") {
+    recordSecurityEvent("CHAT_ACCESS_DENIED", role);
+    setChatFeedback(`Chat is locked (request is ${request.status}). Available only when Accepted.`, "error");
+    if (messageList) {
+      messageList.replaceChildren(
+        buildChatErrorState("Chat Locked", "Messaging is only available when the request is Accepted.", null, "🔒")
+      );
+    }
+    return false;
+  }
+
+  // Robust participant verification
+  const customerId = request.customerId || request.customerUid;
+  const workerUid = request.workerUid || request.workerId;
+  const isParticipant =
+    currentUid === customerId ||
+    currentUid === workerUid ||
+    (currentUser.workerId && String(currentUser.workerId) === String(request.workerId)) ||
+    (currentUser.firebaseUid && (currentUser.firebaseUid === customerId || currentUser.firebaseUid === workerUid));
+
+  if (!isParticipant) {
+    recordSecurityEvent("CHAT_ACCESS_DENIED", role);
+    setChatFeedback("Unauthorized: You are not a participant in this request.", "error");
+    if (messageList) {
+      messageList.replaceChildren(
+        buildChatErrorState("Access Restricted", "You are not an authorized participant in this request.", null, "🔒")
+      );
+    }
+    return false;
+  }
+
+  // Get or create conversation with timeout protection
+  let convResult = null;
+  try {
+    const convPromise = getOrCreateFirestoreConversation(request, currentUid);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Conversation setup timeout")), 8000)
+    );
+    convResult = await Promise.race([convPromise, timeoutPromise]);
+  } catch (err) {
+    console.warn(`[JKFixHub Chat] Error setting up conversation for #${requestId}:`, err?.message || err);
+  }
+
+  if (currentToken !== activeChatOpToken) return false;
+
+  if (!convResult?.success || !convResult.conversation) {
+    setChatFeedback(convResult?.error || "Could not open chat session.", "error");
+    if (messageList) {
+      messageList.replaceChildren(
+        buildChatErrorState("Connection Error", convResult?.error || "Could not establish private chat session. Please try again.", requestId, "⚠️")
+      );
+    }
+    return false;
+  }
+
+  currentChatConversation = convResult.conversation;
+
+  // Populate header
   const isCust = role === "customer";
   const headerName = isCust
     ? (currentChatConversation.workerName || "Worker")
@@ -485,15 +626,8 @@ export async function openChatForRequest(requestId) {
     isClosed ? `Request ${request.status} • Closed` : `Request ${request.status || "Accepted"}`
   );
 
-  // 8. Configure composer & quick response chips
-  const form = document.getElementById("chatForm");
-  if (form) form.reset();
-  updateMessageCounter();
-
-  const input = document.getElementById("chatMessageInput");
-  const sendBtn = document.querySelector("#chatForm button[type='submit']");
+  // Configure composer
   const quickResponses = document.getElementById("chatQuickResponses");
-
   if (isClosed) {
     if (input) {
       input.disabled = true;
@@ -506,51 +640,44 @@ export async function openChatForRequest(requestId) {
     if (input) {
       input.disabled = false;
       input.placeholder = "Write a message...";
+      input.focus();
     }
     if (sendBtn) sendBtn.disabled = false;
     renderQuickMessages(role);
     setChatFeedback("Direct communication channel is open.");
   }
 
-  // 9. Open modal and focus input
-  renderedMessageIds.clear();
-  hasLoadedInitialConversation = false;
+  // Set fallback message loading timeout (8s) so spinner never hangs indefinitely
+  chatLoadingTimer = setTimeout(() => {
+    if (currentToken === activeChatOpToken && !hasLoadedInitialConversation) {
+      const list = document.getElementById("chatMessages");
+      if (list && list.querySelector(".chat-loading-state")) {
+        list.replaceChildren(
+          buildChatErrorState("Loading Taking Longer Than Usual", "Could not load recent messages. Please check your connection.", requestId, "⚠️")
+        );
+        setChatFeedback("Connection issue: taking longer than usual.", "error");
+      }
+    }
+  }, 8000);
 
-  const messageList = document.getElementById("chatMessages");
-  if (messageList) {
-    const loadingState = document.createElement("div");
-    loadingState.className = "chat-loading-state";
-    loadingState.setAttribute("role", "status");
-    loadingState.setAttribute("aria-live", "polite");
-    loadingState.innerHTML = `
-      <span class="btn-spinner" aria-hidden="true"></span>
-      <span>Loading conversation...</span>
-    `;
-    messageList.replaceChildren(loadingState);
-  }
-
-  openModal("chatModal");
-  if (input && !isClosed) input.focus();
-
-  // 10. Subscribe to real-time Firestore messages
+  // Subscribe to real-time messages
   chatMessagesUnsubscribe = await subscribeToFirestoreChatMessages(
     currentChatConversation.id,
     (messages) => {
+      if (currentToken !== activeChatOpToken) return;
+      clearChatLoadingTimer();
       renderMessages(messages);
     },
     (err) => {
+      if (currentToken !== activeChatOpToken) return;
+      clearChatLoadingTimer();
       console.warn("[JKFixHub Chat] Message subscription notice:", err);
-      setChatFeedback("Connection issue: could not load recent messages.");
+      setChatFeedback("Connection issue: could not load recent messages.", "error");
       const list = document.getElementById("chatMessages");
       if (list && (!list.children.length || list.querySelector(".chat-loading-state"))) {
-        const errorState = document.createElement("div");
-        errorState.className = "chat-error-state";
-        errorState.innerHTML = `
-          <div class="chat-empty-icon chat-error-icon" aria-hidden="true">⚠️</div>
-          <h3 class="chat-empty-title">Unable to Load Messages</h3>
-          <p class="chat-empty-desc">Check your network connection and try again.</p>
-        `;
-        list.replaceChildren(errorState);
+        list.replaceChildren(
+          buildChatErrorState("Unable to Load Messages", "Check your network connection and try again.", requestId, "⚠️")
+        );
       }
     }
   );
@@ -679,6 +806,15 @@ function handleChatActions(event) {
     return;
   }
 
+  const retryBtn = target.closest("[data-retry-chat]");
+  if (retryBtn) {
+    const retryId = retryBtn.dataset.retryChat;
+    if (retryId) {
+      openChatForRequest(retryId);
+    }
+    return;
+  }
+
   const customerChatButton = target.closest("[data-open-customer-chat]");
   if (customerChatButton) {
     openChatForRequest(customerChatButton.dataset.openCustomerChat);
@@ -727,6 +863,13 @@ export function initializeChat() {
     const newHeight = Math.min(input.scrollHeight, 120);
     input.style.height = `${Math.max(newHeight, 42)}px`;
   });
+
+  const chatModalEl = document.getElementById("chatModal");
+  if (chatModalEl) {
+    chatModalEl.addEventListener("modal:close", () => {
+      closeChat(false);
+    });
+  }
 
   // Support Enter to send and Shift+Enter for newline
   input.addEventListener("keydown", (event) => {

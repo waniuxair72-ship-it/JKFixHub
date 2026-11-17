@@ -3008,6 +3008,35 @@ body #webgl-background {
   margin-right: 0;
 }
 
+.btn-chat-retry {
+  margin-top: 14px;
+  padding: 8px 18px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  background: var(--brand-primary, #0284c7);
+  color: #fff;
+  border: none;
+  box-shadow: 0 2px 8px rgba(2, 132, 199, 0.25);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.btn-chat-retry:hover {
+  background: #0369a1;
+  transform: translateY(-1px);
+}
+
+[data-theme="dark"] .btn-chat-retry {
+  background: #38bdf8;
+  color: #0f172a;
+  box-shadow: 0 2px 8px rgba(56, 189, 248, 0.25);
+}
+
+[data-theme="dark"] .btn-chat-retry:hover {
+  background: #7dd3fc;
+}
+
 .chat-modal .chat-feedback,
 .chat-feedback {
   min-height: 0;

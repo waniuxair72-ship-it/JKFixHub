@@ -370,13 +370,22 @@ export async function initializeFirebaseClient() {
       const { initializeApp, getApps, getApp } = await import(
         "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js"
       );
-      const { getAuth, connectAuthEmulator } = await import(
+      const { getAuth, connectAuthEmulator, setPersistence, browserLocalPersistence } = await import(
         "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js"
       );
 
       const apps = getApps();
       initializedApp = apps.length > 0 ? getApp() : initializeApp(config);
       initializedAuth = getAuth(initializedApp);
+
+      // Ensure browser local persistence so authenticated sessions survive reloads & new tabs
+      if (typeof setPersistence === "function" && browserLocalPersistence) {
+        try {
+          await setPersistence(initializedAuth, browserLocalPersistence);
+        } catch (persErr) {
+          console.warn("[JKFixHub Auth] Local persistence setup notice:", persErr?.message || persErr);
+        }
+      }
 
       // Synchronously connect to Auth Emulator immediately after getAuth()
       if (shouldConnectToEmulator()) {

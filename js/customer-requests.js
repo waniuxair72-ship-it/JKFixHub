@@ -294,6 +294,13 @@ function renderCustomerRequests() {
 
 export async function openCustomerRequests() {
   if (!canViewCustomerRequests()) return false;
+  if (typeof window !== "undefined" && window.location.hash !== "#requests") {
+    if (window.history?.replaceState) {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#requests`);
+    } else {
+      window.location.hash = "#requests";
+    }
+  }
   await syncCustomerRequestsFromFirestore();
   if (!renderCustomerRequests()) return false;
   document.getElementById("nav")?.classList.remove("open");
@@ -536,6 +543,16 @@ export function initializeCustomerRequests() {
       window.setTimeout(renderCustomerSummary, 0);
     }
   });
+  const custModal = document.getElementById("customerRequestsModal");
+  if (custModal) {
+    custModal.addEventListener("modal:close", () => {
+      stopCustomerDetailsSubscription();
+      if (typeof window !== "undefined" && (window.location.hash === "#requests" || window.location.hash === "#my-requests")) {
+        window.history?.replaceState?.(null, "", `${window.location.pathname}${window.location.search}`);
+      }
+    });
+  }
+
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     const shouldReturn = document.getElementById("customerRequestDetailsModal").classList.contains("open") ||

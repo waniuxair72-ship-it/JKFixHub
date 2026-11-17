@@ -27,6 +27,7 @@ import { openModal } from "./modals.js";
 import { setView } from "./navigation.js";
 import { setTextContent } from "./security.js";
 import { initializeFirestoreClient, getFirestoreMethods } from "./firebase-config.js";
+import { isAuthReady, whenAuthReady, getPersistedSessionRole } from "./auth.js";
 
 let initialized = false;
 let isCustomerSyncing = false;
@@ -319,7 +320,24 @@ export function updateRoleBasedHome() {
     btn.hidden = authed;
   });
 
-  if (!authed || role === "admin") {
+  if (!authed) {
+    if (!isAuthReady() && getPersistedSessionRole()) {
+      // Session restoring: avoid flash of public hero; wait for authoritative auth
+      publicHero.hidden = true;
+      customerHome.hidden = true;
+      workerHome.hidden = true;
+      whenAuthReady().then(() => {
+        updateRoleBasedHome();
+      });
+      return;
+    }
+    publicHero.hidden = false;
+    customerHome.hidden = true;
+    workerHome.hidden = true;
+    return;
+  }
+
+  if (role === "admin") {
     publicHero.hidden = false;
     customerHome.hidden = true;
     workerHome.hidden = true;
