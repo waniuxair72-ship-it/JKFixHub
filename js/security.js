@@ -154,8 +154,46 @@ export function validateDescription(value) {
   return validateText(value, { minLength: 5, maxLength: 1200, allowNewlines: true });
 }
 
+export const REVIEW_EXPERIENCE_TAGS = Object.freeze([
+  "Punctual",
+  "Professional",
+  "Good communication",
+  "Quality work",
+  "Fair pricing",
+  "Friendly behaviour"
+]);
+
+export const REVIEW_RATING_LABELS = Object.freeze({
+  1: "Poor",
+  2: "Fair",
+  3: "Good",
+  4: "Very Good",
+  5: "Excellent"
+});
+
+export const REVIEW_EDIT_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+export function sanitizeReviewTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  const allowedMap = new Map(REVIEW_EXPERIENCE_TAGS.map((t) => [t.toLowerCase(), t]));
+  const result = [];
+  const seen = new Set();
+  for (const tag of tags) {
+    if (typeof tag !== "string") continue;
+    const canonical = allowedMap.get(tag.trim().toLowerCase());
+    if (canonical && !seen.has(canonical)) {
+      seen.add(canonical);
+      result.push(canonical);
+    }
+  }
+  return result.slice(0, REVIEW_EXPERIENCE_TAGS.length);
+}
+
 export function validateReview(value) {
-  return validateText(value, { minLength: 5, maxLength: 1200, allowNewlines: true });
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return true; // Optional written comment
+  return validateText(trimmed, { minLength: 1, maxLength: 1200, allowNewlines: true });
 }
 
 export function validateReport(value) {
@@ -362,7 +400,7 @@ export function getSafeErrorMessage(code) {
     invalidLocation: "Enter an area between 2 and 160 characters.",
     invalidService: "Choose a valid service for this worker.",
     invalidRequest: "We could not prepare this request. Please try again.",
-    invalidReview: "Enter a review between 5 and 1,200 characters.",
+    invalidReview: "Review comment must be 1,200 characters or fewer without HTML tags.",
     invalidRating: "Select a star rating from 1 to 5.",
     duplicateReview: "A review has already been submitted for this request.",
     invalidReport: "Enter a report description between 10 and 2,000 characters.",

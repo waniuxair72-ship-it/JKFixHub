@@ -147,7 +147,10 @@ function renderWorkersTab(container) {
     setTextContent(tdDistrict, worker.district);
 
     const tdRating = document.createElement("td");
-    setTextContent(tdRating, `${worker.rating} ★`);
+    const wRevCount = typeof worker.reviewCount === "number" && worker.reviewCount > 0 ? worker.reviewCount : 0;
+    const wRatingNum = Number(worker.rating);
+    const hasRating = wRevCount > 0 && !Number.isNaN(wRatingNum) && wRatingNum >= 1 && wRatingNum <= 5;
+    setTextContent(tdRating, hasRating ? `${wRatingNum.toFixed(1)} ★ (${wRevCount})` : "New Worker · No ratings yet");
 
     const tdAvail = document.createElement("td");
     setTextContent(tdAvail, worker.availability || "Available");
@@ -391,7 +394,8 @@ function renderReviewsTab(container) {
     setTextContent(author, `${review.customerName} → ${review.workerName}`);
     const stars = document.createElement("span");
     stars.className = "admin-review-stars";
-    setTextContent(stars, ` · ${review.rating} ★`);
+    const revRatingNum = Number(review.rating);
+    setTextContent(stars, Number.isInteger(revRatingNum) && revRatingNum >= 1 && revRatingNum <= 5 ? ` · ${revRatingNum}.0 ★` : "");
     titleWrap.append(author, stars);
 
     const badgeWrap = document.createElement("div");

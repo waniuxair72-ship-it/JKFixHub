@@ -207,7 +207,11 @@ function renderSelectedWorker(worker) {
   details.className = "request-worker-details";
   setTextContent(name, worker?.name || "Professional");
   setTextContent(service, worker?.service || "");
-  const ratingStr = worker && worker.rating ? `${worker.rating} ★` : "No ratings yet";
+  const wCount = typeof worker?.reviewCount === "number" && worker.reviewCount > 0 ? worker.reviewCount : 0;
+  const wRatingNum = Number(worker?.rating);
+  const ratingStr = wCount > 0 && !Number.isNaN(wRatingNum) && wRatingNum >= 1 && wRatingNum <= 5
+    ? `${wRatingNum.toFixed(1)} ★ (${wCount})`
+    : "New Worker · No ratings yet";
   setTextContent(districtRating, `${worker?.district || "J&K"} · ${ratingStr}`);
   details.append(name, service, districtRating);
   container.append(avatar, details);

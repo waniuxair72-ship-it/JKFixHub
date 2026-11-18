@@ -1239,7 +1239,10 @@ async function renderWorkersView(container) {
       row.appendChild(tdDist);
 
       const tdRating = document.createElement("td");
-      tdRating.textContent = w.rating ? `★ ${w.rating}` : "—";
+      const wRevCount = typeof w.reviewCount === "number" && w.reviewCount > 0 ? w.reviewCount : 0;
+      const wRatingNum = Number(w.rating);
+      const hasValidWorkerRating = wRevCount > 0 && !Number.isNaN(wRatingNum) && wRatingNum >= 1 && wRatingNum <= 5;
+      tdRating.textContent = hasValidWorkerRating ? `★ ${wRatingNum.toFixed(1)} (${wRevCount})` : "No ratings yet";
       row.appendChild(tdRating);
 
       const tdStatus = document.createElement("td");
@@ -1289,7 +1292,7 @@ async function renderWorkersView(container) {
         grid.appendChild(createDetailItem("Full Name", w.name));
         grid.appendChild(createDetailItem("Service Category", Array.isArray(w.services) && w.services.length ? w.services.join(", ") : (w.service || "—")));
         grid.appendChild(createDetailItem("District Coverage", w.district || "—"));
-        grid.appendChild(createDetailItem("Rating & Reviews", w.rating ? `★ ${w.rating} (${w.reviewCount || 0} reviews)` : "No ratings yet"));
+        grid.appendChild(createDetailItem("Rating & Reviews", hasValidWorkerRating ? `★ ${wRatingNum.toFixed(1)} (${wRevCount} ${wRevCount === 1 ? "review" : "reviews"})` : "New Worker · No ratings yet"));
         grid.appendChild(createDetailItem("Moderation Status", w.status || "pending"));
         grid.appendChild(createDetailItem("Verification", w.isVerified ? "Verified" : "Pending Verification"));
         grid.appendChild(createDetailItem("Service Requests", `${workerReqs.length} total (${completedCount} completed · ${acceptedCount} active · ${pendingCount} pending · ${rejectedCount} rejected)`, true));
@@ -2693,7 +2696,18 @@ async function renderReportsView(container) {
 // 6. TRUST & SAFETY: Reviews
 // ----------------------------------------------------------------------------
 async function renderReviewsView(container) {
-  const reviews = await getAdminReviews();
+  const [reviews, allReports] = await Promise.all([
+    getAdminReviews(),
+    getAdminReports().catch(() => [])
+  ]);
+  const reportsByReviewId = new Map();
+  for (const rep of allReports || []) {
+    if (rep && rep.targetType === "review" && rep.targetId) {
+      const key = String(rep.targetId);
+      if (!reportsByReviewId.has(key)) reportsByReviewId.set(key, []);
+      reportsByReviewId.get(key).push(rep);
+    }
+  }
   container.replaceChildren();
 
   // Header
@@ -2813,7 +2827,7 @@ async function renderReviewsView(container) {
 
     const thead = document.createElement("thead");
     const headRow = document.createElement("tr");
-    ["ID", "Customer", "Worker", "Rating", "Review Text", "Status", "Actions"].forEach((txt) => {
+    ["Request / ID", "Customer", "Worker", "Rating", "Review & Tags", "Reports", "Submitted", "Status", "Actions"].forEach((txt) => {
       const th = document.createElement("th");
       th.textContent = txt;
       headRow.appendChild(th);
@@ -2824,9 +2838,14 @@ async function renderReviewsView(container) {
     const tbody = document.createElement("tbody");
     for (const rev of filtered) {
       const row = document.createElement("tr");
+      const linkedReports = reportsByReviewId.get(String(rev.id)) || [];
+      const ratingNum = Number(rev.rating);
+      const validRatingStr = Number.isInteger(ratingNum) && ratingNum >= 1 && ratingNum <= 5
+        ? `★ ${ratingNum}.0`
+        : "—";
 
       const tdId = document.createElement("td");
-      tdId.textContent = String(rev.id);
+      tdId.textContent = String(rev.requestId || rev.id);
       row.appendChild(tdId);
 
       const tdCust = document.createElement("td");
@@ -2838,14 +2857,24 @@ async function renderReviewsView(container) {
       row.appendChild(tdWorker);
 
       const tdRating = document.createElement("td");
-      tdRating.textContent = `★ ${rev.rating || 5}`;
+      tdRating.textContent = validRatingStr;
       row.appendChild(tdRating);
 
       const tdText = document.createElement("td");
-      const preview = String(rev.text || "—");
-      tdText.textContent = preview.length > 50 ? `${preview.substring(0, 50)}...` : preview;
+      const rawText = String(rev.text || "").trim();
+      const tagSummary = Array.isArray(rev.tags) && rev.tags.length > 0 ? `[${rev.tags.join(", ")}] ` : "";
+      const preview = `${tagSummary}${rawText || "No written commentary"}`;
+      tdText.textContent = preview.length > 56 ? `${preview.substring(0, 56)}...` : preview;
       tdText.title = preview;
       row.appendChild(tdText);
+
+      const tdReports = document.createElement("td");
+      tdReports.textContent = linkedReports.length > 0 ? `${linkedReports.length} report${linkedReports.length === 1 ? "" : "s"}` : "0";
+      row.appendChild(tdReports);
+
+      const tdDate = document.createElement("td");
+      tdDate.textContent = formatDateTime(rev.createdAt);
+      row.appendChild(tdDate);
 
       const tdStatus = document.createElement("td");
       const stPill = document.createElement("span");
@@ -2858,7 +2887,7 @@ async function renderReviewsView(container) {
       const actionsBox = document.createElement("div");
       actionsBox.className = "admin-table-actions";
 
-      // Inspect review
+      // Inspect review with full context, worker reply, reports, edit & moderation history
       const inspectBtn = document.createElement("button");
       inspectBtn.type = "button";
       inspectBtn.className = "admin-table-btn";
@@ -2869,20 +2898,57 @@ async function renderReviewsView(container) {
         grid.className = "admin-detail-grid";
 
         grid.appendChild(createDetailItem("Review ID", rev.id));
-        grid.appendChild(createDetailItem("Rating", `★ ${rev.rating || 5}`));
-        grid.appendChild(createDetailItem("Customer", rev.customerName || rev.customerId));
-        grid.appendChild(createDetailItem("Worker", rev.workerName || rev.workerId));
-        grid.appendChild(createDetailItem("Moderation Status", rev.status || "published"));
+        grid.appendChild(createDetailItem("Related Service Request", rev.requestId || "—"));
+        grid.appendChild(createDetailItem("Rating", validRatingStr));
+        grid.appendChild(createDetailItem("Publication Status", rev.status || "published"));
+        grid.appendChild(createDetailItem("Customer", `${rev.customerName || "Customer"} (${rev.customerId || "—"})`));
+        grid.appendChild(createDetailItem("Worker", `${rev.workerName || "Worker"} (${rev.workerUid || rev.workerId || "—"})`));
         grid.appendChild(createDetailItem("Submitted At", formatDateTime(rev.createdAt)));
-        grid.appendChild(createDetailItem("Full Review Content", rev.text || "No commentary provided", true));
-        if (rev.workerResponse) {
-          grid.appendChild(createDetailItem("Worker Public Response", rev.workerResponse, true));
+        if (Array.isArray(rev.tags) && rev.tags.length > 0) {
+          grid.appendChild(createDetailItem("Experience Tags", rev.tags.join(", ")));
+        }
+        grid.appendChild(createDetailItem("Full Review Content", rawText || "Rated without written commentary.", true));
+
+        const workerReplyText = rev.workerReply || rev.workerResponse || null;
+        if (workerReplyText) {
+          const replyMeta = rev.workerReplyAt ? ` (${formatDateTime(rev.workerReplyAt)})` : "";
+          grid.appendChild(createDetailItem(`Worker Public Response${replyMeta}`, workerReplyText, true));
+        } else {
+          grid.appendChild(createDetailItem("Worker Public Response", "No worker response posted.", true));
+        }
+
+        if (Array.isArray(rev.editHistory) && rev.editHistory.length > 0) {
+          const editSummary = rev.editHistory
+            .map((e, i) => `#${i + 1} (${formatDateTime(e.editedAt)}): ★ ${e.previousRating} — "${e.previousText || ""}"`)
+            .join("\n");
+          grid.appendChild(createDetailItem(`Customer Edit History (${rev.editHistory.length})`, editSummary, true));
+        }
+
+        if (linkedReports.length > 0) {
+          const repSummary = linkedReports
+            .map((r) => `[${r.status || "open"}] ${r.reason || "reported"} by ${r.reporterUid || "user"}: ${r.description || "No details"}`)
+            .join("\n");
+          grid.appendChild(createDetailItem(`Linked Customer Reports (${linkedReports.length})`, repSummary, true));
+        } else {
+          grid.appendChild(createDetailItem("Linked Customer Reports", "No customer reports filed against this review.", true));
+        }
+
+        const modHistory = Array.isArray(rev.moderationHistory) ? rev.moderationHistory : [];
+        if (modHistory.length > 0) {
+          const histText = modHistory
+            .map((m) => `${formatDateTime(m.moderatedAt)} · ${m.previousStatus} → ${m.newStatus} by ${m.moderatedBy}${m.note ? ` (${m.note})` : ""}`)
+            .join("\n");
+          grid.appendChild(createDetailItem(`Moderation History (${modHistory.length})`, histText, true));
+        } else if (rev.moderatedAt) {
+          grid.appendChild(createDetailItem("Last Moderated", `${formatDateTime(rev.moderatedAt)} by ${rev.moderatedBy || "admin"}`, true));
+        } else {
+          grid.appendChild(createDetailItem("Moderation History", "No moderation actions recorded.", true));
         }
 
         modalContent.appendChild(grid);
 
         showDetailModal({
-          title: `Review Details #${rev.id}`,
+          title: `Review Inspection #${rev.id}`,
           contentNode: modalContent,
           isWide: true
         });
@@ -2893,12 +2959,13 @@ async function renderReviewsView(container) {
         const pubBtn = document.createElement("button");
         pubBtn.type = "button";
         pubBtn.className = "admin-table-btn approve";
-        pubBtn.textContent = "Publish";
+        pubBtn.textContent = "Restore";
         pubBtn.onclick = async () => {
-          const res = await updateAdminReviewStatus(rev.id, "published", currentAdmin.uid);
+          const res = await updateAdminReviewStatus(rev.id, "published", currentAdmin.uid, "Restored by administrator");
           if (res.success) {
-            showToast("Review published.");
+            showToast("Review restored & worker rating recalculated.");
             rev.status = "published";
+            if (Array.isArray(res.moderationHistory)) rev.moderationHistory = res.moderationHistory;
             renderTable();
           }
         };
@@ -2911,10 +2978,11 @@ async function renderReviewsView(container) {
         hideBtn.className = "admin-table-btn suspend";
         hideBtn.textContent = "Hide";
         hideBtn.onclick = async () => {
-          const res = await updateAdminReviewStatus(rev.id, "hidden", currentAdmin.uid);
+          const res = await updateAdminReviewStatus(rev.id, "hidden", currentAdmin.uid, "Hidden by administrator");
           if (res.success) {
-            showToast("Review hidden from public view.");
+            showToast("Review hidden & worker rating recalculated.");
             rev.status = "hidden";
+            if (Array.isArray(res.moderationHistory)) rev.moderationHistory = res.moderationHistory;
             renderTable();
           }
         };
@@ -3163,11 +3231,12 @@ async function renderTrustSafetyView(container) {
       row.appendChild(tdWorker);
 
       const tdRating = document.createElement("td");
-      tdRating.textContent = `★ ${rev.rating || 5}`;
+      const rVal = Number(rev.rating);
+      tdRating.textContent = Number.isInteger(rVal) && rVal >= 1 && rVal <= 5 ? `★ ${rVal}.0` : "—";
       row.appendChild(tdRating);
 
       const tdText = document.createElement("td");
-      const preview = String(rev.text || "—");
+      const preview = String(rev.text || "No written commentary");
       tdText.textContent = preview.length > 40 ? `${preview.substring(0, 40)}...` : preview;
       row.appendChild(tdText);
 
@@ -3185,11 +3254,11 @@ async function renderTrustSafetyView(container) {
       const pubBtn = document.createElement("button");
       pubBtn.type = "button";
       pubBtn.className = "admin-table-btn approve";
-      pubBtn.textContent = "Publish";
+      pubBtn.textContent = "Restore";
       pubBtn.onclick = async () => {
-        const res = await updateAdminReviewStatus(rev.id, "published", currentAdmin.uid);
+        const res = await updateAdminReviewStatus(rev.id, "published", currentAdmin.uid, "Restored from flagged queue");
         if (res.success) {
-          showToast("Review published.");
+          showToast("Review restored & rating recalculated.");
           renderActiveView();
         }
       };
@@ -3200,9 +3269,9 @@ async function renderTrustSafetyView(container) {
       hideBtn.className = "admin-table-btn suspend";
       hideBtn.textContent = "Hide";
       hideBtn.onclick = async () => {
-        const res = await updateAdminReviewStatus(rev.id, "hidden", currentAdmin.uid);
+        const res = await updateAdminReviewStatus(rev.id, "hidden", currentAdmin.uid, "Hidden from flagged queue");
         if (res.success) {
-          showToast("Review hidden.");
+          showToast("Review hidden & rating recalculated.");
           renderActiveView();
         }
       };

@@ -22,6 +22,8 @@ import {
   getCurrentUser,
   getUserRole,
   getWorkerById,
+  getReviewsForWorker,
+  calculateWorkerRating,
   isAuthenticated,
   resetDemoChatState,
   setCurrentUser,
@@ -2492,7 +2494,19 @@ export function showAccountView(preserveFeedback = false) {
   }
   if (rField) {
     rField.hidden = !isWrk;
-    if (isWrk) setTextContent(document.getElementById("authWorkerRatingValue"), `${worker?.rating || user.rating || "5.0"} ★`);
+    if (isWrk) {
+      const uid = user.firebaseUid || user.uid || user.id;
+      const agg = calculateWorkerRating(getReviewsForWorker(uid));
+      const storedCount = typeof worker?.reviewCount === "number" ? worker.reviewCount : 0;
+      const storedRating = Number(worker?.rating);
+      let ratingLabel = "New Worker · No ratings yet";
+      if (agg.reviewCount > 0) {
+        ratingLabel = `${agg.average.toFixed(1)} ★ (${agg.reviewCount} ${agg.reviewCount === 1 ? "review" : "reviews"})`;
+      } else if (storedCount > 0 && !Number.isNaN(storedRating) && storedRating >= 1 && storedRating <= 5) {
+        ratingLabel = `${storedRating.toFixed(1)} ★ (${storedCount} ${storedCount === 1 ? "review" : "reviews"})`;
+      }
+      setTextContent(document.getElementById("authWorkerRatingValue"), ratingLabel);
+    }
   }
 
   // Role chip

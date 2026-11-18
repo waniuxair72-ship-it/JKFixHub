@@ -325,9 +325,12 @@ export function renderWorkerRequestsList(requests, worker) {
     const workerUid = worker.workerUid || worker.uid || worker.id;
     const workerReviews = getReviewsForWorker(workerUid);
     const agg = calculateWorkerRating(workerReviews);
+    const storedCount = typeof worker?.reviewCount === "number" && worker.reviewCount > 0 ? worker.reviewCount : 0;
+    const parsedStored = Number(worker?.rating);
+    const hasStoredGenuine = storedCount > 0 && !Number.isNaN(parsedStored) && parsedStored >= 1 && parsedStored <= 5;
     const ratingDisplay = agg.reviewCount > 0
       ? `${agg.average.toFixed(1)} ★`
-      : (worker?.rating ? `${Number(worker.rating).toFixed(1)} ★` : "No ratings yet");
+      : (hasStoredGenuine ? `${parsedStored.toFixed(1)} ★` : "No ratings yet");
 
     const stats = {
       total,
@@ -447,9 +450,12 @@ function renderDashboard(worker) {
   const initials = document.getElementById("workerDashboardInitials");
   const workerReviews = getReviewsForWorker(worker.workerUid || worker.uid || worker.id);
   const agg = calculateWorkerRating(workerReviews);
+  const storedCount = typeof worker.reviewCount === "number" && worker.reviewCount > 0 ? worker.reviewCount : 0;
+  const parsedStored = Number(worker.rating);
+  const hasStoredGenuine = storedCount > 0 && !Number.isNaN(parsedStored) && parsedStored >= 1 && parsedStored <= 5;
   const ratingDetail = agg.reviewCount > 0
     ? `${agg.average.toFixed(1)} ★ (${agg.reviewCount} ${agg.reviewCount === 1 ? "review" : "reviews"})`
-    : (worker.rating ? `${Number(worker.rating).toFixed(1)} ★` : "No ratings yet");
+    : (hasStoredGenuine ? `${parsedStored.toFixed(1)} ★ (${storedCount} ${storedCount === 1 ? "review" : "reviews"})` : "New Worker · No ratings yet");
 
   const fields = [
     ["workerDashboardName", worker.name],
@@ -473,7 +479,17 @@ function renderDashboard(worker) {
   const reviewsContainer = document.getElementById("workerDashboardReviews");
   if (reviewsContainer) {
     const workerUid = worker.workerUid || worker.uid || worker.id;
-    renderWorkerReviews(workerUid, reviewsContainer);
+    renderWorkerReviews(workerUid, reviewsContainer, {
+      onSummaryUpdate: (summary) => {
+        const el = document.getElementById("workerDashboardRating");
+        if (!el) return;
+        if (summary && summary.reviewCount > 0) {
+          setTextContent(el, `${summary.average.toFixed(1)} ★ (${summary.reviewCount} ${summary.reviewCount === 1 ? "review" : "reviews"})`);
+        } else {
+          setTextContent(el, "New Worker · No ratings yet");
+        }
+      }
+    });
   }
 
   view.dataset.workerId = String(worker.id);

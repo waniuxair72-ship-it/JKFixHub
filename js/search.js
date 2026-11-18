@@ -86,15 +86,29 @@ function buildWorkerCard(worker) {
       ? "Sample profile"
       : "Pending Verification";
 
-  identity.append(name, service, badge);
+  const reviewCount = typeof worker.reviewCount === "number" && worker.reviewCount > 0 ? worker.reviewCount : 0;
+  const parsedRating = Number(worker.rating);
+  const hasGenuineRating = reviewCount > 0 && !Number.isNaN(parsedRating) && parsedRating >= 1 && parsedRating <= 5;
+
+  const badgeGroup = document.createElement("div");
+  badgeGroup.className = "worker-card-badges";
+  badgeGroup.append(badge);
+  if (!hasGenuineRating) {
+    const newBadge = document.createElement("span");
+    newBadge.className = "worker-new-badge";
+    setTextContent(newBadge, "New Worker");
+    badgeGroup.append(newBadge);
+  }
+
+  identity.append(name, service, badgeGroup);
   top.append(avatar, identity);
 
   metadata.className = "worker-meta";
   setTextContent(district, worker.district);
-  let ratingDisplay = "No ratings yet";
-  if (worker.rating && (worker.reviewCount === undefined || worker.reviewCount > 0)) {
-    ratingDisplay = `${Number(worker.rating).toFixed(1)} ★`;
-  }
+  rating.className = hasGenuineRating ? "worker-rating-pill" : "worker-rating-pill is-unrated";
+  const ratingDisplay = hasGenuineRating
+    ? `${parsedRating.toFixed(1)} ★ (${reviewCount} ${reviewCount === 1 ? "review" : "reviews"})`
+    : "No ratings yet";
   setTextContent(rating, ratingDisplay);
   availability.className = "availability";
   availabilityIcon.setAttribute("aria-hidden", "true");
@@ -280,8 +294,10 @@ export function initializeSearch({ showToast } = {}) {
           Number(second.availability === "Available") - Number(first.availability === "Available");
         if (availabilityDifference) return availabilityDifference;
 
-        const firstEffectiveRating = (first.rating && first.reviewCount !== 0) ? Number(first.rating) : 0;
-        const secondEffectiveRating = (second.rating && second.reviewCount !== 0) ? Number(second.rating) : 0;
+        const firstCount = typeof first.reviewCount === "number" ? first.reviewCount : 0;
+        const secondCount = typeof second.reviewCount === "number" ? second.reviewCount : 0;
+        const firstEffectiveRating = (firstCount > 0 && Number(first.rating) >= 1 && Number(first.rating) <= 5) ? Number(first.rating) : 0;
+        const secondEffectiveRating = (secondCount > 0 && Number(second.rating) >= 1 && Number(second.rating) <= 5) ? Number(second.rating) : 0;
         const ratingDifference = secondEffectiveRating - firstEffectiveRating;
         if (ratingDifference) return ratingDifference;
 
@@ -397,6 +413,14 @@ export function initializeSearch({ showToast } = {}) {
       }
       return [];
     }
+  }
+
+  if (typeof window !== "undefined") {
+    window.addEventListener("jkfixhub:ratings-updated", () => {
+      if (hasActiveSearch() || results.querySelector(".worker-card")) {
+        renderResults(getMatchingWorkers());
+      }
+    });
   }
 
   // Initial load

@@ -10,7 +10,9 @@ import {
   validatePhone,
   validateText,
   validateReview,
-  validateReport
+  validateReport,
+  sanitizeReviewTags,
+  REVIEW_EDIT_WINDOW_MS
 } from "./security.js";
 import {
   checkAndTrackAction,
@@ -1037,6 +1039,10 @@ export function createCustomerReview(data) {
     recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || null);
     throw new Error("Only authenticated customers can submit reviews.");
   }
+  if (user.status === "suspended") {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user.role);
+    throw new Error("Suspended accounts cannot submit reviews.");
+  }
   if (!data || typeof data !== "object") {
     recordSecurityEvent("INVALID_REQUEST", user.role);
     throw new TypeError("Review data must be an object.");
@@ -1048,7 +1054,7 @@ export function createCustomerReview(data) {
     throw new Error(abuseCheck.reason);
   }
 
-  const { requestId, rating, text } = data;
+  const { requestId, rating, text = "", tags = [] } = data;
   if (!isValidCustomerRequestId(requestId)) {
     recordSecurityEvent("INVALID_REQUEST", user.role);
     throw new TypeError("Invalid request ID for review.");
@@ -1083,13 +1089,18 @@ export function createCustomerReview(data) {
     throw new RangeError("Rating must be an integer between 1 and 5.");
   }
 
-  if (!validateReview(text) || markupPattern.test(text)) {
+  const rawText = typeof text === "string" ? text.trim() : "";
+  if (!validateReview(rawText) || markupPattern.test(rawText)) {
     recordSecurityEvent("VALIDATION_FAILURE", user.role);
-    if (markupPattern.test(text)) {
+    if (markupPattern.test(rawText)) {
       recordSecurityEvent("SUSPICIOUS_INPUT", user.role);
     }
     throw new TypeError("Invalid review text.");
   }
+
+  const cleanTags = sanitizeReviewTags(tags);
+  const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
 
   const review = {
     id: request.id,
@@ -1099,17 +1110,97 @@ export function createCustomerReview(data) {
     workerId: request.workerId,
     workerUid: effectiveWorkerUid,
     workerName: request.workerName,
+    service: request.service || null,
+    district: request.district || null,
+    verifiedService: true,
     rating: normalizedRating,
-    text: text.trim(),
-    createdAt: new Date().toISOString(),
+    text: rawText,
+    tags: cleanTags,
+    createdAt: nowIso,
+    createdAtMs: nowMs,
     updatedAt: null,
+    editedAt: null,
+    editCount: 0,
+    editHistory: [],
+    moderationHistory: [],
     workerReply: null,
     workerReplyAt: null,
+    workerReplyUpdatedAt: null,
     status: "published"
   };
 
   state.reviews.push(review);
+  if (effectiveWorkerUid) {
+    syncDiscoveredWorkerRating(effectiveWorkerUid);
+  }
   recordSecurityEvent("REVIEW_SUBMITTED", user.role);
+  return copyReview(review);
+}
+
+export function editCustomerReview(reviewId, data) {
+  const user = state.currentUser;
+  if (!user || user.role !== "customer" || !hasCapability(user.role, "submitReview")) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || null);
+    throw new Error("Only authenticated customers can edit reviews.");
+  }
+  if (user.status === "suspended") {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user.role);
+    throw new Error("Suspended accounts cannot edit reviews.");
+  }
+  const review = state.reviews.find((item) => item.id === reviewId || item.requestId === reviewId);
+  if (!review) {
+    throw new Error("Review not found.");
+  }
+  if (review.customerId !== user.id) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user.role);
+    throw new Error("You can only edit your own review.");
+  }
+  if (review.status !== "published") {
+    throw new Error("Moderated or hidden reviews cannot be edited.");
+  }
+  const createdMs = typeof review.createdAtMs === "number"
+    ? review.createdAtMs
+    : (review.createdAt ? Date.parse(review.createdAt) : NaN);
+  if (Number.isNaN(createdMs) || Date.now() > createdMs + REVIEW_EDIT_WINDOW_MS) {
+    throw new Error("The 24-hour edit window for this review has expired.");
+  }
+
+  const normalizedRating = Number(data?.rating);
+  if (!Number.isInteger(normalizedRating) || normalizedRating < 1 || normalizedRating > 5) {
+    throw new RangeError("Rating must be an integer between 1 and 5.");
+  }
+  const rawText = typeof data?.text === "string" ? data.text.trim() : "";
+  if (!validateReview(rawText) || markupPattern.test(rawText)) {
+    if (markupPattern.test(rawText)) {
+      recordSecurityEvent("SUSPICIOUS_INPUT", user.role);
+    }
+    throw new TypeError("Invalid review text.");
+  }
+  const cleanTags = sanitizeReviewTags(data?.tags ?? review.tags ?? []);
+  const nowIso = new Date().toISOString();
+  const prevHistory = Array.isArray(review.editHistory) ? review.editHistory : [];
+  const nextHistory = [
+    ...prevHistory,
+    {
+      previousRating: review.rating,
+      previousText: review.text || "",
+      previousTags: Array.isArray(review.tags) ? [...review.tags] : [],
+      editedAt: nowIso
+    }
+  ];
+
+  review.rating = normalizedRating;
+  review.text = rawText;
+  review.tags = cleanTags;
+  review.editedAt = nowIso;
+  review.updatedAt = nowIso;
+  review.editCount = nextHistory.length;
+  review.editHistory = nextHistory;
+
+  if (review.workerUid || review.workerId) {
+    syncDiscoveredWorkerRating(review.workerUid || review.workerId);
+  }
+  recordSecurityEvent("REVIEW_EDITED", user.role);
   return copyReview(review);
 }
 
@@ -1137,25 +1228,28 @@ export function getReviewsForWorker(workerId) {
 }
 
 /**
- * Accurately calculates aggregated worker rating and review count from a list of reviews.
+ * Accurately calculates aggregated worker rating, review count, and 5-star distribution
+ * from a list of reviews.
  *
  * Integrity Rules:
- * 1. Only counts reviews with status "published".
+ * 1. Only counts reviews with status "published" (excludes hidden, flagged, rejected, deleted).
  * 2. Only considers valid integer ratings between 1 and 5.
  * 3. Deduplicates reviews by requestId (or review id) to prevent double counting.
  * 4. Handles zero-review workers cleanly (rating: null, reviewCount: 0, displayRating: "No ratings yet").
- * 5. Arithmetic mean rounded to 1 decimal place.
+ * 5. Exact integer-scaled half-up rounding to 1 decimal place (avoids floating-point drift).
  *
  * @param {Array<object>} reviews
- * @returns {{ rating: number|null, reviewCount: number, average: number, displayRating: string }}
+ * @returns {{ rating: number|null, reviewCount: number, average: number, displayRating: string, distribution: Record<number, number> }}
  */
 export function calculateWorkerRating(reviews) {
+  const distribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
   if (!Array.isArray(reviews) || reviews.length === 0) {
     return {
       rating: null,
       reviewCount: 0,
       average: 0,
-      displayRating: "No ratings yet"
+      displayRating: "No ratings yet",
+      distribution
     };
   }
 
@@ -1166,7 +1260,7 @@ export function calculateWorkerRating(reviews) {
   for (const r of reviews) {
     if (!r || typeof r !== "object") continue;
 
-    // Must be published (not hidden or flagged by moderation)
+    // Must be published (not hidden, flagged, rejected, or deleted)
     if (r.status && r.status !== "published") continue;
 
     // Deduplicate by requestId if present, else by review id
@@ -1181,6 +1275,7 @@ export function calculateWorkerRating(reviews) {
 
     totalRating += val;
     validCount += 1;
+    distribution[val] += 1;
   }
 
   if (validCount === 0) {
@@ -1188,16 +1283,19 @@ export function calculateWorkerRating(reviews) {
       rating: null,
       reviewCount: 0,
       average: 0,
-      displayRating: "No ratings yet"
+      displayRating: "No ratings yet",
+      distribution
     };
   }
 
-  const avg = Number((totalRating / validCount).toFixed(1));
+  // Integer-scaled half-up rounding to 1 decimal place
+  const avg = Math.round((totalRating * 10) / validCount) / 10;
   return {
     rating: avg,
     reviewCount: validCount,
     average: avg,
-    displayRating: `${avg.toFixed(1)} ★`
+    displayRating: `${avg.toFixed(1)} ★`,
+    distribution
   };
 }
 
@@ -1206,11 +1304,38 @@ export function getWorkerRatingSummary(workerId) {
   return calculateWorkerRating(reviews);
 }
 
+/**
+ * Synchronizes an in-memory discovered worker's rating & reviewCount directly from
+ * genuine published reviews (never invents defaults).
+ */
+export function syncDiscoveredWorkerRating(workerId, explicitSummary = null) {
+  if (!workerId) return null;
+  const targetStr = String(workerId);
+  const summary = explicitSummary || getWorkerRatingSummary(targetStr);
+  if (Array.isArray(state.discoveredWorkers)) {
+    const w = state.discoveredWorkers.find(
+      (item) => String(item.id) === targetStr || String(item.uid) === targetStr
+    );
+    if (w) {
+      w.rating = summary.reviewCount > 0 ? summary.rating : null;
+      w.reviewCount = summary.reviewCount;
+      w.ratingDistribution = summary.distribution;
+    }
+  }
+  return summary;
+}
+
 export function upsertStoredReview(review) {
   if (!review || !review.id) return null;
   const idx = state.reviews.findIndex(
     (r) => r.id === review.id || (review.requestId && r.requestId === review.requestId)
   );
+  const parsedRating = Number(review.rating);
+  const validRating = Number.isInteger(parsedRating) && parsedRating >= 1 && parsedRating <= 5 ? parsedRating : null;
+  // Never invent timestamps for legacy reviews: preserve exact existing values or null.
+  const createdAt = review.createdAt !== undefined ? review.createdAt : null;
+  const parsedCreatedMs = typeof review.createdAtMs === "number" ? review.createdAtMs : null;
+
   const normalized = {
     id: String(review.id),
     requestId: review.requestId || null,
@@ -1219,12 +1344,25 @@ export function upsertStoredReview(review) {
     workerUid: review.workerUid ? String(review.workerUid) : (review.workerId ? String(review.workerId) : null),
     workerId: review.workerId != null ? review.workerId : (review.workerUid || null),
     workerName: review.workerName || "Service Professional",
-    rating: Number(review.rating) || 5,
+    service: review.service || null,
+    district: review.district || null,
+    verifiedService: review.verifiedService !== false,
+    rating: validRating,
     text: String(review.text || ""),
-    createdAt: review.createdAt || new Date().toISOString(),
+    tags: Array.isArray(review.tags) ? sanitizeReviewTags(review.tags) : [],
+    createdAt,
+    createdAtMs: parsedCreatedMs,
     updatedAt: review.updatedAt || null,
+    editedAt: review.editedAt || null,
+    editCount: Number.isInteger(review.editCount) ? review.editCount : (Array.isArray(review.editHistory) ? review.editHistory.length : 0),
+    editHistory: Array.isArray(review.editHistory) ? review.editHistory : [],
+    moderationHistory: Array.isArray(review.moderationHistory) ? review.moderationHistory : [],
+    moderatedAt: review.moderatedAt || null,
+    moderatedBy: review.moderatedBy || null,
+    moderationNote: review.moderationNote || null,
     workerReply: review.workerReply || null,
     workerReplyAt: review.workerReplyAt || null,
+    workerReplyUpdatedAt: review.workerReplyUpdatedAt || null,
     status: review.status || "published"
   };
   if (idx >= 0) {
@@ -1239,6 +1377,23 @@ export function upsertStoredReview(review) {
 export function setStoredReviews(reviews) {
   if (!Array.isArray(reviews)) return;
   reviews.forEach((rev) => upsertStoredReview(rev));
+}
+
+/**
+ * Replaces the cached published reviews for a specific worker with the authoritative
+ * live set returned by Firestore (prevents stale hidden reviews from lingering in memory).
+ */
+export function replaceWorkerStoredReviews(workerId, livePublishedReviews) {
+  if (!workerId || !Array.isArray(livePublishedReviews)) return;
+  const targetStr = String(workerId);
+  state.reviews = state.reviews.filter((item) => {
+    const matchesWorker = (item.workerUid && String(item.workerUid) === targetStr) ||
+      (item.workerId != null && String(item.workerId) === targetStr);
+    // Keep reviews for other workers; for this worker, drop stale published entries before re-inserting live set
+    return !matchesWorker;
+  });
+  livePublishedReviews.forEach((rev) => upsertStoredReview(rev));
+  syncDiscoveredWorkerRating(targetStr);
 }
 
 export function getReviewsForCustomer(customerId) {
@@ -1289,9 +1444,16 @@ export function addWorkerReviewReply(reviewId, replyText) {
     throw new TypeError("Invalid reply text.");
   }
 
+  const nowIso = new Date().toISOString();
+  const isEdit = Boolean(review.workerReply);
   review.workerReply = replyText.trim();
-  review.workerReplyAt = new Date().toISOString();
-  review.updatedAt = review.workerReplyAt;
+  if (!review.workerReplyAt) {
+    review.workerReplyAt = nowIso;
+  }
+  if (isEdit) {
+    review.workerReplyUpdatedAt = nowIso;
+  }
+  review.updatedAt = nowIso;
 
   recordSecurityEvent("REVIEW_REPLY_SUBMITTED", user.role);
   return copyReview(review);

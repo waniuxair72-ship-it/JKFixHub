@@ -17,11 +17,14 @@ import {
   setWorkerDemoProfile,
   setCurrentUser,
   saveApplicationProfile,
-  setStoredCustomerRequests
+  setStoredCustomerRequests,
+  getReviewsForWorker,
+  calculateWorkerRating,
+  replaceWorkerStoredReviews
 } from "./store.js";
 import { openCustomerRequests, syncCustomerRequestsFromFirestore } from "./customer-requests.js";
 import { openWorkerDashboard, openProfileEditor } from "./worker-dashboard.js";
-import { getWorkerFirestoreRequests } from "./firestore-service.js";
+import { getWorkerFirestoreRequests, getWorkerFirestoreReviewsWithMeta } from "./firestore-service.js";
 import { openChatForRequest } from "./chat.js";
 import { openModal } from "./modals.js";
 import { setView } from "./navigation.js";
@@ -212,7 +215,33 @@ export function renderWorkerHome(user, options = {}) {
   if (nameEl) setTextContent(nameEl, displayName);
   if (districtEl) setTextContent(districtEl, worker?.district || user?.district || "Jammu & Kashmir");
   if (serviceEl) setTextContent(serviceEl, worker?.service || user?.service || "Specialist");
-  if (ratingEl) setTextContent(ratingEl, `${worker?.rating || user?.rating || "5.0"} ★`);
+  if (ratingEl) {
+    const storedWorkerReviews = effectiveUid ? getReviewsForWorker(effectiveUid) : [];
+    const agg = calculateWorkerRating(storedWorkerReviews);
+    const workerCount = typeof worker?.reviewCount === "number" ? worker.reviewCount : 0;
+    const workerRatingNum = Number(worker?.rating);
+    if (agg.reviewCount > 0) {
+      setTextContent(ratingEl, `${agg.average.toFixed(1)} ★ (${agg.reviewCount})`);
+    } else if (workerCount > 0 && !Number.isNaN(workerRatingNum) && workerRatingNum >= 1 && workerRatingNum <= 5) {
+      setTextContent(ratingEl, `${workerRatingNum.toFixed(1)} ★ (${workerCount})`);
+    } else {
+      setTextContent(ratingEl, "New Worker · No ratings yet");
+    }
+    if (!options?.skipSync && user?.authProvider === "firebase" && effectiveUid) {
+      getWorkerFirestoreReviewsWithMeta(effectiveUid)
+        .then(({ reviews: revs, fromFirestore }) => {
+          if (!fromFirestore || !Array.isArray(revs)) return;
+          replaceWorkerStoredReviews(effectiveUid, revs);
+          const liveAgg = calculateWorkerRating(revs);
+          if (liveAgg.reviewCount > 0) {
+            setTextContent(ratingEl, `${liveAgg.average.toFixed(1)} ★ (${liveAgg.reviewCount})`);
+          } else {
+            setTextContent(ratingEl, "New Worker · No ratings yet");
+          }
+        })
+        .catch(() => {});
+    }
+  }
   if (verificationEl) {
     const isVerified = Boolean(user?.isVerified || worker?.isVerified);
     setTextContent(verificationEl, isVerified ? "Verified worker" : "Pending verification");

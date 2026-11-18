@@ -21,6 +21,56 @@ import {
   invalidatePlatformConfigCache,
   NO_EXPIRY_MS
 } from "./platform-config.js";
+import {
+  sanitizeReviewTags,
+  REVIEW_EDIT_WINDOW_MS
+} from "./security.js";
+
+/**
+ * Pure genuine rating aggregator by worker ID from published reviews only.
+ * Never invents defaults, excludes non-published/invalid entries, deduplicates by requestId/id,
+ * and uses exact integer-scaled half-up rounding to 1 decimal place.
+ */
+function aggregatePublishedReviewsByWorker(reviews) {
+  const byWorker = new Map();
+  const seenKeys = new Set();
+
+  for (const r of reviews || []) {
+    if (!r || typeof r !== "object") continue;
+    if (r.status !== "published") continue;
+
+    const dedupKey = r.requestId || r.id;
+    if (dedupKey) {
+      if (seenKeys.has(String(dedupKey))) continue;
+      seenKeys.add(String(dedupKey));
+    }
+
+    const val = Number(r.rating);
+    if (!Number.isInteger(val) || val < 1 || val > 5) continue;
+
+    const workerKey = r.workerUid ? String(r.workerUid) : (r.workerId != null ? String(r.workerId) : null);
+    if (!workerKey) continue;
+
+    if (!byWorker.has(workerKey)) {
+      byWorker.set(workerKey, { sum: 0, count: 0, distribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 } });
+    }
+    const bucket = byWorker.get(workerKey);
+    bucket.sum += val;
+    bucket.count += 1;
+    bucket.distribution[val] += 1;
+  }
+
+  const summaries = new Map();
+  for (const [workerKey, bucket] of byWorker.entries()) {
+    const avg = Math.round((bucket.sum * 10) / bucket.count) / 10;
+    summaries.set(workerKey, {
+      rating: avg,
+      reviewCount: bucket.count,
+      distribution: bucket.distribution
+    });
+  }
+  return summaries;
+}
 
 let adminSessionProvider = null;
 
@@ -391,7 +441,7 @@ export async function getAdminWorkers() {
           service: u.service || "General Maintenance",
           experience: u.experience || "1 year",
           availability: "Available",
-          rating: "5.0",
+          rating: null,
           reviewCount: 0,
           isVerified: false,
           status: "pending",
@@ -401,6 +451,35 @@ export async function getAdminWorkers() {
         });
       }
     });
+
+    // Hydrate authoritative genuine ratings from published reviews (never show fake/stale 5.0 defaults)
+    try {
+      const reviewsSnap = await methods.getDocs(methods.collection(db, "reviews"));
+      const allRevs = [];
+      reviewsSnap.forEach((d) => allRevs.push({ id: d.id, ...d.data() }));
+      const ratingsByWorker = aggregatePublishedReviewsByWorker(allRevs);
+      for (const w of workers) {
+        const agg = ratingsByWorker.get(String(w.id));
+        if (agg && agg.reviewCount > 0) {
+          w.rating = agg.rating;
+          w.reviewCount = agg.reviewCount;
+          w.ratingDistribution = agg.distribution;
+        } else {
+          w.rating = null;
+          w.reviewCount = 0;
+          w.ratingDistribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+        }
+      }
+    } catch {
+      for (const w of workers) {
+        const rc = typeof w.reviewCount === "number" ? w.reviewCount : 0;
+        const parsed = Number(w.rating);
+        if (rc <= 0 || Number.isNaN(parsed) || parsed < 1 || parsed > 5) {
+          w.rating = null;
+          w.reviewCount = 0;
+        }
+      }
+    }
 
     return workers;
   } catch (err) {
@@ -883,6 +962,41 @@ export async function getAdminReviews() {
  * @param {string} adminUid
  * @returns {Promise<{ success: boolean, error: string|null }>}
  */
+/**
+ * Authoritatively recalculates a worker's rating & reviewCount from published reviews
+ * and updates /workers/{workerId} (admin-only write enforced by firestore.rules).
+ */
+export async function recalculateWorkerRatingInFirestore(workerId) {
+  if (!workerId || !isSessionAuthorizedAdmin()) return null;
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.doc !== "function" || typeof methods.updateDoc !== "function") {
+      return null;
+    }
+
+    const publishedReviews = await getWorkerFirestoreReviews(workerId);
+    const summaries = aggregatePublishedReviewsByWorker(publishedReviews);
+    const agg = summaries.get(String(workerId)) || {
+      rating: null,
+      reviewCount: 0,
+      distribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 }
+    };
+
+    const workerRef = methods.doc(db, "workers", String(workerId));
+    await methods.updateDoc(workerRef, {
+      rating: agg.rating,
+      reviewCount: agg.reviewCount,
+      ratingDistribution: agg.distribution,
+      ratingUpdatedAt: new Date().toISOString()
+    });
+    return agg;
+  } catch (err) {
+    console.warn("[JKFixHub Admin] Worker rating sync notice:", err?.message || err);
+    return null;
+  }
+}
+
 export async function updateAdminReviewStatus(reviewId, status, adminUid, note = "") {
   if (!isSessionAuthorizedAdmin()) {
     return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
@@ -897,20 +1011,46 @@ export async function updateAdminReviewStatus(reviewId, status, adminUid, note =
 
     const reviewRef = methods.doc(db, "reviews", String(reviewId));
     let previousStatus = "published";
+    let prevData = null;
     if (typeof methods.getDoc === "function") {
       try {
         const snap = await methods.getDoc(reviewRef);
         if (snap.exists()) {
-          previousStatus = snap.data()?.status || "published";
+          prevData = snap.data() || {};
+          previousStatus = prevData.status || "published";
         }
       } catch {}
     }
 
+    const cleanNote = String(note || "").trim().slice(0, 500);
+    if (prevData && previousStatus === status && !cleanNote) {
+      return { success: true, error: null, alreadyInState: true };
+    }
+
+    const nowIso = new Date().toISOString();
+    const prevHistory = Array.isArray(prevData?.moderationHistory) ? prevData.moderationHistory : [];
+    const nextHistory = [
+      ...prevHistory,
+      {
+        previousStatus,
+        newStatus: status,
+        moderatedBy: adminUid,
+        moderatedAt: nowIso,
+        ...(cleanNote ? { note: cleanNote } : {})
+      }
+    ];
+
     await methods.updateDoc(reviewRef, {
       status,
-      moderatedAt: new Date().toISOString(),
-      moderatedBy: adminUid
+      moderatedAt: nowIso,
+      moderatedBy: adminUid,
+      moderationHistory: nextHistory,
+      ...(cleanNote ? { moderationNote: cleanNote } : {}),
+      updatedAt: nowIso
     });
+
+    const workerUid = prevData?.workerUid || (prevData?.workerId != null ? String(prevData.workerId) : null);
+    const updatedRating = workerUid ? await recalculateWorkerRatingInFirestore(workerUid) : null;
 
     await recordAdminAuditLog({
       adminUid,
@@ -921,12 +1061,14 @@ export async function updateAdminReviewStatus(reviewId, status, adminUid, note =
       details: {
         previousStatus,
         newStatus: status,
-        ...(note ? { note: String(note).slice(0, 500) } : {})
+        ...(workerUid ? { workerUid } : {}),
+        ...(updatedRating ? { newWorkerRating: updatedRating.rating, newReviewCount: updatedRating.reviewCount } : {}),
+        ...(cleanNote ? { note: cleanNote } : {})
       }
     });
 
     invalidateAdminStatsCache();
-    return { success: true, error: null };
+    return { success: true, error: null, updatedRating, moderationHistory: nextHistory };
   } catch (err) {
     console.error("[JKFixHub Admin] Review moderation failed:", err?.message || err);
     return { success: false, error: "Failed to moderate review." };
@@ -1670,8 +1812,11 @@ export async function getPublicWorkers({ throwOnError = false } = {}) {
         : name.split(/\s+/).map((p) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase() || "SP";
       const experience = typeof data.experience === "string" && data.experience.trim() ? data.experience.trim() : "Experienced";
       const availability = typeof data.availability === "string" && data.availability.trim() ? data.availability.trim() : "Available";
-      const rating = typeof data.rating === "string" || typeof data.rating === "number" ? String(data.rating) : "5.0";
-      const reviewCount = typeof data.reviewCount === "number" ? data.reviewCount : 0;
+      const storedReviewCount = typeof data.reviewCount === "number" && data.reviewCount > 0 ? data.reviewCount : 0;
+      const parsedStoredRating = Number(data.rating);
+      const hasValidStoredRating = storedReviewCount > 0 && !Number.isNaN(parsedStoredRating) && parsedStoredRating >= 1 && parsedStoredRating <= 5;
+      const rating = hasValidStoredRating ? Math.round(parsedStoredRating * 10) / 10 : null;
+      const reviewCount = hasValidStoredRating ? storedReviewCount : 0;
       const isVerified = true;
       const status = "active";
       const services = Array.isArray(data.services) && data.services.length
@@ -1693,12 +1838,48 @@ export async function getPublicWorkers({ throwOnError = false } = {}) {
         availability,
         rating,
         reviewCount,
+        ratingDistribution: data.ratingDistribution || { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
         isVerified,
         status,
         about,
         isDemo: false
       });
     });
+
+    // Hydrate authoritative genuine ratings directly from published /reviews documents
+    // so cards/search always reflect real published customer reviews (never stale or default 5.0).
+    if (workers.length > 0) {
+      try {
+        const reviewsQuery = methods.query(
+          methods.collection(db, "reviews"),
+          methods.where("status", "==", "published")
+        );
+        const revSnap = await methods.getDocs(reviewsQuery);
+        const publishedReviews = [];
+        if (revSnap && typeof revSnap.forEach === "function") {
+          revSnap.forEach((d) => {
+            const rData = typeof d.data === "function" ? d.data() : d;
+            if (rData) publishedReviews.push({ id: d.id, ...rData });
+          });
+        }
+        const ratingsMap = aggregatePublishedReviewsByWorker(publishedReviews);
+        for (const w of workers) {
+          const agg = ratingsMap.get(String(w.id));
+          if (agg && agg.reviewCount > 0) {
+            w.rating = agg.rating;
+            w.reviewCount = agg.reviewCount;
+            w.ratingDistribution = agg.distribution;
+          } else {
+            w.rating = null;
+            w.reviewCount = 0;
+            w.ratingDistribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+          }
+        }
+      } catch (revErr) {
+        console.warn("[JKFixHub Discovery] Published reviews hydration notice:", revErr?.message || revErr);
+      }
+    }
+
     return workers;
   } catch (err) {
     console.warn("[JKFixHub Discovery] Real workers fetch notice:", err?.message || err);
@@ -2760,8 +2941,9 @@ export async function createFirestoreReview(reviewData) {
   const requestId = reviewData?.requestId;
   const rating = Number(reviewData?.rating);
   const text = typeof reviewData?.text === "string" ? reviewData.text.trim() : "";
+  const tags = sanitizeReviewTags(reviewData?.tags);
 
-  if (!customerId || !requestId || !Number.isInteger(rating) || rating < 1 || rating > 5 || !text) {
+  if (!customerId || !requestId || !Number.isInteger(rating) || rating < 1 || rating > 5 || text.length > 1200) {
     return {
       success: false,
       reviewId: null,
@@ -2828,7 +3010,7 @@ export async function createFirestoreReview(reviewData) {
       };
     }
 
-    // 4. Duplicate check: verify no review exists for this request (deterministic doc ID requestId)
+    // 4. Duplicate check: verify no review exists under canonical requestId OR legacy rev-<requestId>
     const finalReviewId = requestId;
     const reviewRef = methods.doc(db, "reviews", finalReviewId);
     const existingSnap = await methods.getDoc(reviewRef);
@@ -2842,9 +3024,26 @@ export async function createFirestoreReview(reviewData) {
       };
     }
 
+    try {
+      const legacyRef = methods.doc(db, "reviews", `rev-${finalReviewId}`);
+      const legacySnap = await methods.getDoc(legacyRef);
+      if (legacySnap.exists()) {
+        return {
+          success: false,
+          reviewId: `rev-${finalReviewId}`,
+          review: legacySnap.data(),
+          error: "A review has already been submitted for this service request."
+        };
+      }
+    } catch {
+      // Legacy check non-fatal
+    }
+
     const workerId = requestDoc.workerUid || (requestDoc.workerId ? String(requestDoc.workerId) : null) || reviewData.workerId || null;
     const workerName = requestDoc.workerName || reviewData.workerName || "Service Professional";
     const customerName = requestDoc.customerName || reviewData.customerName || "Customer";
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
 
     const docPayload = {
       id: finalReviewId,
@@ -2855,13 +3054,23 @@ export async function createFirestoreReview(reviewData) {
       workerUid: String(workerId),
       workerId: String(workerId),
       workerName: String(workerName).trim(),
+      service: requestDoc.service || null,
+      district: requestDoc.district || null,
+      verifiedService: true,
       rating,
       text,
+      tags,
       status: "published",
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
+      createdAtMs: nowMs,
       updatedAt: null,
+      editedAt: null,
+      editCount: 0,
+      editHistory: [],
+      moderationHistory: [],
       workerReply: null,
-      workerReplyAt: null
+      workerReplyAt: null,
+      workerReplyUpdatedAt: null
     };
 
     await methods.setDoc(reviewRef, docPayload);
@@ -2879,7 +3088,7 @@ export async function createFirestoreReview(reviewData) {
         success: false,
         reviewId: null,
         review: null,
-        error: "Permission denied. Reviews may only be submitted by the verified customer for completed requests."
+        error: "Permission denied. Reviews may only be submitted by the active verified customer for completed requests."
       };
     }
     return {
@@ -2892,67 +3101,172 @@ export async function createFirestoreReview(reviewData) {
 }
 
 /**
- * Loads published customer reviews for a given worker from Cloud Firestore.
- * @param {string|number} workerId
- * @returns {Promise<Array<object>>}
+ * Updates a customer's own published review within the 24-hour edit window.
+ * Preserves an append-only editHistory audit trail and keeps ownership/worker identity immutable.
+ * Server-side enforced by isValidCustomerReviewEdit() in firestore.rules.
  */
-export async function getWorkerFirestoreReviews(workerId) {
-  if (!workerId) return [];
+export async function updateFirestoreCustomerReview(reviewId, { rating, text = "", tags = [], customerId }) {
+  const numRating = Number(rating);
+  const cleanText = typeof text === "string" ? text.trim() : "";
+  const cleanTags = sanitizeReviewTags(tags);
+
+  if (!reviewId || !customerId || !Number.isInteger(numRating) || numRating < 1 || numRating > 5 || cleanText.length > 1200) {
+    return { success: false, review: null, error: "Invalid review edit parameters." };
+  }
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.doc !== "function" || typeof methods.getDoc !== "function" || typeof methods.updateDoc !== "function") {
+      return { success: false, review: null, error: "Reviews database unavailable." };
+    }
+
+    const reviewRef = methods.doc(db, "reviews", String(reviewId));
+    const snap = await methods.getDoc(reviewRef);
+    if (!snap.exists()) {
+      return { success: false, review: null, error: "Review not found." };
+    }
+
+    const prev = snap.data() || {};
+    if (prev.customerId !== customerId) {
+      return { success: false, review: null, error: "You can only edit your own review." };
+    }
+    if (prev.status !== "published") {
+      return { success: false, review: null, error: "Moderated or hidden reviews cannot be edited." };
+    }
+
+    const createdMs = typeof prev.createdAtMs === "number"
+      ? prev.createdAtMs
+      : (prev.createdAt ? Date.parse(String(prev.createdAt)) : NaN);
+    if (Number.isNaN(createdMs) || Date.now() > createdMs + REVIEW_EDIT_WINDOW_MS) {
+      return { success: false, review: null, error: "The 24-hour edit window for this review has expired." };
+    }
+
+    const prevHistory = Array.isArray(prev.editHistory) ? prev.editHistory : [];
+    if (prevHistory.length >= 10) {
+      return { success: false, review: null, error: "Maximum number of edits reached for this review." };
+    }
+
+    const nowIso = new Date().toISOString();
+    const nextHistory = [
+      ...prevHistory,
+      {
+        previousRating: prev.rating,
+        previousText: prev.text || "",
+        previousTags: Array.isArray(prev.tags) ? prev.tags : [],
+        editedAt: nowIso
+      }
+    ];
+
+    const updates = {
+      rating: numRating,
+      text: cleanText,
+      tags: cleanTags,
+      editedAt: nowIso,
+      updatedAt: nowIso,
+      editCount: nextHistory.length,
+      editHistory: nextHistory
+    };
+
+    await methods.updateDoc(reviewRef, updates);
+
+    return {
+      success: true,
+      review: { id: snap.id, ...prev, ...updates },
+      error: null
+    };
+  } catch (err) {
+    console.warn("[JKFixHub Review] Customer review edit error:", err?.message || err);
+    if (err?.code === "permission-denied") {
+      return { success: false, review: null, error: "Edit denied. Reviews can only be edited by the author within 24 hours of submission." };
+    }
+    return { success: false, review: null, error: err?.message || "Failed to update review." };
+  }
+}
+
+/**
+ * Loads published customer reviews for a given worker from Cloud Firestore with metadata
+ * indicating whether the result came from an authoritative live Firestore query.
+ * Queries both workerUid and legacy workerId fields so legitimate legacy reviews never disappear.
+ *
+ * @param {string|number} workerId
+ * @returns {Promise<{ reviews: Array<object>, fromFirestore: boolean }>}
+ */
+export async function getWorkerFirestoreReviewsWithMeta(workerId) {
+  if (!workerId) return { reviews: [], fromFirestore: false };
 
   try {
     const { db } = await initializeFirestoreClient();
     const methods = await getFirestoreMethods();
 
-    if (!db || !methods || typeof methods.collection !== "function") return [];
-
-    const colRef = methods.collection(db, "reviews");
-    let snapshot;
-    if (typeof methods.query === "function" && typeof methods.where === "function") {
-      const q = methods.query(
-        colRef,
-        methods.where("workerUid", "==", String(workerId)),
-        methods.where("status", "==", "published")
-      );
-      snapshot = await methods.getDocs(q);
-
-      if (!snapshot || snapshot.empty) {
-        try {
-          const qLegacy = methods.query(
-            colRef,
-            methods.where("workerId", "==", String(workerId)),
-            methods.where("status", "==", "published")
-          );
-          const legacySnap = await methods.getDocs(qLegacy);
-          if (legacySnap && !legacySnap.empty) {
-            snapshot = legacySnap;
-          }
-        } catch {
-          // Legacy fallback non-fatal
-        }
-      }
-    } else {
-      snapshot = await methods.getDocs(colRef);
+    if (!db || !methods || typeof methods.collection !== "function" || typeof methods.getDocs !== "function") {
+      return { reviews: [], fromFirestore: false };
     }
 
-    const reviews = [];
-    if (snapshot && typeof snapshot.forEach === "function") {
-      snapshot.forEach((doc) => {
+    const targetId = String(workerId);
+    const colRef = methods.collection(db, "reviews");
+    const collectedById = new Map();
+
+    const collectSnap = (snap) => {
+      if (!snap || typeof snap.forEach !== "function") return;
+      snap.forEach((doc) => {
         const data = typeof doc.data === "function" ? doc.data() : doc;
         if (!data) return;
-        if (String(data.workerUid) === String(workerId) || String(data.workerId) === String(workerId)) {
+        if (String(data.workerUid) === targetId || String(data.workerId) === targetId) {
           if (data.status === "published") {
-            reviews.push({ id: doc.id, ...data });
+            collectedById.set(doc.id, { id: doc.id, ...data });
           }
         }
       });
+    };
+
+    if (typeof methods.query === "function" && typeof methods.where === "function") {
+      const qPrimary = methods.query(
+        colRef,
+        methods.where("workerUid", "==", targetId),
+        methods.where("status", "==", "published")
+      );
+      const primarySnap = await methods.getDocs(qPrimary);
+      collectSnap(primarySnap);
+
+      // Always also query legacy workerId field so older reviews are preserved alongside newer ones
+      try {
+        const qLegacy = methods.query(
+          colRef,
+          methods.where("workerId", "==", targetId),
+          methods.where("status", "==", "published")
+        );
+        const legacySnap = await methods.getDocs(qLegacy);
+        collectSnap(legacySnap);
+      } catch {
+        // Legacy fallback non-fatal
+      }
+    } else {
+      const allSnap = await methods.getDocs(colRef);
+      collectSnap(allSnap);
     }
 
-    reviews.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-    return reviews;
+    const reviews = Array.from(collectedById.values());
+    reviews.sort((a, b) => {
+      const aTime = typeof a.createdAtMs === "number" ? a.createdAtMs : (Date.parse(a.createdAt || 0) || 0);
+      const bTime = typeof b.createdAtMs === "number" ? b.createdAtMs : (Date.parse(b.createdAt || 0) || 0);
+      return bTime - aTime;
+    });
+    return { reviews, fromFirestore: true };
   } catch (err) {
     console.warn("[JKFixHub Review] Worker reviews fetch error:", err?.message || err);
     throw err;
   }
+}
+
+/**
+ * Loads published customer reviews for a given worker from Cloud Firestore.
+ * @param {string|number} workerId
+ * @returns {Promise<Array<object>>}
+ */
+export async function getWorkerFirestoreReviews(workerId) {
+  const { reviews } = await getWorkerFirestoreReviewsWithMeta(workerId);
+  return reviews;
 }
 
 /**
@@ -2994,12 +3308,33 @@ export async function addFirestoreWorkerReviewReply(reviewId, replyText, workerU
 
     const reviewRef = methods.doc(db, "reviews", String(reviewId));
     const nowIso = new Date().toISOString();
+    let existingReplyAt = null;
+    if (typeof methods.getDoc === "function") {
+      try {
+        const snap = await methods.getDoc(reviewRef);
+        if (snap.exists()) {
+          const data = snap.data() || {};
+          if (data.workerReply && data.workerReplyAt) {
+            existingReplyAt = data.workerReplyAt;
+          }
+        }
+      } catch {}
+    }
 
-    await methods.updateDoc(reviewRef, {
-      workerReply: String(replyText).trim(),
-      workerReplyAt: nowIso,
-      updatedAt: nowIso
-    });
+    const payload = existingReplyAt
+      ? {
+          workerReply: String(replyText).trim(),
+          workerReplyAt: existingReplyAt,
+          workerReplyUpdatedAt: nowIso,
+          updatedAt: nowIso
+        }
+      : {
+          workerReply: String(replyText).trim(),
+          workerReplyAt: nowIso,
+          updatedAt: nowIso
+        };
+
+    await methods.updateDoc(reviewRef, payload);
 
     return { success: true, error: null };
   } catch (err) {

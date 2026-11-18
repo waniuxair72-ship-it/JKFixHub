@@ -209,18 +209,22 @@ service cloud.firestore {
     }
 
     // Customer Review Creation Validation:
-    // 1. Reviewer is authenticated and matches request customerId.
+    // 1. Reviewer is authenticated, active (not suspended/deleting), and matches request customerId.
     // 2. Underlying service request exists, is Completed, and belongs to caller.
     // 3. Rating is integer 1 to 5.
-    // 4. Text is valid string.
-    // 5. Initial status is published (client cannot set moderation flags).
-    // 6. Worker reply cannot be forged at creation.
-    // 7. Review ID matches requestId or rev-<requestId> (ensures 1 review per request).
+    // 4. Text is a string up to 1,200 chars (optional comment supported).
+    // 5. Optional experience tags list bounded to at most 6 items.
+    // 6. Initial status is published (client cannot set moderation flags).
+    // 7. Worker reply cannot be forged at creation.
+    // 8. Canonical deterministic Review ID == requestId AND no legacy rev-<requestId> doc exists
+    //    (mathematically guarantees at most 1 review per completed request).
     function isValidReviewCreation(reviewId) {
       return isAuthenticated() &&
         !isUserSuspended(request.auth.uid) &&
+        !isAccountDeletionInProgress(request.auth.uid) &&
         request.resource.data.customerId == request.auth.uid &&
-        (reviewId == request.resource.data.requestId || reviewId == "rev-" + request.resource.data.requestId) &&
+        reviewId == request.resource.data.requestId &&
+        !exists(/databases/$(database)/documents/reviews/$("rev-" + request.resource.data.requestId)) &&
         exists(/databases/$(database)/documents/requests/$(request.resource.data.requestId)) &&
         get(/databases/$(database)/documents/requests/$(request.resource.data.requestId)).data.status == "Completed" &&
         get(/databases/$(database)/documents/requests/$(request.resource.data.requestId)).data.customerId == request.auth.uid &&
@@ -230,16 +234,59 @@ service cloud.firestore {
         request.resource.data.rating >= 1 &&
         request.resource.data.rating <= 5 &&
         request.resource.data.text is string &&
+        request.resource.data.text.size() <= 1200 &&
+        (!('tags' in request.resource.data) || (request.resource.data.tags is list && request.resource.data.tags.size() <= 6)) &&
+        (!('editHistory' in request.resource.data) || (request.resource.data.editHistory is list && request.resource.data.editHistory.size() == 0)) &&
+        (!('createdAtMs' in request.resource.data) || (
+          request.resource.data.createdAtMs is int &&
+          request.resource.data.createdAtMs <= request.time.toMillis() + 60000 &&
+          request.resource.data.createdAtMs >= request.time.toMillis() - 60000
+        )) &&
         request.resource.data.status == "published" &&
         (!('workerReply' in request.resource.data) || request.resource.data.workerReply == null);
     }
 
+    // Customer Limited-Time Review Editing (within 24 hours of submission):
+    // 1. Caller is the original review customer, active, and not deleting account.
+    // 2. Review is still published and within 24h (86,400,000 ms) of createdAtMs.
+    // 3. Ownership, worker identity, request link, status, and worker reply remain immutable.
+    // 4. Edit audit trail (editHistory) must strictly grow (append-only, max 10 edits).
+    function isValidCustomerReviewEdit() {
+      return isAuthenticated() &&
+        !isUserSuspended(request.auth.uid) &&
+        !isAccountDeletionInProgress(request.auth.uid) &&
+        resource.data.customerId == request.auth.uid &&
+        resource.data.status == "published" &&
+        ('createdAtMs' in resource.data) &&
+        resource.data.createdAtMs is int &&
+        request.time.toMillis() <= resource.data.createdAtMs + 86400000 &&
+        request.resource.data.customerId == resource.data.customerId &&
+        request.resource.data.workerUid == resource.data.workerUid &&
+        request.resource.data.requestId == resource.data.requestId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.createdAtMs == resource.data.createdAtMs &&
+        request.resource.data.rating is int &&
+        request.resource.data.rating >= 1 &&
+        request.resource.data.rating <= 5 &&
+        request.resource.data.text is string &&
+        request.resource.data.text.size() <= 1200 &&
+        (!('tags' in request.resource.data) || (request.resource.data.tags is list && request.resource.data.tags.size() <= 6)) &&
+        ('editHistory' in request.resource.data) &&
+        request.resource.data.editHistory is list &&
+        request.resource.data.editHistory.size() > resource.data.get('editHistory', []).size() &&
+        request.resource.data.editHistory.size() <= 10 &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'rating', 'text', 'tags', 'updatedAt', 'editedAt', 'editCount', 'editHistory'
+        ]);
+    }
+
     // Worker Review Reply Validation:
-    // 1. Worker is authenticated and is the assigned worker on the review.
-    // 2. Customer, rating, text, requestId, and status remain immutable.
-    // 3. Worker reply must be a string and only reply fields can be updated.
+    // 1. Worker is authenticated, not deleting account, and is the assigned worker on the review.
+    // 2. Customer, rating, text, requestId, tags, and status remain immutable.
+    // 3. Worker reply must be a string (2 to 600 chars) and only reply fields can be updated.
     function isValidWorkerReviewReply() {
       return isAuthenticated() &&
+        !isAccountDeletionInProgress(request.auth.uid) &&
         resource.data.workerUid == request.auth.uid &&
         request.resource.data.customerId == resource.data.customerId &&
         request.resource.data.workerUid == resource.data.workerUid &&
@@ -248,8 +295,10 @@ service cloud.firestore {
         request.resource.data.text == resource.data.text &&
         request.resource.data.status == resource.data.status &&
         request.resource.data.workerReply is string &&
+        request.resource.data.workerReply.size() >= 2 &&
+        request.resource.data.workerReply.size() <= 600 &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'workerReply', 'workerReplyAt', 'updatedAt'
+          'workerReply', 'workerReplyAt', 'workerReplyUpdatedAt', 'updatedAt'
         ]);
     }
 
@@ -426,7 +475,7 @@ service cloud.firestore {
                   isAdmin() ||
                   (isAuthenticated() && (resource.data.customerId == request.auth.uid || resource.data.workerUid == request.auth.uid));
       allow create: if isValidReviewCreation(reviewId) || isAdmin();
-      allow update: if isValidWorkerReviewReply() || isAdmin();
+      allow update: if isValidWorkerReviewReply() || isValidCustomerReviewEdit() || isAdmin();
       allow delete: if isAdmin();
     }
 

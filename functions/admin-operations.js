@@ -13,6 +13,7 @@ const { HttpsError } = require("firebase-functions/v2/https");
 const { FieldValue } = require("firebase-admin/firestore");
 const { assertActiveAdmin } = require("./auth-helpers");
 const { recordAuditEvent, recordSecurityEvent } = require("./audit-logger");
+const { recalculateAndPersistWorkerRating } = require("./review-logic");
 
 const ALLOWED_WORKER_STATUSES = Object.freeze(["active", "suspended", "pending", "rejected"]);
 const ALLOWED_CUSTOMER_STATUSES = Object.freeze(["active", "suspended"]);
@@ -296,17 +297,38 @@ async function adminModerateReview(db, request) {
     throw new HttpsError("not-found", `Review #${reviewId} not found.`);
   }
 
-  const previousStatus = snap.data()?.status || "published";
-  const note = request.data?.note ? String(request.data.note).slice(0, 500) : null;
+  const prevData = snap.data() || {};
+  const previousStatus = prevData.status || "published";
+  const note = request.data?.note ? String(request.data.note).trim().slice(0, 500) : null;
+  const nowIso = new Date().toISOString();
+  const prevHistory = Array.isArray(prevData.moderationHistory) ? prevData.moderationHistory : [];
+  const nextHistory = [
+    ...prevHistory,
+    {
+      previousStatus,
+      newStatus: status,
+      moderatedBy: adminRecord.uid,
+      moderatedAt: nowIso,
+      ...(note ? { note } : {})
+    }
+  ];
 
   const updates = {
     status,
     moderatedAt: FieldValue.serverTimestamp(),
     moderatedBy: adminRecord.uid,
+    moderationHistory: nextHistory,
+    ...(note ? { moderationNote: note } : {}),
     updatedAt: FieldValue.serverTimestamp()
   };
 
   await reviewRef.update(updates);
+
+  // Recalculate worker aggregate rating immediately whenever a review is hidden, restored, or flagged
+  const workerUid = prevData.workerUid || prevData.workerId || null;
+  const ratingSummary = workerUid
+    ? await recalculateAndPersistWorkerRating(db, workerUid)
+    : null;
 
   await recordAuditEvent(db, {
     actorUid: adminRecord.uid,
@@ -317,11 +339,13 @@ async function adminModerateReview(db, request) {
     details: {
       previousStatus,
       newStatus: status,
+      workerUid,
+      ...(ratingSummary ? { newWorkerRating: ratingSummary.rating, newReviewCount: ratingSummary.reviewCount } : {}),
       ...(note ? { note } : {})
     }
   });
 
-  return { success: true, reviewId, status };
+  return { success: true, reviewId, status, ratingSummary };
 }
 
 /**

@@ -116,30 +116,37 @@ export function openWorkerProfile(id) {
   setTextContent(availabilityBadge, worker.availability || "Available");
   availabilityBadge.prepend(availabilityDot);
 
-  badgesRow.append(verificationBadge, availabilityBadge);
+  // Rating and review count: accurately aggregate from genuine published reviews only
+  const workerUid = worker.firebaseUid || worker.workerUid || worker.id;
+  const workerReviews = typeof getReviewsForWorker === "function" ? getReviewsForWorker(workerUid) : [];
+  const agg = typeof calculateWorkerRating === "function" ? calculateWorkerRating(workerReviews) : null;
+  const storedCount = typeof worker.reviewCount === "number" && worker.reviewCount > 0 ? worker.reviewCount : 0;
+  const parsedStored = Number(worker.rating);
+  const hasStoredGenuine = storedCount > 0 && !Number.isNaN(parsedStored) && parsedStored >= 1 && parsedStored <= 5;
+
+  let ratingText = "No ratings yet";
+  let isNewWorker = true;
+  if (agg && agg.reviewCount > 0) {
+    ratingText = `${agg.average.toFixed(1)} ★ (${agg.reviewCount} ${agg.reviewCount === 1 ? "review" : "reviews"})`;
+    isNewWorker = false;
+  } else if (hasStoredGenuine) {
+    ratingText = `${parsedStored.toFixed(1)} ★ (${storedCount} ${storedCount === 1 ? "review" : "reviews"})`;
+    isNewWorker = false;
+  }
+
+  const newWorkerBadge = document.createElement("span");
+  newWorkerBadge.id = "profileNewWorkerBadge";
+  newWorkerBadge.className = "worker-new-badge";
+  setTextContent(newWorkerBadge, "New Worker");
+  newWorkerBadge.hidden = !isNewWorker;
+
+  badgesRow.append(verificationBadge, availabilityBadge, newWorkerBadge);
   identity.append(name, primaryService, badgesRow);
   aside.append(avatar, identity);
 
   // Profile details
   const details = document.createElement("div");
   details.className = "profile-details";
-
-  // Rating and review count: accurately aggregate from reviews, or fall back to verified worker data
-  let ratingText = "No ratings yet";
-  const workerUid = worker.firebaseUid || worker.workerUid || worker.id;
-  const workerReviews = typeof getReviewsForWorker === "function" ? getReviewsForWorker(workerUid) : [];
-  const agg = typeof calculateWorkerRating === "function" ? calculateWorkerRating(workerReviews) : null;
-
-  if (agg && agg.reviewCount > 0) {
-    ratingText = `${agg.average.toFixed(1)} ★ (${agg.reviewCount} ${agg.reviewCount === 1 ? "review" : "reviews"})`;
-  } else if (worker.rating && (worker.reviewCount === undefined || worker.reviewCount > 0)) {
-    const reviewCount = worker.reviewCount ?? worker.reviewsCount;
-    if (typeof reviewCount === "number" && reviewCount > 0) {
-      ratingText = `${worker.rating} ★ (${reviewCount} ${reviewCount === 1 ? "review" : "reviews"})`;
-    } else {
-      ratingText = `${worker.rating} ★`;
-    }
-  }
 
   const fields = [
     ["District", worker.district || "Jammu & Kashmir"],
@@ -173,6 +180,7 @@ export function openWorkerProfile(id) {
     const heading = document.createElement("strong");
     const text = document.createElement("span");
     row.className = "detail-row";
+    if (label === "Rating") text.id = "profileRatingValue";
     setTextContent(heading, label);
     setTextContent(text, value);
     row.append(heading, text);
@@ -202,10 +210,27 @@ export function openWorkerProfile(id) {
   reviewsSection.append(reviewsTitle, reviewsList);
   details.append(reviewsSection);
 
-  // Safely render verified public customer reviews
+  // Safely render verified public customer reviews and sync header rating live
   try {
     if (typeof renderWorkerReviews === "function") {
-      renderWorkerReviews(worker.firebaseUid || worker.id, reviewsList);
+      renderWorkerReviews(workerUid, reviewsList, {
+        onSummaryUpdate: (summary) => {
+          const ratingEl = document.getElementById("profileRatingValue");
+          const newBadgeEl = document.getElementById("profileNewWorkerBadge");
+          if (summary && summary.reviewCount > 0) {
+            if (ratingEl) {
+              setTextContent(
+                ratingEl,
+                `${summary.average.toFixed(1)} ★ (${summary.reviewCount} ${summary.reviewCount === 1 ? "review" : "reviews"})`
+              );
+            }
+            if (newBadgeEl) newBadgeEl.hidden = true;
+          } else {
+            if (ratingEl) setTextContent(ratingEl, "No ratings yet");
+            if (newBadgeEl) newBadgeEl.hidden = false;
+          }
+        }
+      });
     }
   } catch (err) {
     console.warn("[JKFixHub Profile] Review mount notice:", err);

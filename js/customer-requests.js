@@ -249,6 +249,16 @@ function buildRequestCard(request) {
     actions.append(chatButton);
   } else if (request.status === "Completed") {
     const review = getReviewByRequestId(request.id);
+    if (review) {
+      const reviewedBadge = document.createElement("span");
+      reviewedBadge.className = "customer-reviewed-badge";
+      const ratingNum = Number(review.rating);
+      const ratingSuffix = Number.isInteger(ratingNum) && ratingNum >= 1 && ratingNum <= 5
+        ? ` · ${ratingNum.toFixed(1)} ★`
+        : "";
+      setTextContent(reviewedBadge, `Reviewed${ratingSuffix}`);
+      actions.append(reviewedBadge);
+    }
     const reviewButton = document.createElement("button");
     reviewButton.type = "button";
     if (review) {
