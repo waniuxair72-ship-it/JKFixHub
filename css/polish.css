@@ -9188,3 +9188,264 @@ button.is-loading {
   }
 }
 
+
+/* ==========================================================================
+   #PLATFORM_NOTICES_AND_ANNOUNCEMENTS
+   Inline maintenance banner, account suspension notice & dashboard announcements
+   ========================================================================== */
+.platform-maintenance-banner {
+  width: 100%;
+  background: linear-gradient(90deg, #fef3c7, #fde68a);
+  color: #78350f;
+  border-bottom: 1px solid rgba(217, 119, 6, 0.35);
+  padding: 12px 16px;
+  box-sizing: border-box;
+  position: relative;
+  z-index: 40;
+}
+
+[data-theme="dark"] .platform-maintenance-banner {
+  background: linear-gradient(90deg, rgba(120, 53, 15, 0.92), rgba(146, 64, 14, 0.92));
+  color: #fef3c7;
+  border-bottom-color: rgba(251, 191, 36, 0.35);
+}
+
+.platform-maintenance-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.platform-maintenance-icon {
+  font-size: 1.15rem;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.platform-maintenance-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  word-wrap: break-word;
+}
+
+.account-suspension-banner {
+  background: rgba(239, 68, 68, 0.09);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 14px;
+  padding: 16px 18px;
+  color: #991b1b;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.account-suspension-banner strong {
+  font-size: 0.96rem;
+}
+
+.account-suspension-banner p {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+[data-theme="dark"] .account-suspension-banner {
+  background: rgba(127, 29, 29, 0.35);
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fecaca;
+}
+
+.dashboard-announcements-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard-announcements-panel.compact {
+  margin-bottom: 16px;
+}
+
+.dashboard-announcements-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dashboard-announcements-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink, #0f172a);
+}
+
+[data-theme="dark"] .dashboard-announcements-title {
+  color: #f8fafc;
+}
+
+.dashboard-announcements-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+}
+
+[data-theme="dark"] .dashboard-announcements-count {
+  background: rgba(56, 189, 248, 0.18);
+  color: #7dd3fc;
+}
+
+.dashboard-announcements-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dashboard-announcement-card {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-left: 4px solid #2563eb;
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+}
+
+.dashboard-announcement-card.priority-important {
+  border-left-color: #d97706;
+}
+
+.dashboard-announcement-card.priority-urgent {
+  border-left-color: #dc2626;
+  background: rgba(254, 242, 242, 0.92);
+}
+
+[data-theme="dark"] .dashboard-announcement-card {
+  background: rgba(15, 23, 42, 0.78);
+  border-color: rgba(148, 163, 184, 0.22);
+  color: #f1f5f9;
+}
+
+[data-theme="dark"] .dashboard-announcement-card.priority-urgent {
+  background: rgba(69, 10, 10, 0.55);
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+.dashboard-announcement-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dashboard-announcement-heading {
+  font-size: 0.94rem;
+  font-weight: 700;
+  color: inherit;
+  word-break: break-word;
+}
+
+.announcement-priority-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.announcement-priority-badge.priority-normal {
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+}
+
+.announcement-priority-badge.priority-important {
+  background: rgba(217, 119, 6, 0.14);
+  color: #b45309;
+}
+
+.announcement-priority-badge.priority-urgent {
+  background: rgba(220, 38, 38, 0.14);
+  color: #b91c1c;
+}
+
+[data-theme="dark"] .announcement-priority-badge.priority-normal {
+  background: rgba(56, 189, 248, 0.18);
+  color: #7dd3fc;
+}
+
+[data-theme="dark"] .announcement-priority-badge.priority-important {
+  background: rgba(251, 191, 36, 0.18);
+  color: #fcd34d;
+}
+
+[data-theme="dark"] .announcement-priority-badge.priority-urgent {
+  background: rgba(248, 113, 113, 0.22);
+  color: #fca5a5;
+}
+
+.dashboard-announcement-message {
+  margin: 0;
+  font-size: 0.87rem;
+  line-height: 1.5;
+  color: var(--muted, #475569);
+  word-break: break-word;
+}
+
+[data-theme="dark"] .dashboard-announcement-message {
+  color: #cbd5e1;
+}
+
+.dashboard-announcement-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 0.74rem;
+  color: var(--muted, #64748b);
+}
+
+[data-theme="dark"] .dashboard-announcement-meta {
+  color: #94a3b8;
+}
+
+.smart-category-card.service-unavailable {
+  opacity: 0.65;
+  position: relative;
+}
+
+.service-unavailable-pill {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.14);
+  color: #b91c1c;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+[data-theme="dark"] .service-unavailable-pill {
+  background: rgba(248, 113, 113, 0.2);
+  color: #fca5a5;
+}

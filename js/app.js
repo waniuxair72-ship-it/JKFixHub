@@ -17,6 +17,12 @@ import { initializeAdminDashboard } from "./admin-dashboard.js";
 import { initializeBrandReveal } from "./brand-reveal.js";
 import { initializeTheme } from "./theme.js";
 import { initializeSmartHome } from "./smart-home.js";
+import {
+  loadPlatformConfig,
+  renderPlatformMaintenanceBanner,
+  syncPlatformDropdowns,
+  subscribePlatformConfig
+} from "./platform-config.js";
 
 // ==========================================
 // #UTILITY
@@ -84,6 +90,15 @@ function initializeApp() {
   initializePointerMotion();
   initializeBrandReveal();
   initializeSmartHome();
+
+  subscribePlatformConfig((cfg) => {
+    renderPlatformMaintenanceBanner(cfg);
+    syncPlatformDropdowns(cfg);
+  });
+  loadPlatformConfig().then((cfg) => {
+    renderPlatformMaintenanceBanner(cfg);
+    syncPlatformDropdowns(cfg);
+  }).catch(() => {});
 
   const heroSignInBtn = document.getElementById("heroSignInBtn");
   if (heroSignInBtn) {

@@ -24,6 +24,10 @@ import {
 } from "./firestore-service.js";
 import { renderWorkerReviews } from "./reviews.js";
 import {
+  fetchActiveAnnouncementsForAudience,
+  renderAnnouncementsIntoContainer
+} from "./platform-config.js";
+import {
   getSafeErrorMessage,
   hasCapability,
   recordSecurityEvent,
@@ -829,6 +833,29 @@ export function openWorkerDashboard() {
   modal.classList.add("worker-dashboard-open");
   modal.setAttribute("aria-labelledby", "workerDashboardTitle");
   renderDashboard(worker);
+
+  // Load inline worker announcements inside Worker Dashboard view
+  if (typeof document !== "undefined") {
+    const view = document.getElementById("workerDashboardView");
+    if (view) {
+      let annEl = document.getElementById("workerDashboardAnnouncements");
+      if (!annEl) {
+        annEl = document.createElement("div");
+        annEl.id = "workerDashboardAnnouncements";
+        annEl.className = "dashboard-announcements-panel compact";
+        annEl.hidden = true;
+        const firstSection = view.querySelector(".dashboard-stats, .dashboard-section, .worker-dashboard-grid") || view.firstChild;
+        if (firstSection && firstSection.parentNode) {
+          firstSection.parentNode.insertBefore(annEl, firstSection);
+        } else {
+          view.prepend(annEl);
+        }
+      }
+      fetchActiveAnnouncementsForAudience("workers")
+        .then((items) => renderAnnouncementsIntoContainer(annEl, items))
+        .catch(() => {});
+    }
+  }
   return true;
 }
 

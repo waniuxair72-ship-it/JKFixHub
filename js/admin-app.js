@@ -28,6 +28,7 @@ import {
   updateAdminWorkerStatus,
   getAdminCustomers,
   subscribeToAdminCustomers,
+  updateAdminCustomerStatus,
   getAdminRequests,
   updateAdminRequestStatus,
   getAdminReports,
@@ -35,43 +36,59 @@ import {
   getAdminReviews,
   updateAdminReviewStatus,
   getAdminSecurityEvents,
-  getAdminAuditLogs
+  getAdminAuditLogs,
+  getAdminPlatformConfig
 } from "./firestore-service.js";
 
+import {
+  renderPlatformControlsView,
+  renderAnnouncementsView,
+  renderServicesDistrictsView,
+  renderAnalyticsView
+} from "./admin-platform-views.js";
+
+import { isMaintenanceCurrentlyActive } from "./platform-config.js";
+import { initializeTheme } from "./theme.js";
 import { initializeAdminCanvas } from "./admin-canvas.js";
 
 // ----------------------------------------------------------------------------
-// Architectural Constants
+// Architectural Constants (11-Section Platform Control Centre)
 // ----------------------------------------------------------------------------
 const NAV_GROUPS = [
   {
     category: "COMMAND",
     items: [
-      { id: "overview", label: "Overview", icon: "📊" }
+      { id: "overview", label: "Overview", icon: "📊" },
+      { id: "analytics", label: "Analytics", icon: "📈" }
     ]
   },
   {
     category: "OPERATIONS",
     items: [
-      { id: "workers", label: "Workers", icon: "🛠️" },
       { id: "customers", label: "Customers", icon: "👥" },
-      { id: "requests", label: "Requests", icon: "📋" }
+      { id: "workers", label: "Workers", icon: "🛠️" },
+      { id: "requests", label: "Service Requests", icon: "📋" }
+    ]
+  },
+  {
+    category: "PLATFORM",
+    items: [
+      { id: "announcements", label: "Announcements", icon: "📢" },
+      { id: "platform-controls", label: "Platform Controls", icon: "🎛️" },
+      { id: "services-districts", label: "Services and Districts", icon: "🗺️" }
     ]
   },
   {
     category: "TRUST & SAFETY",
     items: [
-      { id: "reports", label: "Reports", icon: "🚨" },
-      { id: "reviews", label: "Reviews", icon: "⭐" },
-      { id: "trust-safety", label: "Trust & Safety Hub", icon: "🛡️" }
+      { id: "reports-moderation", label: "Reports and Moderation", icon: "🛡️" }
     ]
   },
   {
     category: "SYSTEM",
     items: [
-      { id: "security", label: "Security & Abuse", icon: "🔒" },
-      { id: "audit", label: "Audit Log", icon: "📜" },
-      { id: "settings", label: "Platform Architecture", icon: "⚙️" }
+      { id: "security-audit", label: "Security and Audit Logs", icon: "🔒" },
+      { id: "settings", label: "Settings", icon: "⚙️" }
     ]
   }
 ];
@@ -93,11 +110,13 @@ const CORE_CATEGORIES = [
 // Runtime State
 // ----------------------------------------------------------------------------
 let activeTab = "overview";
+let activeReportsSubTab = "reports";
+let activeSecuritySubTab = "security";
 let currentAdmin = null;
 
 const tabFilterState = {
   workers: { query: "", status: "all", verification: "all", district: "all" },
-  customers: { query: "", verification: "all", district: "all" },
+  customers: { query: "", status: "all", verification: "all", district: "all" },
   requests: { query: "", status: "all" },
   reports: { query: "", status: "all" },
   reviews: { query: "", status: "all", rating: "all" },
@@ -152,6 +171,94 @@ function showConfirmModal({ title, body, confirmText = "Confirm", onConfirm }) {
 
   if (cancelBtn) cancelBtn.onclick = cleanup;
   if (closeBtn) closeBtn.onclick = cleanup;
+}
+
+function showReasonConfirmModal({ title, description, reasonLabel = "Reason (recorded in audit log)", placeholder = "Enter reason...", required = false, confirmText = "Confirm", onConfirm }) {
+  const modalBackdrop = document.getElementById("adminActionModal");
+  const modalTitle = document.getElementById("adminModalTitle");
+  const modalBody = document.getElementById("adminModalBody");
+  const confirmBtn = document.getElementById("adminModalConfirm");
+  const cancelBtn = document.getElementById("adminModalCancel");
+  const closeBtn = document.getElementById("adminModalClose");
+  const modalCard = modalBackdrop ? modalBackdrop.querySelector(".admin-modal") : null;
+
+  if (!modalBackdrop || !modalTitle || !modalBody || !confirmBtn) return;
+  if (modalCard) modalCard.classList.remove("wide");
+
+  modalTitle.textContent = title;
+  const wrap = document.createElement("div");
+  const descEl = document.createElement("p");
+  descEl.style.marginTop = "0";
+  descEl.textContent = description;
+
+  const errEl = document.createElement("div");
+  errEl.className = "admin-alert-banner";
+  errEl.hidden = true;
+
+  const grp = document.createElement("div");
+  grp.className = "admin-form-group";
+  const lbl = document.createElement("label");
+  lbl.htmlFor = "adminActionReasonInput";
+  lbl.textContent = reasonLabel;
+  const textarea = document.createElement("textarea");
+  textarea.id = "adminActionReasonInput";
+  textarea.rows = 3;
+  textarea.maxLength = 500;
+  textarea.placeholder = placeholder;
+  grp.append(lbl, textarea);
+
+  wrap.append(descEl, errEl, grp);
+  modalBody.replaceChildren(wrap);
+  confirmBtn.textContent = confirmText;
+  if (cancelBtn) cancelBtn.hidden = false;
+  modalBackdrop.hidden = false;
+  textarea.focus();
+
+  const cleanup = () => {
+    modalBackdrop.hidden = true;
+    confirmBtn.onclick = null;
+    if (cancelBtn) cancelBtn.onclick = null;
+    if (closeBtn) closeBtn.onclick = null;
+  };
+
+  confirmBtn.onclick = async () => {
+    const val = textarea.value.trim();
+    if (required && val.length < 3) {
+      errEl.textContent = "Please provide a brief reason (at least 3 characters).";
+      errEl.hidden = false;
+      textarea.focus();
+      return;
+    }
+    cleanup();
+    if (typeof onConfirm === "function") {
+      await onConfirm(val);
+    }
+  };
+
+  if (cancelBtn) cancelBtn.onclick = cleanup;
+  if (closeBtn) closeBtn.onclick = cleanup;
+}
+
+function applyResponsiveTableLabels(table) {
+  if (!table) return;
+  table.classList.add("admin-table-responsive");
+  const headers = Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent.trim());
+  table.querySelectorAll("tbody tr").forEach((tr) => {
+    Array.from(tr.children).forEach((td, idx) => {
+      if (headers[idx] && !td.getAttribute("data-label")) {
+        td.setAttribute("data-label", headers[idx]);
+      }
+    });
+  });
+}
+
+function updateTopbarMaintenanceBadge(config) {
+  const pill = document.getElementById("adminTopbarSecurityPill");
+  const text = document.getElementById("adminTopbarSecurityText");
+  if (!pill || !text) return;
+  const active = isMaintenanceCurrentlyActive(config);
+  pill.classList.toggle("maintenance-on", active);
+  text.textContent = active ? "MAINTENANCE MODE ACTIVE" : "SYSTEM SECURE — RBAC ACTIVE";
 }
 
 function showDetailModal({ title, contentNode, isWide = true }) {
@@ -305,16 +412,160 @@ function formatDateOnly(raw, fallback = "Unknown date") {
 }
 
 function navigateToTab(tabId, filterOptions = null) {
-  activeTab = (tabId === "dashboard") ? "overview" : tabId;
-  if (filterOptions && tabFilterState[activeTab]) {
-    Object.assign(tabFilterState[activeTab], filterOptions);
+  let targetTab = (tabId === "dashboard") ? "overview" : tabId;
+  if (targetTab === "reports" || targetTab === "reviews" || targetTab === "trust-safety") {
+    activeReportsSubTab = targetTab;
+    if (filterOptions && tabFilterState[targetTab]) {
+      Object.assign(tabFilterState[targetTab], filterOptions);
+    }
+    targetTab = "reports-moderation";
+  } else if (targetTab === "security" || targetTab === "audit") {
+    activeSecuritySubTab = targetTab;
+    if (filterOptions && tabFilterState[targetTab]) {
+      Object.assign(tabFilterState[targetTab], filterOptions);
+    }
+    targetTab = "security-audit";
+  } else if (filterOptions && tabFilterState[targetTab]) {
+    Object.assign(tabFilterState[targetTab], filterOptions);
   }
+  activeTab = targetTab;
+
   // Close mobile drawer if open
   const sidebar = document.getElementById("adminSidebar");
   const overlay = document.getElementById("adminSidebarOverlay");
+  const toggleBtn = document.getElementById("adminNavToggleBtn");
   if (sidebar) sidebar.classList.remove("nav-open");
   if (overlay) overlay.classList.remove("active");
+  if (toggleBtn) toggleBtn.setAttribute("aria-expanded", "false");
   renderActiveView();
+}
+
+function getPlatformViewContext() {
+  return {
+    currentAdmin,
+    showToast,
+    showConfirmModal,
+    showReasonConfirmModal,
+    showDetailModal,
+    formatDateTime,
+    formatDateOnly,
+    navigateToTab,
+    applyResponsiveTableLabels,
+    updateTopbarMaintenanceBadge
+  };
+}
+
+async function renderReportsModerationView(container) {
+  container.replaceChildren();
+  const subTabs = document.createElement("div");
+  subTabs.className = "admin-subtabs";
+  subTabs.setAttribute("role", "tablist");
+  subTabs.setAttribute("aria-label", "Reports and Moderation sections");
+
+  const tabs = [
+    { id: "reports", label: "🚨 Reports Queue" },
+    { id: "reviews", label: "⭐ Reviews Moderation" },
+    { id: "trust-safety", label: "🛡️ Trust & Safety Hub" }
+  ];
+
+  const subContent = document.createElement("div");
+  const renderSub = async () => {
+    subTabs.querySelectorAll(".admin-subtab-btn").forEach((b) => {
+      const isAct = b.dataset.subTab === activeReportsSubTab;
+      b.classList.toggle("active", isAct);
+      b.setAttribute("aria-selected", isAct ? "true" : "false");
+    });
+    subContent.replaceChildren();
+    const loading = document.createElement("div");
+    loading.className = "admin-loading-state";
+    const sp = document.createElement("div");
+    sp.className = "admin-loading-spinner";
+    const lp = document.createElement("p");
+    lp.textContent = "Loading moderation data...";
+    loading.append(sp, lp);
+    subContent.appendChild(loading);
+
+    if (activeReportsSubTab === "reviews") {
+      await renderReviewsView(subContent);
+    } else if (activeReportsSubTab === "trust-safety") {
+      await renderTrustSafetyView(subContent);
+    } else {
+      await renderReportsView(subContent);
+    }
+    subContent.querySelectorAll("table.admin-table").forEach(applyResponsiveTableLabels);
+  };
+
+  for (const t of tabs) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `admin-subtab-btn${t.id === activeReportsSubTab ? " active" : ""}`;
+    btn.dataset.subTab = t.id;
+    btn.setAttribute("role", "tab");
+    btn.textContent = t.label;
+    btn.onclick = () => {
+      activeReportsSubTab = t.id;
+      renderSub();
+    };
+    subTabs.appendChild(btn);
+  }
+
+  container.append(subTabs, subContent);
+  await renderSub();
+}
+
+async function renderSecurityAuditView(container) {
+  container.replaceChildren();
+  const subTabs = document.createElement("div");
+  subTabs.className = "admin-subtabs";
+  subTabs.setAttribute("role", "tablist");
+  subTabs.setAttribute("aria-label", "Security and Audit Log sections");
+
+  const tabs = [
+    { id: "security", label: "🔒 Security Signals" },
+    { id: "audit", label: "📜 Immutable Audit Log" }
+  ];
+
+  const subContent = document.createElement("div");
+  const renderSub = async () => {
+    subTabs.querySelectorAll(".admin-subtab-btn").forEach((b) => {
+      const isAct = b.dataset.subTab === activeSecuritySubTab;
+      b.classList.toggle("active", isAct);
+      b.setAttribute("aria-selected", isAct ? "true" : "false");
+    });
+    subContent.replaceChildren();
+    const loading = document.createElement("div");
+    loading.className = "admin-loading-state";
+    const sp = document.createElement("div");
+    sp.className = "admin-loading-spinner";
+    const lp = document.createElement("p");
+    lp.textContent = "Loading security records...";
+    loading.append(sp, lp);
+    subContent.appendChild(loading);
+
+    if (activeSecuritySubTab === "audit") {
+      await renderAuditLogView(subContent);
+    } else {
+      await renderSecurityView(subContent);
+    }
+    subContent.querySelectorAll("table.admin-table").forEach(applyResponsiveTableLabels);
+  };
+
+  for (const t of tabs) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `admin-subtab-btn${t.id === activeSecuritySubTab ? " active" : ""}`;
+    btn.dataset.subTab = t.id;
+    btn.setAttribute("role", "tab");
+    btn.textContent = t.label;
+    btn.onclick = () => {
+      activeSecuritySubTab = t.id;
+      renderSub();
+    };
+    subTabs.appendChild(btn);
+  }
+
+  container.append(subTabs, subContent);
+  await renderSub();
 }
 
 // ----------------------------------------------------------------------------
@@ -344,49 +595,83 @@ async function renderActiveView() {
     const isCurrent = btn.dataset.adminTab === effectiveTab ||
       (effectiveTab === "overview" && btn.dataset.adminTab === "dashboard");
     btn.classList.toggle("active", isCurrent);
+    if (isCurrent) {
+      btn.setAttribute("aria-current", "page");
+    } else {
+      btn.removeAttribute("aria-current");
+    }
   });
 
   const loadingWrap = document.createElement("div");
-  loadingWrap.className = "admin-empty-state";
+  loadingWrap.className = "admin-loading-state";
+  const spinner = document.createElement("div");
+  spinner.className = "admin-loading-spinner";
   const loadingText = document.createElement("p");
-  loadingText.textContent = "Loading live data...";
-  loadingWrap.appendChild(loadingText);
+  loadingText.textContent = "Loading live platform data...";
+  loadingWrap.append(spinner, loadingText);
   container.appendChild(loadingWrap);
 
-  switch (effectiveTab) {
-    case "overview":
-    case "dashboard":
-      await renderOverviewView(container);
-      break;
-    case "workers":
-      await renderWorkersView(container);
-      break;
-    case "customers":
-      await renderCustomersView(container);
-      break;
-    case "requests":
-      await renderRequestsView(container);
-      break;
-    case "reports":
-      await renderReportsView(container);
-      break;
-    case "reviews":
-      await renderReviewsView(container);
-      break;
-    case "trust-safety":
-      await renderTrustSafetyView(container);
-      break;
-    case "security":
-      await renderSecurityView(container);
-      break;
-    case "audit":
-      await renderAuditLogView(container);
-      break;
-    case "settings":
-      await renderSettingsView(container);
-      break;
-    default:
-      await renderOverviewView(container);
+  try {
+    switch (effectiveTab) {
+      case "overview":
+      case "dashboard":
+        await renderOverviewView(container);
+        break;
+      case "analytics":
+        await renderAnalyticsView(container, getPlatformViewContext());
+        break;
+      case "workers":
+        await renderWorkersView(container);
+        break;
+      case "customers":
+        await renderCustomersView(container);
+        break;
+      case "requests":
+        await renderRequestsView(container);
+        break;
+      case "announcements":
+        await renderAnnouncementsView(container, getPlatformViewContext());
+        break;
+      case "platform-controls":
+        await renderPlatformControlsView(container, getPlatformViewContext());
+        break;
+      case "services-districts":
+        await renderServicesDistrictsView(container, getPlatformViewContext());
+        break;
+      case "reports-moderation":
+      case "reports":
+      case "reviews":
+      case "trust-safety":
+        await renderReportsModerationView(container);
+        break;
+      case "security-audit":
+      case "security":
+      case "audit":
+        await renderSecurityAuditView(container);
+        break;
+      case "settings":
+        await renderSettingsView(container);
+        break;
+      default:
+        await renderOverviewView(container);
+    }
+    container.querySelectorAll("table.admin-table").forEach(applyResponsiveTableLabels);
+  } catch (err) {
+    console.error("[JKFixHub Admin] View render error:", err);
+    container.replaceChildren();
+    const errBox = document.createElement("div");
+    errBox.className = "admin-error-state";
+    const h3 = document.createElement("h3");
+    h3.textContent = "Could not load this section";
+    const ep = document.createElement("p");
+    ep.textContent = err?.message || "A connection error occurred while reading live data.";
+    const retryBtn = document.createElement("button");
+    retryBtn.type = "button";
+    retryBtn.className = "admin-btn-primary";
+    retryBtn.textContent = "Retry";
+    retryBtn.onclick = () => renderActiveView();
+    errBox.append(h3, ep, retryBtn);
+    container.appendChild(errBox);
   }
 }
 
@@ -394,11 +679,13 @@ async function renderActiveView() {
 // 1. COMMAND: Overview (Command Center)
 // ----------------------------------------------------------------------------
 async function renderOverviewView(container) {
-  const [stats, auditLogs] = await Promise.all([
+  const [stats, auditLogs, platformConfig] = await Promise.all([
     getAdminOverviewStats(),
-    getAdminAuditLogs()
+    getAdminAuditLogs(),
+    getAdminPlatformConfig()
   ]);
 
+  updateTopbarMaintenanceBadge(platformConfig);
   container.replaceChildren();
 
   // Header
@@ -407,30 +694,51 @@ async function renderOverviewView(container) {
   const titleBox = document.createElement("div");
   titleBox.className = "admin-view-title";
   const h2 = document.createElement("h2");
-  h2.textContent = "Platform Command Center";
+  h2.textContent = "Platform Control Centre";
   const p = document.createElement("p");
-  p.textContent = "Live operational indicators, action queues, platform health, and audit trail.";
+  p.textContent = "Live operational indicators, platform switches, priority queues, and immutable audit trail.";
   titleBox.appendChild(h2);
   titleBox.appendChild(p);
   header.appendChild(titleBox);
   container.appendChild(header);
 
-  // Section: Platform Health
+  // Section: Live Platform Operational Status
   const healthPanel = document.createElement("div");
   healthPanel.className = "admin-health-panel";
   const healthTitle = document.createElement("h3");
-  healthTitle.textContent = "Platform Infrastructure & Security Health";
+  healthTitle.textContent = "Live Platform Operational Status";
   healthPanel.appendChild(healthTitle);
 
   const healthGrid = document.createElement("div");
   healthGrid.className = "admin-health-grid";
 
+  const maintOn = isMaintenanceCurrentlyActive(platformConfig);
   const healthItems = [
-    { name: "Firebase Auth", status: "Operational (Identity Service Active)", dot: "ok" },
-    { name: "Cloud Firestore", status: "Connected (Server-side RBAC Enforced)", dot: "ok" },
-    { name: "Security Rules", status: "Enforced (admins/{uid} Fail-Closed)", dot: "ok" },
-    { name: "Cloud Storage", status: "Pending Step 18 (Honest indicator)", dot: "warn" },
-    { name: "Architecture", status: "Client SDK + Firestore Server Rules", dot: "ok" }
+    {
+      name: "Maintenance Mode",
+      status: maintOn ? "ACTIVE — Public notice visible" : "Inactive (Normal operations)",
+      dot: maintOn ? "warn" : "ok"
+    },
+    {
+      name: "Customer Signup",
+      status: platformConfig.customerRegistrationEnabled ? "Open for registrations" : "PAUSED by Admin",
+      dot: platformConfig.customerRegistrationEnabled ? "ok" : "warn"
+    },
+    {
+      name: "Worker Signup",
+      status: platformConfig.workerRegistrationEnabled ? "Open for onboarding" : "PAUSED by Admin",
+      dot: platformConfig.workerRegistrationEnabled ? "ok" : "warn"
+    },
+    {
+      name: "New Requests",
+      status: platformConfig.newRequestsEnabled ? "Accepting customer requests" : "PAUSED by Admin",
+      dot: platformConfig.newRequestsEnabled ? "ok" : "warn"
+    },
+    {
+      name: "Security & RBAC",
+      status: "Enforced (/admins/{uid} Fail-Closed)",
+      dot: "ok"
+    }
   ];
 
   for (const item of healthItems) {
@@ -648,10 +956,10 @@ async function renderOverviewView(container) {
   qaGrid.className = "admin-quick-actions-grid";
 
   const quickActions = [
-    { title: "Worker Directory", desc: "Verify credentials, approve discovery, manage suspensions.", icon: "🛠️", tab: "workers" },
-    { title: "Customer Directory", desc: "Audit registered customer accounts and verification states.", icon: "👥", tab: "customers" },
-    { title: "Trust & Safety Hub", desc: "Centralized queue for reports, reviews, and abuse mitigation.", icon: "🛡️", tab: "trust-safety" },
-    { title: "Platform Architecture", desc: "Inspect taxonomy, districts, infrastructure, and security settings.", icon: "⚙️", tab: "settings" }
+    { title: "Platform Controls", desc: "Maintenance mode, registration switches & request pause.", icon: "🎛️", tab: "platform-controls" },
+    { title: "Announcements", desc: "Publish inline notices for customers or workers.", icon: "📢", tab: "announcements" },
+    { title: "Services & Districts", desc: "Manage active service categories and J&K districts.", icon: "🗺️", tab: "services-districts" },
+    { title: "Live Analytics", desc: "Real request breakdowns, top services & district activity.", icon: "📈", tab: "analytics" }
   ];
 
   for (const qa of quickActions) {
@@ -745,6 +1053,7 @@ async function renderOverviewView(container) {
       tbody.appendChild(row);
     }
     table.appendChild(tbody);
+    applyResponsiveTableLabels(table);
     tableWrap.appendChild(table);
     container.appendChild(tableWrap);
   }
@@ -951,32 +1260,50 @@ async function renderWorkersView(container) {
       const actionsBox = document.createElement("div");
       actionsBox.className = "admin-table-actions";
 
-      // 1. Inspect profile modal
+      // 1. Inspect profile modal (enriched with real request metrics & complaints)
       const inspectBtn = document.createElement("button");
       inspectBtn.type = "button";
       inspectBtn.className = "admin-table-btn";
       inspectBtn.textContent = "Inspect";
-      inspectBtn.onclick = () => {
+      inspectBtn.onclick = async () => {
+        const [allRequests, allReports] = await Promise.all([
+          getAdminRequests(),
+          getAdminReports()
+        ]);
+        const workerReqs = allRequests.filter(
+          (r) => String(r.workerUid || r.workerId || "") === String(w.id)
+        );
+        const completedCount = workerReqs.filter((r) => r.status === "Completed").length;
+        const rejectedCount = workerReqs.filter((r) => r.status === "Rejected").length;
+        const acceptedCount = workerReqs.filter((r) => r.status === "Accepted").length;
+        const pendingCount = workerReqs.filter((r) => r.status === "Pending").length;
+        const workerComplaints = allReports.filter(
+          (rep) => String(rep.targetId || "") === String(w.id)
+        );
+
         const modalContent = document.createElement("div");
         const grid = document.createElement("div");
         grid.className = "admin-detail-grid";
 
         grid.appendChild(createDetailItem("Worker ID", w.id, true));
         grid.appendChild(createDetailItem("Full Name", w.name));
-        grid.appendChild(createDetailItem("Service Category", w.service));
-        grid.appendChild(createDetailItem("District", w.district));
-        grid.appendChild(createDetailItem("Rating", w.rating ? `★ ${w.rating}` : "No ratings yet"));
+        grid.appendChild(createDetailItem("Service Category", Array.isArray(w.services) && w.services.length ? w.services.join(", ") : (w.service || "—")));
+        grid.appendChild(createDetailItem("District Coverage", w.district || "—"));
+        grid.appendChild(createDetailItem("Rating & Reviews", w.rating ? `★ ${w.rating} (${w.reviewCount || 0} reviews)` : "No ratings yet"));
         grid.appendChild(createDetailItem("Moderation Status", w.status || "pending"));
         grid.appendChild(createDetailItem("Verification", w.isVerified ? "Verified" : "Pending Verification"));
+        grid.appendChild(createDetailItem("Service Requests", `${workerReqs.length} total (${completedCount} completed · ${acceptedCount} active · ${pendingCount} pending · ${rejectedCount} rejected)`, true));
+        grid.appendChild(createDetailItem("Complaints / Reports", workerComplaints.length > 0 ? `${workerComplaints.length} report(s): ${workerComplaints.slice(0, 3).map((r) => `${r.reason || "Safety"} (${r.status || "open"})`).join("; ")}` : "No complaints filed", true));
         const expDisplay = w.experience ? (String(w.experience).toLowerCase().includes("year") ? w.experience : `${w.experience} years`) : "—";
         grid.appendChild(createDetailItem("Experience", expDisplay));
         grid.appendChild(createDetailItem("Contact Email", w.email || "—"));
         grid.appendChild(createDetailItem("Contact Phone", w.phone || "—"));
         if (w.createdAt) grid.appendChild(createDetailItem("Registered Date", formatDateTime(w.createdAt)));
+        if (w.adminNotes) grid.appendChild(createDetailItem("Latest Admin Note", w.adminNotes, true));
         if (w.bio) grid.appendChild(createDetailItem("Professional Bio", w.bio, true));
         grid.appendChild(createDetailItem(
-          "Privacy & Data Separation",
-          "Worker contact info (email, phone) is securely stored in /users/{uid} and merged exclusively for authorized administrators. The public profile in /workers/{uid} never contains contact fields.",
+          "Privacy & Historical Record Protection",
+          "Worker contact info is stored privately in /users/{uid}. Suspending a worker removes them from public discovery while preserving all historical service requests and reviews.",
           true
         ));
 
@@ -1232,6 +1559,7 @@ async function renderWorkersView(container) {
     }
 
     table.appendChild(tbody);
+    applyResponsiveTableLabels(table);
     tableWrap.appendChild(table);
   };
 
@@ -1305,6 +1633,21 @@ async function renderCustomersView(container) {
   const filtersBox = document.createElement("div");
   filtersBox.className = "admin-toolbar-filters";
 
+  const statusSelect = document.createElement("select");
+  statusSelect.className = "admin-select-input";
+  statusSelect.setAttribute("aria-label", "Filter customers by account status");
+  [
+    { val: "all", label: "All Account Statuses" },
+    { val: "active", label: "Active Only" },
+    { val: "suspended", label: "Suspended Only" }
+  ].forEach((opt) => {
+    const o = document.createElement("option");
+    o.value = opt.val;
+    o.textContent = opt.label;
+    o.selected = (tabFilterState.customers.status || "all") === opt.val;
+    statusSelect.appendChild(o);
+  });
+
   const verSelect = document.createElement("select");
   verSelect.className = "admin-select-input";
   [
@@ -1338,6 +1681,7 @@ async function renderCustomersView(container) {
   resetBtn.className = "admin-btn-subtle";
   resetBtn.textContent = "Reset";
 
+  filtersBox.appendChild(statusSelect);
   filtersBox.appendChild(verSelect);
   filtersBox.appendChild(distSelect);
   filtersBox.appendChild(resetBtn);
@@ -1354,10 +1698,12 @@ async function renderCustomersView(container) {
     tableWrap.replaceChildren();
 
     const q = (tabFilterState.customers.query || "").toLowerCase().trim();
+    const sFilter = tabFilterState.customers.status || "all";
     const vFilter = tabFilterState.customers.verification;
     const dFilter = tabFilterState.customers.district;
 
     const filtered = customers.filter((c) => {
+      const accStatus = c.status || "active";
       if (q) {
         const uidMatch = String(c.uid || c.id || "").toLowerCase().includes(q);
         const nameMatch = String(c.name || "").toLowerCase().includes(q);
@@ -1366,6 +1712,7 @@ async function renderCustomersView(container) {
         const distMatch = String(c.district || "").toLowerCase().includes(q);
         if (!uidMatch && !nameMatch && !phoneMatch && !emailMatch && !distMatch) return false;
       }
+      if (sFilter !== "all" && accStatus !== sFilter) return false;
       if (vFilter === "verified" && !c.emailVerified) return false;
       if (vFilter === "unverified" && Boolean(c.emailVerified)) return false;
       if (dFilter !== "all" && String(c.district || "").toLowerCase() !== dFilter.toLowerCase()) return false;
@@ -1390,7 +1737,7 @@ async function renderCustomersView(container) {
 
     const thead = document.createElement("thead");
     const headRow = document.createElement("tr");
-    ["UID", "Name", "Phone", "Email", "Email Verified", "District", "Registered", "Actions"].forEach((txt) => {
+    ["Name", "Contact", "District", "Status", "Email Verified", "Registered", "Actions"].forEach((txt) => {
       const th = document.createElement("th");
       th.textContent = txt;
       headRow.appendChild(th);
@@ -1400,24 +1747,28 @@ async function renderCustomersView(container) {
 
     const tbody = document.createElement("tbody");
     for (const c of filtered) {
+      const accStatus = c.status || "active";
       const row = document.createElement("tr");
-
-      const tdUid = document.createElement("td");
-      tdUid.textContent = String(c.uid ? `${c.uid.substring(0, 10)}...` : c.id);
-      tdUid.title = String(c.uid || c.id);
-      row.appendChild(tdUid);
 
       const tdName = document.createElement("td");
       tdName.textContent = String(c.name || "Customer");
+      tdName.title = String(c.uid || c.id);
       row.appendChild(tdName);
 
-      const tdPhone = document.createElement("td");
-      tdPhone.textContent = String(c.phone || "—");
-      row.appendChild(tdPhone);
+      const tdContact = document.createElement("td");
+      tdContact.textContent = [c.email, c.phone].filter(Boolean).join(" · ") || "—";
+      row.appendChild(tdContact);
 
-      const tdEmail = document.createElement("td");
-      tdEmail.textContent = String(c.email || "—");
-      row.appendChild(tdEmail);
+      const tdDist = document.createElement("td");
+      tdDist.textContent = String(c.district || "—");
+      row.appendChild(tdDist);
+
+      const tdStatus = document.createElement("td");
+      const statusPill = document.createElement("span");
+      statusPill.className = `admin-status-pill ${accStatus === "suspended" ? "suspended" : "active"}`;
+      statusPill.textContent = accStatus === "suspended" ? "Suspended" : "Active";
+      tdStatus.appendChild(statusPill);
+      row.appendChild(tdStatus);
 
       const tdVer = document.createElement("td");
       const verPill = document.createElement("span");
@@ -1426,32 +1777,64 @@ async function renderCustomersView(container) {
       tdVer.appendChild(verPill);
       row.appendChild(tdVer);
 
-      const tdDist = document.createElement("td");
-      tdDist.textContent = String(c.district || "—");
-      row.appendChild(tdDist);
-
       const tdDate = document.createElement("td");
       tdDate.textContent = formatDateOnly(c.createdAt);
       row.appendChild(tdDate);
 
       const tdActions = document.createElement("td");
+      const actionsBox = document.createElement("div");
+      actionsBox.className = "admin-table-actions";
+
       const inspectBtn = document.createElement("button");
       inspectBtn.type = "button";
       inspectBtn.className = "admin-table-btn";
       inspectBtn.textContent = "Inspect";
-      inspectBtn.onclick = () => {
+      inspectBtn.onclick = async () => {
+        const [allRequests, allReports] = await Promise.all([
+          getAdminRequests(),
+          getAdminReports()
+        ]);
+        const custUid = c.uid || c.id;
+        const custRequests = allRequests.filter((r) => String(r.customerId || "") === String(custUid));
+        const custReports = allReports.filter(
+          (rep) => String(rep.targetId || "") === String(custUid) || String(rep.reporterUid || "") === String(custUid)
+        );
+
         const modalContent = document.createElement("div");
         const grid = document.createElement("div");
         grid.className = "admin-detail-grid";
 
-        grid.appendChild(createDetailItem("Firebase UID", c.uid || c.id, true));
+        grid.appendChild(createDetailItem("Firebase UID", custUid, true));
         grid.appendChild(createDetailItem("Customer Name", c.name));
+        grid.appendChild(createDetailItem("Account Status", accStatus === "suspended" ? "Suspended" : "Active"));
         grid.appendChild(createDetailItem("Phone Number", c.phone || "Not provided"));
         grid.appendChild(createDetailItem("Email Address", c.email || "Not provided"));
         grid.appendChild(createDetailItem("Email Verified", c.emailVerified ? "Yes (Verified)" : "No (Pending)"));
-        grid.appendChild(createDetailItem("District", c.district));
+        grid.appendChild(createDetailItem("District", c.district || "—"));
         grid.appendChild(createDetailItem("Account Created", formatDateTime(c.createdAt)));
-        grid.appendChild(createDetailItem("Privacy Notice", "Customer data is strictly managed in accordance with platform security and privacy policies.", true));
+        if (accStatus === "suspended") {
+          grid.appendChild(createDetailItem("Suspension Reason", c.suspensionReason || "Administrative restriction", true));
+          if (c.suspendedAt) grid.appendChild(createDetailItem("Suspended At", formatDateTime(c.suspendedAt)));
+          if (c.suspendedBy) grid.appendChild(createDetailItem("Suspended By (Admin UID)", c.suspendedBy));
+        }
+
+        const reqSummary = custRequests.length > 0
+          ? `${custRequests.length} request(s): ` +
+            custRequests.slice(0, 5).map((r) => `${r.service || "Service"} (${r.status || "Pending"})`).join(", ")
+          : "No service requests recorded.";
+        grid.appendChild(createDetailItem("Service Request History", reqSummary, true));
+
+        const repSummary = custReports.length > 0
+          ? `${custReports.length} report(s): ` +
+            custReports.slice(0, 4).map((r) => `${r.reason || "Report"} (${r.status || "open"})`).join("; ")
+          : "No reports associated with this account.";
+        grid.appendChild(createDetailItem("Relevant Safety Reports", repSummary, true));
+
+        grid.appendChild(createDetailItem(
+          "Suspension & Deletion Policy",
+          "Suspending an account blocks prohibited new activity while preserving all historical records. Permanent account deletion remains a separate user-initiated lifecycle.",
+          true
+        ));
 
         modalContent.appendChild(grid);
 
@@ -1461,18 +1844,84 @@ async function renderCustomersView(container) {
           isWide: true
         });
       };
-      tdActions.appendChild(inspectBtn);
+      actionsBox.appendChild(inspectBtn);
+
+      if (accStatus !== "suspended") {
+        const suspendBtn = document.createElement("button");
+        suspendBtn.type = "button";
+        suspendBtn.className = "admin-table-btn suspend";
+        suspendBtn.textContent = "Suspend";
+        suspendBtn.onclick = () => {
+          showReasonConfirmModal({
+            title: `Suspend Customer: ${c.name || "Customer"}`,
+            description: "Suspending this customer prevents new service requests and displays an account restriction notice. All historical records are safely preserved.",
+            reasonLabel: "Suspension Reason (required, logged in audit trail)",
+            placeholder: "e.g., Repeated abusive conduct or policy violation...",
+            required: true,
+            confirmText: "Suspend Account",
+            onConfirm: async (reason) => {
+              const res = await updateAdminCustomerStatus(c.uid || c.id, "suspended", currentAdmin.uid, reason);
+              if (res.success) {
+                c.status = "suspended";
+                c.suspensionReason = reason;
+                c.suspendedAt = new Date().toISOString();
+                c.suspendedBy = currentAdmin.uid;
+                showToast(`Customer ${c.name || "account"} suspended.`);
+                renderTable();
+              } else {
+                showToast(res.error || "Failed to suspend customer.");
+              }
+            }
+          });
+        };
+        actionsBox.appendChild(suspendBtn);
+      } else {
+        const reactivateBtn = document.createElement("button");
+        reactivateBtn.type = "button";
+        reactivateBtn.className = "admin-table-btn approve";
+        reactivateBtn.textContent = "Reactivate";
+        reactivateBtn.onclick = () => {
+          showReasonConfirmModal({
+            title: `Reactivate Customer: ${c.name || "Customer"}`,
+            description: "Restore full customer account access and remove the suspension restriction?",
+            reasonLabel: "Reactivation Note (optional)",
+            placeholder: "e.g., Appeal approved / issue resolved...",
+            required: false,
+            confirmText: "Reactivate Account",
+            onConfirm: async (reason) => {
+              const res = await updateAdminCustomerStatus(c.uid || c.id, "active", currentAdmin.uid, reason);
+              if (res.success) {
+                c.status = "active";
+                c.suspensionReason = null;
+                showToast(`Customer ${c.name || "account"} reactivated.`);
+                renderTable();
+              } else {
+                showToast(res.error || "Failed to reactivate customer.");
+              }
+            }
+          });
+        };
+        actionsBox.appendChild(reactivateBtn);
+      }
+
+      tdActions.appendChild(actionsBox);
       row.appendChild(tdActions);
 
       tbody.appendChild(row);
     }
 
     table.appendChild(tbody);
+    applyResponsiveTableLabels(table);
     tableWrap.appendChild(table);
   };
 
   searchInput.addEventListener("input", (e) => {
     tabFilterState.customers.query = e.target.value;
+    renderTable();
+  });
+
+  statusSelect.addEventListener("change", (e) => {
+    tabFilterState.customers.status = e.target.value;
     renderTable();
   });
 
@@ -1487,8 +1936,9 @@ async function renderCustomersView(container) {
   });
 
   resetBtn.addEventListener("click", () => {
-    tabFilterState.customers = { query: "", verification: "all", district: "all" };
+    tabFilterState.customers = { query: "", status: "all", verification: "all", district: "all" };
     searchInput.value = "";
+    statusSelect.value = "all";
     verSelect.value = "all";
     distSelect.value = "all";
     renderTable();
@@ -1952,6 +2402,7 @@ async function renderRequestsView(container) {
     }
 
     table.appendChild(tbody);
+    applyResponsiveTableLabels(table);
     tableWrap.appendChild(table);
   };
 
@@ -2214,6 +2665,7 @@ async function renderReportsView(container) {
     }
 
     table.appendChild(tbody);
+    applyResponsiveTableLabels(table);
     tableWrap.appendChild(table);
   };
 
@@ -2475,6 +2927,7 @@ async function renderReviewsView(container) {
     }
 
     table.appendChild(tbody);
+    applyResponsiveTableLabels(table);
     tableWrap.appendChild(table);
   };
 
@@ -2656,6 +3109,7 @@ async function renderTrustSafetyView(container) {
       tbody.appendChild(row);
     }
     table.appendChild(tbody);
+    applyResponsiveTableLabels(table);
     tableWrap.appendChild(table);
     container.appendChild(tableWrap);
   }
@@ -2759,6 +3213,7 @@ async function renderTrustSafetyView(container) {
       tbody.appendChild(row);
     }
     table.appendChild(tbody);
+    applyResponsiveTableLabels(table);
     tableWrap.appendChild(table);
     container.appendChild(tableWrap);
   }
@@ -2991,6 +3446,7 @@ async function renderSecurityView(container) {
     }
 
     table.appendChild(tbody);
+    applyResponsiveTableLabels(table);
     tableWrap.appendChild(table);
   };
 
@@ -3198,6 +3654,7 @@ async function renderAuditLogView(container) {
     }
 
     table.appendChild(tbody);
+    applyResponsiveTableLabels(table);
     tableWrap.appendChild(table);
   };
 
@@ -3225,6 +3682,7 @@ async function renderAuditLogView(container) {
 // 10. SYSTEM: Platform Architecture & Settings
 // ----------------------------------------------------------------------------
 async function renderSettingsView(container) {
+  const liveConfig = await getAdminPlatformConfig();
   container.replaceChildren();
 
   // Header
@@ -3233,9 +3691,9 @@ async function renderSettingsView(container) {
   const titleBox = document.createElement("div");
   titleBox.className = "admin-view-title";
   const h2 = document.createElement("h2");
-  h2.textContent = "Platform Architecture & System Settings";
+  h2.textContent = "Settings & Platform Architecture";
   const p = document.createElement("p");
-  p.textContent = "Technical taxonomy, geographic coverage, cloud infrastructure status, and authorization baseline.";
+  p.textContent = "Appearance preferences, active taxonomy summary, cloud infrastructure status, and authorization baseline.";
   titleBox.appendChild(h2);
   titleBox.appendChild(p);
   header.appendChild(titleBox);
@@ -3243,6 +3701,29 @@ async function renderSettingsView(container) {
 
   const grid = document.createElement("div");
   grid.className = "admin-settings-grid";
+
+  // Card 0: Appearance / Theme Preference
+  const themeCard = document.createElement("div");
+  themeCard.className = "admin-settings-card";
+  const themeH3 = document.createElement("h3");
+  themeH3.textContent = "Admin Interface Theme";
+  const themeP = document.createElement("p");
+  themeP.textContent = "Switch cleanly between high-contrast Light Mode and obsidian-forest Dark Mode.";
+  const themeBtns = document.createElement("div");
+  themeBtns.className = "admin-table-actions";
+  const lightBtn = document.createElement("button");
+  lightBtn.type = "button";
+  lightBtn.className = "admin-btn-subtle";
+  lightBtn.setAttribute("data-theme-choice", "light");
+  lightBtn.textContent = "☀️ Light Theme";
+  const darkBtn = document.createElement("button");
+  darkBtn.type = "button";
+  darkBtn.className = "admin-btn-subtle";
+  darkBtn.setAttribute("data-theme-choice", "dark");
+  darkBtn.textContent = "🌙 Dark Theme";
+  themeBtns.append(lightBtn, darkBtn);
+  themeCard.append(themeH3, themeP, themeBtns);
+  grid.appendChild(themeCard);
 
   // Card 1: Platform Identity
   const idCard = document.createElement("div");
@@ -3253,28 +3734,28 @@ async function renderSettingsView(container) {
   idP.textContent = "Official production specifications for [JK] FixHub.";
   const idDetail = document.createElement("div");
   idDetail.className = "admin-detail-grid";
-  idDetail.appendChild(createDetailItem("Platform Release", "JK FixHub 2.0 (Step 17A Command Center)"));
+  idDetail.appendChild(createDetailItem("Platform Release", "JK FixHub 2.0 (Platform Control Centre)"));
   idDetail.appendChild(createDetailItem("Firebase Project", "jkfixhub"));
   idDetail.appendChild(createDetailItem("Authorization Mode", "Server-Side Firestore RBAC (/admins/{uid})"));
-  idDetail.appendChild(createDetailItem("Security Baseline", "Fail-Closed (Hardened Commit b56a25f)"));
+  idDetail.appendChild(createDetailItem("Security Baseline", "Fail-Closed + Immutable Audit Logs"));
   idCard.appendChild(idH3);
   idCard.appendChild(idP);
   idCard.appendChild(idDetail);
   grid.appendChild(idCard);
 
-  // Card 2: Service Taxonomy (12 Categories)
+  // Card 2: Service Taxonomy (Live Configured Services)
   const taxCard = document.createElement("div");
   taxCard.className = "admin-settings-card";
   const taxH3 = document.createElement("h3");
-  taxH3.textContent = "Core Service Taxonomy";
+  taxH3.textContent = `Configured Services (${liveConfig.services.length})`;
   const taxP = document.createElement("p");
-  taxP.textContent = "Standardized directory service categories supported across Jammu & Kashmir.";
+  taxP.textContent = "Managed dynamically via Services and Districts. Disabled services preserve historical requests.";
   const taxTags = document.createElement("div");
   taxTags.className = "admin-tag-cloud";
-  CORE_CATEGORIES.forEach((cat) => {
+  liveConfig.services.forEach((svc) => {
     const t = document.createElement("span");
-    t.className = "admin-tax-tag";
-    t.textContent = cat;
+    t.className = `admin-status-pill ${svc.enabled !== false ? "enabled" : "disabled"}`;
+    t.textContent = svc.enabled !== false ? svc.name : `${svc.name} (Off)`;
     taxTags.appendChild(t);
   });
   taxCard.appendChild(taxH3);
@@ -3282,19 +3763,19 @@ async function renderSettingsView(container) {
   taxCard.appendChild(taxTags);
   grid.appendChild(taxCard);
 
-  // Card 3: Geographic Coverage (20 Districts)
+  // Card 3: Geographic Coverage (Live Districts)
   const distCard = document.createElement("div");
   distCard.className = "admin-settings-card";
   const distH3 = document.createElement("h3");
-  distH3.textContent = "Territorial Coverage";
+  distH3.textContent = `Territorial Coverage (${liveConfig.districts.length} Districts)`;
   const distP = document.createElement("p");
-  distP.textContent = "All 20 districts of Jammu & Kashmir actively supported for technician discovery and dispatch.";
+  distP.textContent = "Active Jammu & Kashmir operational districts managed in Services and Districts.";
   const distTags = document.createElement("div");
   distTags.className = "admin-tag-cloud";
-  JK_DISTRICTS.forEach((dist) => {
+  liveConfig.districts.forEach((dist) => {
     const t = document.createElement("span");
-    t.className = "admin-tax-tag";
-    t.textContent = dist;
+    t.className = `admin-status-pill ${dist.enabled !== false ? "enabled" : "disabled"}`;
+    t.textContent = dist.enabled !== false ? dist.name : `${dist.name} (Off)`;
     distTags.appendChild(t);
   });
   distCard.appendChild(distH3);
@@ -3366,6 +3847,8 @@ function mountAdminShell(adminSession) {
   mobileToggleBtn.type = "button";
   mobileToggleBtn.className = "admin-mobile-toggle";
   mobileToggleBtn.setAttribute("aria-label", "Toggle navigation menu");
+  mobileToggleBtn.setAttribute("aria-controls", "adminSidebar");
+  mobileToggleBtn.setAttribute("aria-expanded", "false");
   mobileToggleBtn.textContent = "☰";
 
   const brandLogo = document.createElement("div");
@@ -3384,7 +3867,7 @@ function mountAdminShell(adminSession) {
 
   const privilegedBadge = document.createElement("span");
   privilegedBadge.className = "admin-badge-privileged";
-  privilegedBadge.textContent = "COMMAND CENTER";
+  privilegedBadge.textContent = "CONTROL CENTRE";
 
   topbarLeft.appendChild(mobileToggleBtn);
   topbarLeft.appendChild(brandLogo);
@@ -3394,10 +3877,12 @@ function mountAdminShell(adminSession) {
   topbarCenter.className = "admin-topbar-center";
 
   const secPill = document.createElement("div");
+  secPill.id = "adminTopbarSecurityPill";
   secPill.className = "admin-security-state-pill";
   const secDot = document.createElement("span");
   secDot.className = "admin-sec-dot";
   const secText = document.createElement("span");
+  secText.id = "adminTopbarSecurityText";
   secText.textContent = "SYSTEM SECURE — RBAC ACTIVE";
   secPill.appendChild(secDot);
   secPill.appendChild(secText);
@@ -3405,6 +3890,15 @@ function mountAdminShell(adminSession) {
 
   const topbarRight = document.createElement("div");
   topbarRight.className = "admin-topbar-right";
+
+  const themeToggleBtn = document.createElement("button");
+  themeToggleBtn.id = "adminThemeToggleBtn";
+  themeToggleBtn.type = "button";
+  themeToggleBtn.className = "admin-theme-toggle-btn";
+  themeToggleBtn.setAttribute("data-theme-toggle", "");
+  themeToggleBtn.setAttribute("aria-label", "Toggle light and dark theme");
+  themeToggleBtn.title = "Switch Light / Dark theme";
+  themeToggleBtn.textContent = "🌓";
 
   const sessionBadge = document.createElement("div");
   sessionBadge.className = "admin-session-badge";
@@ -3429,6 +3923,7 @@ function mountAdminShell(adminSession) {
     showToast("Signed out from administration session.");
   });
 
+  topbarRight.appendChild(themeToggleBtn);
   topbarRight.appendChild(sessionBadge);
   topbarRight.appendChild(signOutBtn);
 
@@ -3529,11 +4024,13 @@ function mountAdminShell(adminSession) {
   const toggleDrawer = () => {
     const isOpen = nav.classList.toggle("nav-open");
     overlay.classList.toggle("active", isOpen);
+    mobileToggleBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
   };
 
   const closeDrawer = () => {
     nav.classList.remove("nav-open");
     overlay.classList.remove("active");
+    mobileToggleBtn.setAttribute("aria-expanded", "false");
   };
 
   mobileToggleBtn.addEventListener("click", toggleDrawer);
@@ -3615,8 +4112,27 @@ function handleAuthStateChange(adminSession, meta = {}) {
 }
 
 function initializeAdminApp() {
-  // 0. Initialize 3D Background & Signature Layer
+  // 0. Initialize Dual-Theme Controller & 3D Background Stage
+  initializeTheme();
   initializeAdminCanvas();
+
+  // Keyboard Accessibility: Escape closes open action modal or mobile drawer
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const modalBackdrop = document.getElementById("adminActionModal");
+    if (modalBackdrop && !modalBackdrop.hidden) {
+      modalBackdrop.hidden = true;
+      return;
+    }
+    const sidebar = document.getElementById("adminSidebar");
+    const overlay = document.getElementById("adminSidebarOverlay");
+    const toggleBtn = document.getElementById("adminNavToggleBtn");
+    if (sidebar && sidebar.classList.contains("nav-open")) {
+      sidebar.classList.remove("nav-open");
+      if (overlay) overlay.classList.remove("active");
+      if (toggleBtn) toggleBtn.setAttribute("aria-expanded", "false");
+    }
+  });
 
   // 1. Subscribe to auth state
   subscribeAdminAuthState(handleAuthStateChange);

@@ -28,6 +28,10 @@ import { setView } from "./navigation.js";
 import { setTextContent } from "./security.js";
 import { initializeFirestoreClient, getFirestoreMethods } from "./firebase-config.js";
 import { isAuthReady, whenAuthReady, getPersistedSessionRole } from "./auth.js";
+import {
+  fetchActiveAnnouncementsForAudience,
+  renderAnnouncementsIntoContainer
+} from "./platform-config.js";
 
 let initialized = false;
 let isCustomerSyncing = false;
@@ -69,6 +73,34 @@ export function renderCustomerHome(user, options = {}) {
   const displayName = user?.name ? user.name.split(" ")[0] : "Customer";
   if (nameEl) setTextContent(nameEl, displayName);
   if (districtEl) setTextContent(districtEl, user?.district || "Jammu & Kashmir");
+
+  // Account suspension notice (preserves historical access & support)
+  const suspensionBanner = document.getElementById("customerSuspensionBanner");
+  if (suspensionBanner) {
+    if (user?.status === "suspended") {
+      suspensionBanner.hidden = false;
+      suspensionBanner.replaceChildren();
+      const title = document.createElement("strong");
+      setTextContent(title, "Account Restricted");
+      const msg = document.createElement("p");
+      const reasonStr = user.suspensionReason ? ` Reason: ${user.suspensionReason}` : "";
+      setTextContent(
+        msg,
+        `Your customer account is currently suspended.${reasonStr} New service requests are paused, while your historical requests and support remain accessible.`
+      );
+      suspensionBanner.append(title, msg);
+    } else {
+      suspensionBanner.hidden = true;
+    }
+  }
+
+  // Inline audience-filtered announcements (customers + everyone; no unexpected popups)
+  const annContainer = document.getElementById("customerAnnouncementsContainer");
+  if (annContainer && !options?.skipAnnouncements) {
+    fetchActiveAnnouncementsForAudience("customers")
+      .then((items) => renderAnnouncementsIntoContainer(annContainer, items))
+      .catch(() => {});
+  }
 
   // Query actual customer requests
   let requests = [];
@@ -188,6 +220,35 @@ export function renderWorkerHome(user, options = {}) {
   }
   if (expBadge) {
     setTextContent(expBadge, worker?.experience || user?.experience || "Experience");
+  }
+
+  // Worker account suspension notice
+  const workerSuspBanner = document.getElementById("workerSuspensionBanner");
+  if (workerSuspBanner) {
+    const isSusp = user?.status === "suspended" || worker?.status === "suspended";
+    if (isSusp) {
+      workerSuspBanner.hidden = false;
+      workerSuspBanner.replaceChildren();
+      const title = document.createElement("strong");
+      setTextContent(title, "Worker Account Suspended");
+      const msg = document.createElement("p");
+      const reasonStr = (user?.suspensionReason || worker?.adminNotes) ? ` Reason: ${user?.suspensionReason || worker?.adminNotes}` : "";
+      setTextContent(
+        msg,
+        `Your technician profile is currently paused from public discovery.${reasonStr} Existing service records remain accessible.`
+      );
+      workerSuspBanner.append(title, msg);
+    } else {
+      workerSuspBanner.hidden = true;
+    }
+  }
+
+  // Inline audience-filtered announcements (workers + everyone; no unexpected popups)
+  const workerAnnContainer = document.getElementById("workerAnnouncementsContainer");
+  if (workerAnnContainer && !options?.skipAnnouncements) {
+    fetchActiveAnnouncementsForAudience("workers")
+      .then((items) => renderAnnouncementsIntoContainer(workerAnnContainer, items))
+      .catch(() => {});
   }
 
   // Availability control

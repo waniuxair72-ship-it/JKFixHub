@@ -59,6 +59,13 @@ import { stopCustomerDetailsSubscription } from "./customer-requests.js";
 import { unsubscribeAllFirestoreListeners } from "./firestore-service.js";
 import { closeChat } from "./chat.js";
 import { callDeleteUserAccount } from "./functions-client.js";
+import {
+  loadPlatformConfig,
+  getCachedPlatformConfig,
+  isDistrictCurrentlyEnabled,
+  isServiceCurrentlyEnabled,
+  getAllConfiguredServices
+} from "./platform-config.js";
 
 const ALLOWED_DISTRICTS = Object.freeze([
   "Shopian",
@@ -457,6 +464,23 @@ export function showCustomerRegister() {
     if (phoneToggleBtn) phoneToggleBtn.hidden = false;
     const phoneInput = document.getElementById("authCustomerPhone");
     if (phoneInput) phoneInput.value = "";
+    const submitBtn = document.getElementById("authCustomerRegisterSubmit");
+    const cfg = getCachedPlatformConfig();
+    if (cfg.customerRegistrationEnabled === false) {
+      setAuthFeedback("New customer registrations are currently paused by platform administration. Please check back later.", true);
+      if (submitBtn) submitBtn.disabled = true;
+    } else if (submitBtn) {
+      submitBtn.disabled = false;
+    }
+    loadPlatformConfig().then((liveCfg) => {
+      if (activeAuthTab !== "customer-register") return;
+      if (liveCfg.customerRegistrationEnabled === false) {
+        setAuthFeedback("New customer registrations are currently paused by platform administration. Please check back later.", true);
+        if (submitBtn) submitBtn.disabled = true;
+      } else if (submitBtn) {
+        submitBtn.disabled = false;
+      }
+    }).catch(() => {});
     document.getElementById("authCustomerName")?.focus();
   }
   if (wrkPanel) wrkPanel.hidden = true;
@@ -482,6 +506,23 @@ export function showWorkerRegister() {
   if (custPanel) custPanel.hidden = true;
   if (wrkPanel) {
     wrkPanel.hidden = false;
+    const submitBtn = document.getElementById("authWorkerRegisterSubmit");
+    const cfg = getCachedPlatformConfig();
+    if (cfg.workerRegistrationEnabled === false) {
+      setAuthFeedback("New worker registrations are currently paused by platform administration. Please check back later.", true);
+      if (submitBtn) submitBtn.disabled = true;
+    } else if (submitBtn) {
+      submitBtn.disabled = false;
+    }
+    loadPlatformConfig().then((liveCfg) => {
+      if (activeAuthTab !== "worker-register") return;
+      if (liveCfg.workerRegistrationEnabled === false) {
+        setAuthFeedback("New worker registrations are currently paused by platform administration. Please check back later.", true);
+        if (submitBtn) submitBtn.disabled = true;
+      } else if (submitBtn) {
+        submitBtn.disabled = false;
+      }
+    }).catch(() => {});
     document.getElementById("authWorkerName")?.focus();
   }
   if (rolePanel) rolePanel.hidden = true;
@@ -559,6 +600,13 @@ export function switchAuthTab(tabName) {
 export async function registerCustomer({ name, identifier, email, phone, district, password, confirmPassword }) {
   clearAuthFieldErrors();
 
+  const platformConfig = await loadPlatformConfig();
+  if (platformConfig.customerRegistrationEnabled === false) {
+    const errorMsg = "New customer registrations are currently paused by platform administration. Please check back later.";
+    setAuthFeedback(errorMsg, true);
+    return { success: false, error: errorMsg };
+  }
+
   const isNameValid = validatePersonName(name);
   if (!isNameValid) {
     setFieldError("authCustomerName", "authCustomerNameError", getSafeErrorMessage("invalidName"));
@@ -586,6 +634,11 @@ export async function registerCustomer({ name, identifier, email, phone, distric
   if (!district || !ALLOWED_DISTRICTS.includes(district)) {
     setFieldError("authCustomerDistrict", "authCustomerDistrictError", getSafeErrorMessage("invalidDistrict"));
     return { success: false, error: getSafeErrorMessage("invalidDistrict") };
+  }
+  if (!isDistrictCurrentlyEnabled(district, platformConfig)) {
+    const errMsg = `${district} is currently unavailable for new registrations. Please select an active district.`;
+    setFieldError("authCustomerDistrict", "authCustomerDistrictError", errMsg);
+    return { success: false, error: errMsg };
   }
 
   const passCheck = validatePassword(password, confirmPassword, { minLength: 6, maxLength: 20 });
@@ -804,6 +857,13 @@ export async function registerCustomer({ name, identifier, email, phone, distric
 export async function registerWorker({ name, email, phone, district, service, experience, availability, password, confirmPassword }) {
   clearAuthFieldErrors();
 
+  const platformConfig = await loadPlatformConfig();
+  if (platformConfig.workerRegistrationEnabled === false) {
+    const errorMsg = "New worker registrations are currently paused by platform administration. Please check back later.";
+    setAuthFeedback(errorMsg, true);
+    return { success: false, error: errorMsg };
+  }
+
   const isNameValid = validatePersonName(name);
   if (!isNameValid) {
     setFieldError("authWorkerName", "authWorkerNameError", getSafeErrorMessage("invalidName"));
@@ -826,10 +886,23 @@ export async function registerWorker({ name, email, phone, district, service, ex
     setFieldError("authWorkerDistrict", "authWorkerDistrictError", getSafeErrorMessage("invalidDistrict"));
     return { success: false, error: getSafeErrorMessage("invalidDistrict") };
   }
+  if (!isDistrictCurrentlyEnabled(district, platformConfig)) {
+    const errMsg = `${district} is currently unavailable for worker onboarding.`;
+    setFieldError("authWorkerDistrict", "authWorkerDistrictError", errMsg);
+    return { success: false, error: errMsg };
+  }
 
-  if (!service || !validateService(service)) {
+  const configuredServiceMatch = getAllConfiguredServices(platformConfig).some(
+    (s) => s.name.toLowerCase() === String(service || "").trim().toLowerCase()
+  );
+  if (!service || (!validateService(service) && !configuredServiceMatch)) {
     setFieldError("authWorkerService", "authWorkerServiceError", "Please select a valid primary service.");
     return { success: false, error: "Please select a valid primary service." };
+  }
+  if (!isServiceCurrentlyEnabled(service, platformConfig)) {
+    const errMsg = `The service category "${service}" is currently unavailable.`;
+    setFieldError("authWorkerService", "authWorkerServiceError", errMsg);
+    return { success: false, error: errMsg };
   }
 
   if (typeof experience !== "string" || experience.trim().length === 0 || !/^\d{1,2} years?$/i.test(experience.trim())) {
@@ -1399,6 +1472,12 @@ export async function resolveUserProfile(firebaseUser, { attemptSelfHeal = true 
     console.info("[JKFixHub Auth] Self-heal suppressed: Role resolution is uncertain or transient network error occurred for:", uid);
   }
 
+  const effectiveStatus = status || (userLookup.exists && userLookup.data?.status ? userLookup.data.status : (role === "worker" ? "pending" : "active"));
+  const suspensionReason =
+    (userLookup.exists && userLookup.data?.suspensionReason) ||
+    (workerLookup.exists && workerLookup.data?.adminNotes) ||
+    null;
+
   return {
     role,
     name,
@@ -1411,7 +1490,8 @@ export async function resolveUserProfile(firebaseUser, { attemptSelfHeal = true 
     workerId: workerId || (role === "worker" ? uid : null),
     emailVerified: isEmailVerified,
     isVerified: Boolean(isVerified),
-    status: status || (role === "worker" ? "pending" : null),
+    status: effectiveStatus,
+    suspensionReason,
     authProvider: "firebase",
     deletionActive: deletionLookup.isActive,
     createdAt
@@ -1489,7 +1569,8 @@ export async function signInUser({ email, password }) {
           workerId: profile.workerId || null,
           emailVerified: Boolean(user.emailVerified),
           isVerified: Boolean(profile.isVerified),
-          status: profile.status || (profile.role === "worker" ? "pending" : null),
+          status: profile.status || (profile.role === "worker" ? "pending" : "active"),
+          suspensionReason: profile.suspensionReason || null,
           authProvider: "firebase",
           createdAt: profile.createdAt || new Date().toISOString()
         };

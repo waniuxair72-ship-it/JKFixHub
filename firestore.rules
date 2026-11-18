@@ -64,6 +64,66 @@ service cloud.firestore {
         ];
     }
 
+    // Platform Control Centre Helpers (/platformConfig/public):
+    // Default fail-open ONLY when /platformConfig/public has not been initialized yet,
+    // preserving backward compatibility while enforcing admin toggles immediately once set.
+    function hasPlatformConfig() {
+      return exists(/databases/$(database)/documents/platformConfig/public);
+    }
+
+    function platformConfigData() {
+      return get(/databases/$(database)/documents/platformConfig/public).data;
+    }
+
+    function isCustomerRegistrationEnabled() {
+      return !hasPlatformConfig() || platformConfigData().get('customerRegistrationEnabled', true) == true;
+    }
+
+    function isWorkerRegistrationEnabled() {
+      return !hasPlatformConfig() || platformConfigData().get('workerRegistrationEnabled', true) == true;
+    }
+
+    function areNewRequestsEnabled() {
+      return !hasPlatformConfig() || platformConfigData().get('newRequestsEnabled', true) == true;
+    }
+
+    function isServiceEnabled(serviceName) {
+      return !hasPlatformConfig() ||
+        !(serviceName is string) ||
+        serviceName.size() == 0 ||
+        !(serviceName.lower() in platformConfigData().get('disabledServices', []));
+    }
+
+    function isDistrictEnabled(districtName) {
+      return !hasPlatformConfig() ||
+        !(districtName is string) ||
+        districtName.size() == 0 ||
+        !(districtName.lower() in platformConfigData().get('disabledDistricts', []));
+    }
+
+    function isUserSuspended(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid)) &&
+        get(/databases/$(database)/documents/users/$(uid)).data.get('status', 'active') == 'suspended';
+    }
+
+    function currentUserRole() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'customer')
+        : (isAuthenticated() && exists(/databases/$(database)/documents/workers/$(request.auth.uid)) ? 'worker' : 'customer');
+    }
+
+    function isAnnouncementActiveForUser() {
+      return isAuthenticated() &&
+        resource.data.status == "published" &&
+        (!('publishAtMs' in resource.data) || resource.data.publishAtMs == null || resource.data.publishAtMs <= request.time.toMillis()) &&
+        (!('expiresAtMs' in resource.data) || resource.data.expiresAtMs == null || resource.data.expiresAtMs > request.time.toMillis()) &&
+        (
+          resource.data.audience == "everyone" ||
+          (resource.data.audience == "customers" && currentUserRole() == "customer") ||
+          (resource.data.audience == "workers" && currentUserRole() == "worker")
+        );
+    }
+
     // Core Service Request Protection:
     // Guarantees immutable core identity, assignment, and service details upon update.
     function requestCoreFieldsUnchanged() {
@@ -233,11 +293,20 @@ service cloud.firestore {
       allow create: if isUser(uid) &&
                     !isAccountDeletionInProgress(uid) &&
                     request.resource.data.uid == uid &&
-                    request.resource.data.role in ['customer', 'worker'];
+                    request.resource.data.role in ['customer', 'worker'] &&
+                    request.resource.data.get('status', 'active') == 'active' &&
+                    (
+                      (request.resource.data.role == 'customer' && isCustomerRegistrationEnabled()) ||
+                      (request.resource.data.role == 'worker' && isWorkerRegistrationEnabled())
+                    );
       allow update: if (isUser(uid) &&
                        !isAccountDeletionInProgress(uid) &&
                        request.resource.data.uid == resource.data.uid &&
-                       request.resource.data.role == resource.data.role) || isAdmin();
+                       request.resource.data.role == resource.data.role &&
+                       request.resource.data.get('status', 'active') == resource.data.get('status', 'active') &&
+                       request.resource.data.get('suspensionReason', null) == resource.data.get('suspensionReason', null) &&
+                       request.resource.data.get('suspendedAt', null) == resource.data.get('suspendedAt', null) &&
+                       request.resource.data.get('suspendedBy', null) == resource.data.get('suspendedBy', null)) || isAdmin();
       allow delete: if isAdmin();
     }
 
@@ -269,6 +338,7 @@ service cloud.firestore {
       allow create: if (
         isAuthenticated() &&
         request.auth.uid == workerId &&
+        isWorkerRegistrationEnabled() &&
         !isAccountDeletionInProgress(workerId) &&
         !('email' in request.resource.data) &&
         !('phone' in request.resource.data) &&
@@ -310,6 +380,10 @@ service cloud.firestore {
       );
       allow create: if (isEmailVerified() &&
                     request.resource.data.customerId == request.auth.uid &&
+                    !isUserSuspended(request.auth.uid) &&
+                    areNewRequestsEnabled() &&
+                    isServiceEnabled(request.resource.data.get('service', '')) &&
+                    isDistrictEnabled(request.resource.data.get('district', '')) &&
                     !isAccountDeletionInProgress(request.auth.uid) &&
                     !isAccountDeletionInProgress(request.resource.data.workerUid) &&
                     request.resource.data.status == "Pending" &&
@@ -418,6 +492,36 @@ service cloud.firestore {
       allow create: if isAdmin() && request.resource.data.adminUid == request.auth.uid;
       allow read: if isAdmin();
       allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // 10. Platform Control Configuration: /platformConfig/{docId}
+    // ------------------------------------------------------------------------
+    // - /platformConfig/public exposes ONLY minimal operational state (maintenance,
+    //   registration switches, request pause, active services & districts).
+    // - All writes strictly restricted to active verified administrators.
+    // - Any private admin metadata docs remain admin-read-only.
+    // ------------------------------------------------------------------------
+    match /platformConfig/public {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /platformConfig/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // ------------------------------------------------------------------------
+    // 11. Platform Announcements: /announcements/{announcementId}
+    // ------------------------------------------------------------------------
+    // - Admins have full CRUD management privileges.
+    // - Customers and workers can ONLY read published, non-expired, scheduled-active
+    //   announcements targeted to their audience or "everyone".
+    // - Draft, paused, archived, and expired announcements are NEVER exposed to ordinary users.
+    // ------------------------------------------------------------------------
+    match /announcements/{announcementId} {
+      allow read: if isAdmin() || isAnnouncementActiveForUser();
+      allow create, update, delete: if isAdmin();
     }
 
     // ------------------------------------------------------------------------

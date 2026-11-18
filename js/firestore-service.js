@@ -15,6 +15,11 @@ import {
   getFirestoreDb,
   getFirestoreMethods
 } from "./firebase-config.js";
+import {
+  normalizePlatformConfig,
+  setCachedPlatformConfig,
+  invalidatePlatformConfigCache
+} from "./platform-config.js";
 
 let adminSessionProvider = null;
 
@@ -179,10 +184,18 @@ export function invalidateAdminStatsCache() {
 export async function getAdminOverviewStats() {
   const stats = {
     totalCustomers: 0,
+    suspendedCustomers: 0,
     totalWorkers: 0,
+    verifiedWorkers: 0,
     pendingWorkerVerification: 0,
+    suspendedWorkers: 0,
+    totalRequests: 0,
+    pendingRequests: 0,
+    acceptedRequests: 0,
     activeRequests: 0,
     completedRequests: 0,
+    rejectedRequests: 0,
+    cancelledRequests: 0,
     openReports: 0,
     reportedReviews: 0,
     securityEvents: 0
@@ -227,36 +240,58 @@ export async function getAdminOverviewStats() {
         const workersSnap = await methods.getDocs(methods.collection(db, "workers"));
         stats.totalWorkers = workersSnap.size;
         let pending = 0;
+        let verified = 0;
+        let suspended = 0;
         workersSnap.forEach((doc) => {
           const d = doc.data();
+          if (d.status === "suspended") suspended++;
+          if (d.isVerified === true && d.status !== "suspended") verified++;
           if (d.isVerified === false || d.status === "pending") pending++;
         });
         stats.pendingWorkerVerification = pending;
+        stats.verifiedWorkers = verified;
+        stats.suspendedWorkers = suspended;
       } catch {}
 
       // Customers (from users collection where role == 'customer')
       try {
         const usersSnap = await methods.getDocs(methods.collection(db, "users"));
         let customers = 0;
+        let suspendedCust = 0;
         usersSnap.forEach((doc) => {
           const d = doc.data();
-          if (d.role === "customer") customers++;
+          if (d.role === "customer") {
+            customers++;
+            if (d.status === "suspended") suspendedCust++;
+          }
         });
         stats.totalCustomers = customers;
+        stats.suspendedCustomers = suspendedCust;
       } catch {}
 
       // Requests
       try {
         const reqSnap = await methods.getDocs(methods.collection(db, "requests"));
-        let active = 0;
+        stats.totalRequests = reqSnap.size;
+        let pending = 0;
+        let accepted = 0;
         let completed = 0;
+        let rejected = 0;
+        let cancelled = 0;
         reqSnap.forEach((doc) => {
           const d = doc.data();
           if (d.status === "Completed") completed++;
-          else if (d.status === "Accepted" || d.status === "Pending") active++;
+          else if (d.status === "Accepted") accepted++;
+          else if (d.status === "Pending") pending++;
+          else if (d.status === "Rejected") rejected++;
+          else if (d.status === "Cancelled") cancelled++;
         });
-        stats.activeRequests = active;
+        stats.pendingRequests = pending;
+        stats.acceptedRequests = accepted;
+        stats.activeRequests = pending + accepted;
         stats.completedRequests = completed;
+        stats.rejectedRequests = rejected;
+        stats.cancelledRequests = cancelled;
       } catch {}
 
       // Reports
@@ -516,6 +551,10 @@ export async function getAdminCustomers() {
           phone: data.phone || null,
           emailVerified: Boolean(data.emailVerified),
           district: data.district || null,
+          status: data.status || "active",
+          suspensionReason: data.suspensionReason || null,
+          suspendedAt: data.suspendedAt || null,
+          suspendedBy: data.suspendedBy || null,
           createdAt: data.createdAt || null
         });
       }
@@ -574,6 +613,10 @@ export async function subscribeToAdminCustomers(onUpdate, onError) {
                 phone: data.phone || null,
                 emailVerified: Boolean(data.emailVerified),
                 district: data.district || null,
+                status: data.status || "active",
+                suspensionReason: data.suspensionReason || null,
+                suspendedAt: data.suspendedAt || null,
+                suspendedBy: data.suspendedBy || null,
                 createdAt: data.createdAt || null
               });
             }
@@ -960,6 +1003,593 @@ export async function getAdminAuditLogs() {
   } catch (err) {
     console.warn("[JKFixHub Admin] Audit logs fetch failed:", err?.message || err);
     return [];
+  }
+}
+
+/**
+ * Suspends or reactivates a customer account in /users/{customerId}.
+ * Preserves all historical records and logs an immutable audit entry.
+ */
+export async function updateAdminCustomerStatus(customerId, status, adminUid, reason = "") {
+  if (!isSessionAuthorizedAdmin()) {
+    return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
+  }
+  if (!customerId || typeof customerId !== "string" || !customerId.trim()) {
+    return { success: false, error: "Customer ID is required." };
+  }
+  if (status !== "active" && status !== "suspended") {
+    return { success: false, error: "Invalid customer account status." };
+  }
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || (typeof methods.updateDoc !== "function" && typeof methods.setDoc !== "function")) {
+      return { success: false, error: "Firestore unavailable." };
+    }
+
+    const userRef = methods.doc(db, "users", customerId.trim());
+    let previousStatus = "active";
+    if (typeof methods.getDoc === "function") {
+      try {
+        const snap = await methods.getDoc(userRef);
+        if (snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists)) {
+          const data = typeof snap.data === "function" ? snap.data() : snap.data;
+          previousStatus = data?.status || "active";
+        }
+      } catch (_) {}
+    }
+
+    const cleanReason = String(reason || "").trim().slice(0, 500);
+    const nowIso = new Date().toISOString();
+    const updates = {
+      status,
+      updatedAt: nowIso,
+      lastModeratedBy: adminUid
+    };
+
+    if (status === "suspended") {
+      updates.suspensionReason = cleanReason || "Suspended by platform administration.";
+      updates.suspendedAt = nowIso;
+      updates.suspendedBy = adminUid;
+    } else {
+      updates.suspensionReason = null;
+      updates.reactivatedAt = nowIso;
+      updates.reactivatedBy = adminUid;
+    }
+
+    if (typeof methods.updateDoc === "function") {
+      await methods.updateDoc(userRef, updates);
+    } else {
+      await methods.setDoc(userRef, updates, { merge: true });
+    }
+
+    await recordAdminAuditLog({
+      adminUid,
+      action: status === "suspended" ? "CUSTOMER_SUSPENDED" : "CUSTOMER_REACTIVATED",
+      targetType: "customer",
+      targetId: customerId.trim(),
+      result: "success",
+      details: {
+        previousStatus,
+        newStatus: status,
+        reason: cleanReason || (status === "suspended" ? "Administrative suspension" : "Account reactivated")
+      }
+    });
+
+    invalidateAdminStatsCache();
+    return { success: true, error: null, previousStatus, newStatus: status };
+  } catch (err) {
+    console.error("[JKFixHub Admin] Customer status update failed:", err?.message || err);
+    return { success: false, error: err?.message || "Failed to update customer status." };
+  }
+}
+
+/**
+ * Loads the canonical platform control configuration (/platformConfig/public) for administration.
+ */
+export async function getAdminPlatformConfig() {
+  if (!isSessionAuthorizedAdmin()) return normalizePlatformConfig(null);
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.doc !== "function" || typeof methods.getDoc !== "function") {
+      return normalizePlatformConfig(null);
+    }
+
+    const snap = await methods.getDoc(methods.doc(db, "platformConfig", "public"));
+    const exists = snap && (typeof snap.exists === "function" ? snap.exists() : Boolean(snap.exists));
+    const data = exists ? (typeof snap.data === "function" ? snap.data() : snap.data) : null;
+    const normalized = normalizePlatformConfig(data);
+    setCachedPlatformConfig(normalized);
+    return normalized;
+  } catch (err) {
+    console.warn("[JKFixHub Admin] Platform config fetch failed:", err?.message || err);
+    return normalizePlatformConfig(null);
+  }
+}
+
+/**
+ * Updates /platformConfig/public with validated operational controls and records immutable audit trail.
+ */
+export async function updateAdminPlatformConfig(patch, adminUid, { actionType = "PLATFORM_CONFIG_UPDATED", summary = "" } = {}) {
+  if (!isSessionAuthorizedAdmin()) {
+    return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
+  }
+  if (!patch || typeof patch !== "object") {
+    return { success: false, error: "Configuration patch is required." };
+  }
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.doc !== "function" || typeof methods.setDoc !== "function") {
+      return { success: false, error: "Firestore unavailable." };
+    }
+
+    const configRef = methods.doc(db, "platformConfig", "public");
+    let current = normalizePlatformConfig(null);
+    if (typeof methods.getDoc === "function") {
+      try {
+        const snap = await methods.getDoc(configRef);
+        const exists = snap && (typeof snap.exists === "function" ? snap.exists() : Boolean(snap.exists));
+        if (exists) {
+          current = normalizePlatformConfig(typeof snap.data === "function" ? snap.data() : snap.data);
+        }
+      } catch (_) {}
+    }
+
+    const merged = normalizePlatformConfig({
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString()
+    });
+
+    // Write ONLY minimal public operational fields (never internal secrets or admin PII)
+    const publicPayload = {
+      maintenanceMode: merged.maintenanceMode,
+      maintenanceMessage: merged.maintenanceMessage,
+      maintenanceStart: merged.maintenanceStart,
+      maintenanceEnd: merged.maintenanceEnd,
+      customerRegistrationEnabled: merged.customerRegistrationEnabled,
+      workerRegistrationEnabled: merged.workerRegistrationEnabled,
+      newRequestsEnabled: merged.newRequestsEnabled,
+      newRequestsPauseMessage: merged.newRequestsPauseMessage,
+      services: merged.services,
+      disabledServices: merged.disabledServices,
+      districts: merged.districts,
+      disabledDistricts: merged.disabledDistricts,
+      updatedAt: merged.updatedAt
+    };
+
+    await methods.setDoc(configRef, publicPayload, { merge: true });
+    setCachedPlatformConfig(publicPayload);
+    invalidatePlatformConfigCache();
+
+    // Build concise previous vs new snapshot for audit log
+    const prevSnapshot = {};
+    const nextSnapshot = {};
+    for (const key of Object.keys(patch)) {
+      if (key === "services") {
+        prevSnapshot.disabledServices = current.disabledServices;
+        nextSnapshot.disabledServices = merged.disabledServices;
+        nextSnapshot.totalServices = merged.services.length;
+      } else if (key === "districts") {
+        prevSnapshot.disabledDistricts = current.disabledDistricts;
+        nextSnapshot.disabledDistricts = merged.disabledDistricts;
+      } else {
+        prevSnapshot[key] = current[key];
+        nextSnapshot[key] = merged[key];
+      }
+    }
+
+    await recordAdminAuditLog({
+      adminUid,
+      action: actionType,
+      targetType: "platform_config",
+      targetId: "public",
+      result: "success",
+      details: {
+        previousValues: prevSnapshot,
+        newValues: nextSnapshot,
+        summary: summary || actionType
+      }
+    });
+
+    return { success: true, error: null, config: publicPayload };
+  } catch (err) {
+    console.error("[JKFixHub Admin] Platform config update failed:", err?.message || err);
+    return { success: false, error: err?.message || "Failed to update platform configuration." };
+  }
+}
+
+/**
+ * Fetches all platform announcements for admin management (draft, published, paused, archived, expired).
+ */
+export async function getAdminAnnouncements() {
+  if (!isSessionAuthorizedAdmin()) return [];
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.getDocs !== "function") return [];
+
+    const snap = await methods.getDocs(methods.collection(db, "announcements"));
+    const nowMs = Date.now();
+    const list = [];
+    snap.forEach((doc) => {
+      const data = typeof doc.data === "function" ? doc.data() : doc.data;
+      const item = { id: doc.id, ...data };
+      // Compute effective display status if published item has passed expiry
+      if (item.status === "published" && item.expiresAtMs && nowMs >= item.expiresAtMs) {
+        item.effectiveStatus = "expired";
+      } else {
+        item.effectiveStatus = item.status || "draft";
+      }
+      list.push(item);
+    });
+    list.sort((a, b) => getTimestampMillis(b.updatedAt || b.createdAt) - getTimestampMillis(a.updatedAt || a.createdAt));
+    return list;
+  } catch (err) {
+    console.warn("[JKFixHub Admin] Announcements fetch failed:", err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * Creates a new platform announcement and records audit log.
+ */
+export async function createAdminAnnouncement(payload, adminUid) {
+  if (!isSessionAuthorizedAdmin()) {
+    return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
+  }
+
+  const title = String(payload?.title || "").trim();
+  const message = String(payload?.message || "").trim();
+  const audience = ["customers", "workers", "everyone"].includes(payload?.audience) ? payload.audience : "everyone";
+  const priority = ["normal", "important", "urgent"].includes(payload?.priority) ? payload.priority : "normal";
+  const status = ["draft", "published", "paused", "archived"].includes(payload?.status) ? payload.status : "draft";
+
+  if (title.length < 3 || title.length > 140) {
+    return { success: false, error: "Title must be between 3 and 140 characters." };
+  }
+  if (message.length < 5 || message.length > 2000) {
+    return { success: false, error: "Message must be between 5 and 2000 characters." };
+  }
+
+  const nowIso = new Date().toISOString();
+  const publishAtMs = payload?.publishAt ? Date.parse(payload.publishAt) : Date.now();
+  if (Number.isNaN(publishAtMs)) {
+    return { success: false, error: "Invalid publish date." };
+  }
+
+  let expiresAt = null;
+  let expiresAtMs = null;
+  if (payload?.expiresAt && String(payload.expiresAt).trim()) {
+    expiresAtMs = Date.parse(payload.expiresAt);
+    if (Number.isNaN(expiresAtMs)) {
+      return { success: false, error: "Invalid expiry date." };
+    }
+    if (expiresAtMs <= publishAtMs) {
+      return { success: false, error: "Expiry date must be after publish date." };
+    }
+    expiresAt = new Date(expiresAtMs).toISOString();
+  }
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.addDoc !== "function") {
+      return { success: false, error: "Firestore unavailable." };
+    }
+
+    const docData = {
+      title,
+      message,
+      audience,
+      priority,
+      status,
+      publishAt: new Date(publishAtMs).toISOString(),
+      publishAtMs,
+      expiresAt,
+      expiresAtMs,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      createdBy: adminUid,
+      updatedBy: adminUid
+    };
+
+    const ref = await methods.addDoc(methods.collection(db, "announcements"), docData);
+    await recordAdminAuditLog({
+      adminUid,
+      action: status === "published" ? "ANNOUNCEMENT_PUBLISHED" : "ANNOUNCEMENT_CREATED",
+      targetType: "announcement",
+      targetId: ref?.id || "new",
+      result: "success",
+      details: { title, audience, priority, status }
+    });
+
+    return { success: true, error: null, id: ref?.id, announcement: { id: ref?.id, ...docData } };
+  } catch (err) {
+    console.error("[JKFixHub Admin] Announcement create failed:", err?.message || err);
+    return { success: false, error: err?.message || "Failed to create announcement." };
+  }
+}
+
+/**
+ * Edits an existing platform announcement and records audit log.
+ */
+export async function updateAdminAnnouncement(announcementId, payload, adminUid) {
+  if (!isSessionAuthorizedAdmin()) {
+    return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
+  }
+  if (!announcementId) {
+    return { success: false, error: "Announcement ID is required." };
+  }
+
+  const title = String(payload?.title || "").trim();
+  const message = String(payload?.message || "").trim();
+  const audience = ["customers", "workers", "everyone"].includes(payload?.audience) ? payload.audience : "everyone";
+  const priority = ["normal", "important", "urgent"].includes(payload?.priority) ? payload.priority : "normal";
+  const status = ["draft", "published", "paused", "archived", "expired"].includes(payload?.status) ? payload.status : "draft";
+
+  if (title.length < 3 || title.length > 140) {
+    return { success: false, error: "Title must be between 3 and 140 characters." };
+  }
+  if (message.length < 5 || message.length > 2000) {
+    return { success: false, error: "Message must be between 5 and 2000 characters." };
+  }
+
+  const publishAtMs = payload?.publishAt ? Date.parse(payload.publishAt) : Date.now();
+  if (Number.isNaN(publishAtMs)) {
+    return { success: false, error: "Invalid publish date." };
+  }
+
+  let expiresAt = null;
+  let expiresAtMs = null;
+  if (payload?.expiresAt && String(payload.expiresAt).trim()) {
+    expiresAtMs = Date.parse(payload.expiresAt);
+    if (Number.isNaN(expiresAtMs)) {
+      return { success: false, error: "Invalid expiry date." };
+    }
+    if (expiresAtMs <= publishAtMs) {
+      return { success: false, error: "Expiry date must be after publish date." };
+    }
+    expiresAt = new Date(expiresAtMs).toISOString();
+  }
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.doc !== "function") {
+      return { success: false, error: "Firestore unavailable." };
+    }
+
+    const ref = methods.doc(db, "announcements", String(announcementId));
+    let prevStatus = "draft";
+    if (typeof methods.getDoc === "function") {
+      try {
+        const snap = await methods.getDoc(ref);
+        if (snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists)) {
+          prevStatus = (typeof snap.data === "function" ? snap.data() : snap.data)?.status || "draft";
+        }
+      } catch (_) {}
+    }
+
+    const updates = {
+      title,
+      message,
+      audience,
+      priority,
+      status,
+      publishAt: new Date(publishAtMs).toISOString(),
+      publishAtMs,
+      expiresAt,
+      expiresAtMs,
+      updatedAt: new Date().toISOString(),
+      updatedBy: adminUid
+    };
+
+    if (typeof methods.updateDoc === "function") {
+      await methods.updateDoc(ref, updates);
+    } else if (typeof methods.setDoc === "function") {
+      await methods.setDoc(ref, updates, { merge: true });
+    }
+
+    await recordAdminAuditLog({
+      adminUid,
+      action: "ANNOUNCEMENT_EDITED",
+      targetType: "announcement",
+      targetId: String(announcementId),
+      result: "success",
+      details: { title, audience, priority, previousStatus: prevStatus, newStatus: status }
+    });
+
+    return { success: true, error: null };
+  } catch (err) {
+    console.error("[JKFixHub Admin] Announcement update failed:", err?.message || err);
+    return { success: false, error: err?.message || "Failed to update announcement." };
+  }
+}
+
+/**
+ * Transitions an announcement's status (published, paused, archived, draft) with audit log.
+ */
+export async function updateAdminAnnouncementStatus(announcementId, status, adminUid) {
+  if (!isSessionAuthorizedAdmin()) {
+    return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
+  }
+  const allowed = ["draft", "published", "paused", "archived", "expired"];
+  if (!announcementId || !allowed.includes(status)) {
+    return { success: false, error: "Invalid announcement status update." };
+  }
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.doc !== "function") {
+      return { success: false, error: "Firestore unavailable." };
+    }
+
+    const ref = methods.doc(db, "announcements", String(announcementId));
+    let prev = {};
+    if (typeof methods.getDoc === "function") {
+      try {
+        const snap = await methods.getDoc(ref);
+        if (snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists)) {
+          prev = (typeof snap.data === "function" ? snap.data() : snap.data) || {};
+        }
+      } catch (_) {}
+    }
+
+    const nowIso = new Date().toISOString();
+    const updates = {
+      status,
+      updatedAt: nowIso,
+      updatedBy: adminUid
+    };
+    if (status === "published" && !prev.publishAt) {
+      updates.publishAt = nowIso;
+      updates.publishAtMs = Date.now();
+    }
+
+    if (typeof methods.updateDoc === "function") {
+      await methods.updateDoc(ref, updates);
+    } else if (typeof methods.setDoc === "function") {
+      await methods.setDoc(ref, updates, { merge: true });
+    }
+
+    await recordAdminAuditLog({
+      adminUid,
+      action: `ANNOUNCEMENT_${status.toUpperCase()}`,
+      targetType: "announcement",
+      targetId: String(announcementId),
+      result: "success",
+      details: {
+        title: prev.title || null,
+        previousStatus: prev.status || "draft",
+        newStatus: status
+      }
+    });
+
+    return { success: true, error: null };
+  } catch (err) {
+    console.error("[JKFixHub Admin] Announcement status change failed:", err?.message || err);
+    return { success: false, error: err?.message || "Failed to change announcement status." };
+  }
+}
+
+/**
+ * Aggregates live Firebase collections for the Admin Analytics Dashboard.
+ * Never fabricates statistics and never exposes private PII in aggregated metrics.
+ */
+export async function getAdminAnalyticsData() {
+  const empty = {
+    totalCustomers: 0,
+    activeCustomers: 0,
+    suspendedCustomers: 0,
+    totalWorkers: 0,
+    verifiedWorkers: 0,
+    pendingWorkerApprovals: 0,
+    suspendedWorkers: 0,
+    totalRequests: 0,
+    pendingRequests: 0,
+    acceptedRequests: 0,
+    completedRequests: 0,
+    rejectedRequests: 0,
+    cancelledRequests: 0,
+    serviceBreakdown: [],
+    districtBreakdown: [],
+    recentReports: [],
+    recentAuditLogs: [],
+    completionRate: 0
+  };
+
+  if (!isSessionAuthorizedAdmin()) return empty;
+
+  try {
+    const [customers, workers, requests, reports, auditLogs] = await Promise.all([
+      getAdminCustomers(),
+      getAdminWorkers(),
+      getAdminRequests(),
+      getAdminReports(),
+      getAdminAuditLogs()
+    ]);
+
+    const serviceCounts = new Map();
+    const districtCounts = new Map();
+
+    let pendingRequests = 0;
+    let acceptedRequests = 0;
+    let completedRequests = 0;
+    let rejectedRequests = 0;
+    let cancelledRequests = 0;
+
+    for (const r of requests) {
+      const st = String(r.status || "Pending");
+      if (st === "Pending") pendingRequests++;
+      else if (st === "Accepted") acceptedRequests++;
+      else if (st === "Completed") completedRequests++;
+      else if (st === "Rejected") rejectedRequests++;
+      else if (st === "Cancelled") cancelledRequests++;
+
+      const svc = (r.service || "Unspecified").trim();
+      serviceCounts.set(svc, (serviceCounts.get(svc) || 0) + 1);
+
+      const dist = (r.district || "Unspecified").trim();
+      districtCounts.set(dist, (districtCounts.get(dist) || 0) + 1);
+    }
+
+    const serviceBreakdown = [...serviceCounts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+
+    const districtBreakdown = [...districtCounts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+
+    const suspendedCustomers = customers.filter((c) => c.status === "suspended").length;
+    const verifiedWorkers = workers.filter((w) => w.isVerified === true && w.status !== "suspended").length;
+    const pendingWorkerApprovals = workers.filter((w) => !w.isVerified || w.status === "pending").length;
+    const suspendedWorkers = workers.filter((w) => w.status === "suspended").length;
+
+    const resolvedTotal = completedRequests + rejectedRequests + cancelledRequests;
+    const completionRate = resolvedTotal > 0 ? Math.round((completedRequests / resolvedTotal) * 100) : 0;
+
+    const sortedReports = [...reports].sort(
+      (a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt)
+    );
+
+    return {
+      totalCustomers: customers.length,
+      activeCustomers: customers.length - suspendedCustomers,
+      suspendedCustomers,
+      totalWorkers: workers.length,
+      verifiedWorkers,
+      pendingWorkerApprovals,
+      suspendedWorkers,
+      totalRequests: requests.length,
+      pendingRequests,
+      acceptedRequests,
+      completedRequests,
+      rejectedRequests,
+      cancelledRequests,
+      serviceBreakdown,
+      districtBreakdown,
+      recentReports: sortedReports.slice(0, 6).map((r) => ({
+        id: r.id,
+        targetType: r.targetType || "general",
+        reason: r.reason || "Safety report",
+        status: r.status || "open",
+        createdAt: r.createdAt || null
+      })),
+      recentAuditLogs: auditLogs.slice(0, 8),
+      completionRate
+    };
+  } catch (err) {
+    console.warn("[JKFixHub Admin] Analytics aggregation failed:", err?.message || err);
+    return empty;
   }
 }
 

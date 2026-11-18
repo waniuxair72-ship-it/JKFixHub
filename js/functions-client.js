@@ -198,11 +198,37 @@ export async function callSubmitReport({ targetType, targetId, reason, descripti
 // Privileged Administration Callables
 // ----------------------------------------------------------------------------
 
-export async function callAdminUpdateWorkerStatus({ workerId, status, isVerified }) {
+export async function callAdminUpdateWorkerStatus({ workerId, status, isVerified, reason = "", adminNotes = "" }) {
   return await invokeCallableFunction("adminUpdateWorkerStatus", {
     workerId,
     status,
-    isVerified
+    isVerified,
+    reason,
+    adminNotes
+  });
+}
+
+export async function callAdminUpdateCustomerStatus({ customerId, status, reason = "" }) {
+  return await invokeCallableFunction("adminUpdateCustomerStatus", {
+    customerId,
+    status,
+    reason
+  });
+}
+
+export async function callAdminUpdatePlatformConfig({ patch, actionType = "PLATFORM_CONFIG_UPDATED", summary = "" }) {
+  return await invokeCallableFunction("adminUpdatePlatformConfig", {
+    patch,
+    actionType,
+    summary
+  });
+}
+
+export async function callAdminManageAnnouncement({ operation, announcementId = null, payload = null }) {
+  return await invokeCallableFunction("adminManageAnnouncement", {
+    operation,
+    announcementId,
+    payload
   });
 }
 

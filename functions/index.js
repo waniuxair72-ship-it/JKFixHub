@@ -38,6 +38,9 @@ const {
 
 const {
   adminUpdateWorkerStatus,
+  adminUpdateCustomerStatus,
+  adminUpdatePlatformConfig,
+  adminManageAnnouncement,
   adminModerateReport,
   adminModerateReview
 } = require("./admin-operations");
@@ -105,6 +108,27 @@ exports.submitReport = onCall(async (request) => {
  */
 exports.adminUpdateWorkerStatus = onCall(async (request) => {
   return await adminUpdateWorkerStatus(db, request);
+});
+
+/**
+ * Admin suspends or reactivates a customer account while preserving historical records.
+ */
+exports.adminUpdateCustomerStatus = onCall(async (request) => {
+  return await adminUpdateCustomerStatus(db, request);
+});
+
+/**
+ * Admin updates Platform Control Centre settings (maintenance, registration, requests, services, districts).
+ */
+exports.adminUpdatePlatformConfig = onCall(async (request) => {
+  return await adminUpdatePlatformConfig(db, request);
+});
+
+/**
+ * Admin creates, edits, publishes, pauses, archives, or deletes platform announcements.
+ */
+exports.adminManageAnnouncement = onCall(async (request) => {
+  return await adminManageAnnouncement(db, request);
 });
 
 /**

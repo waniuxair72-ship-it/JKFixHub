@@ -24,6 +24,10 @@ import {
   getFirestoreReviewByRequestId
 } from "./firestore-service.js";
 import { hasCapability, recordSecurityEvent, setTextContent } from "./security.js";
+import {
+  fetchActiveAnnouncementsForAudience,
+  renderAnnouncementsIntoContainer
+} from "./platform-config.js";
 
 let initialized = false;
 let pendingCancellationId = null;
@@ -307,6 +311,25 @@ export async function openCustomerRequests() {
   document.getElementById("menuButton")?.setAttribute("aria-expanded", "false");
   closeModal("authModal");
   openModal("customerRequestsModal");
+
+  // Load inline customer announcements inside Customer Requests modal
+  if (typeof document !== "undefined") {
+    const modal = document.getElementById("customerRequestsModal");
+    const feedbackEl = document.getElementById("customerRequestsFeedback");
+    if (modal && feedbackEl && feedbackEl.parentNode) {
+      let annEl = document.getElementById("customerRequestsAnnouncements");
+      if (!annEl) {
+        annEl = document.createElement("div");
+        annEl.id = "customerRequestsAnnouncements";
+        annEl.className = "dashboard-announcements-panel compact";
+        annEl.hidden = true;
+        feedbackEl.parentNode.insertBefore(annEl, feedbackEl);
+      }
+      fetchActiveAnnouncementsForAudience("customers")
+        .then((items) => renderAnnouncementsIntoContainer(annEl, items))
+        .catch(() => {});
+    }
+  }
   return true;
 }
 

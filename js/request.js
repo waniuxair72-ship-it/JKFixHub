@@ -23,6 +23,12 @@ import {
   createFirestoreServiceRequest,
   subscribeToFirestoreRequest
 } from "./firestore-service.js";
+import {
+  loadPlatformConfig,
+  getCachedPlatformConfig,
+  isServiceCurrentlyEnabled,
+  isDistrictCurrentlyEnabled
+} from "./platform-config.js";
 import { refreshCustomerRequestSummary, openCustomerRequests } from "./customer-requests.js";
 import {
   getSafeErrorMessage,
@@ -319,6 +325,23 @@ export function initializeRequestFlow() {
       }
     }
 
+    // Surface platform availability notices immediately when opening modal
+    const cachedCfg = getCachedPlatformConfig();
+    if (currentUser?.status === "suspended") {
+      const reasonPart = currentUser.suspensionReason ? ` Reason: ${currentUser.suspensionReason}` : "";
+      setRequestFeedback(
+        `Your account is currently suspended and cannot create new service requests.${reasonPart} You can still view your existing requests or contact support.`,
+        true,
+        false
+      );
+    } else if (cachedCfg.newRequestsEnabled === false) {
+      setRequestFeedback(cachedCfg.newRequestsPauseMessage, true, false);
+    } else if (selectedWorker?.district && !isDistrictCurrentlyEnabled(selectedWorker.district, cachedCfg)) {
+      setRequestFeedback(`New requests in ${selectedWorker.district} are currently paused by platform administration.`, true, false);
+    } else if (requestServiceSelect?.value && !isServiceCurrentlyEnabled(requestServiceSelect.value, cachedCfg)) {
+      setRequestFeedback(`The service category "${requestServiceSelect.value}" is currently unavailable for new requests.`, true, false);
+    }
+
     openModal("requestModal");
   });
 
@@ -435,6 +458,44 @@ export function initializeRequestFlow() {
       recordSecurityEvent("UNAUTHORIZED_UI_ACTION", currentUser.role);
       setRequestFeedback(
         "Only customer accounts can submit service requests. Please switch to a customer account.",
+        true,
+        false
+      );
+      return;
+    }
+
+    if (currentUser.status === "suspended") {
+      const reasonPart = currentUser.suspensionReason ? ` Reason: ${currentUser.suspensionReason}` : "";
+      setRequestFeedback(
+        `Your account is currently suspended and cannot submit new service requests.${reasonPart} Historical requests remain accessible.`,
+        true,
+        false
+      );
+      return;
+    }
+
+    const platformConfig = await loadPlatformConfig();
+    if (platformConfig.newRequestsEnabled === false) {
+      setRequestFeedback(
+        platformConfig.newRequestsPauseMessage || "New service requests are temporarily paused. Existing requests remain accessible.",
+        true,
+        false
+      );
+      return;
+    }
+
+    if (!isServiceCurrentlyEnabled(serviceValue, platformConfig)) {
+      setRequestFeedback(
+        `The service category "${serviceValue}" is currently unavailable for new requests.`,
+        true,
+        false
+      );
+      return;
+    }
+
+    if (worker.district && !isDistrictCurrentlyEnabled(worker.district, platformConfig)) {
+      setRequestFeedback(
+        `New service requests in ${worker.district} are currently unavailable.`,
         true,
         false
       );
