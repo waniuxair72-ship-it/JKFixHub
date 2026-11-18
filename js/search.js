@@ -11,6 +11,8 @@ import {
   normalizeService,
   areServicesEquivalent
 } from "./security.js";
+import { createVerifiedWorkerBadge } from "./badges.js";
+import { isWorkerOfficiallyVerified } from "./membership-schema.js";
 
 // ==========================================
 // #SEARCH_LOGIC
@@ -75,16 +77,14 @@ function buildWorkerCard(worker) {
     : (worker.service || "Local Specialist");
   setTextContent(service, displayService);
 
-  badge.className = worker.isVerified
-    ? "worker-verified-badge"
-    : worker.isDemo
-      ? "demo-badge"
-      : "worker-pending-badge";
-  badge.textContent = worker.isVerified
-    ? "Verified"
-    : worker.isDemo
-      ? "Sample profile"
-      : "Pending Verification";
+  let badgeEl;
+  if (isWorkerOfficiallyVerified(worker)) {
+    badgeEl = createVerifiedWorkerBadge({ compact: true });
+  } else {
+    badge.className = worker.isDemo ? "demo-badge" : "worker-pending-badge";
+    badge.textContent = worker.isDemo ? "Sample profile" : "Pending Verification";
+    badgeEl = badge;
+  }
 
   const reviewCount = typeof worker.reviewCount === "number" && worker.reviewCount > 0 ? worker.reviewCount : 0;
   const parsedRating = Number(worker.rating);
@@ -92,7 +92,7 @@ function buildWorkerCard(worker) {
 
   const badgeGroup = document.createElement("div");
   badgeGroup.className = "worker-card-badges";
-  badgeGroup.append(badge);
+  badgeGroup.append(badgeEl);
   if (!hasGenuineRating) {
     const newBadge = document.createElement("span");
     newBadge.className = "worker-new-badge";
@@ -106,9 +106,24 @@ function buildWorkerCard(worker) {
   metadata.className = "worker-meta";
   setTextContent(district, worker.district);
   rating.className = hasGenuineRating ? "worker-rating-pill" : "worker-rating-pill is-unrated";
-  const ratingDisplay = hasGenuineRating
-    ? `${parsedRating.toFixed(1)} ★ (${reviewCount} ${reviewCount === 1 ? "review" : "reviews"})`
-    : "No ratings yet";
+  const vwCount = typeof worker.verifiedWorkCount === "number" ? worker.verifiedWorkCount : null;
+  const uvCount = typeof worker.unverifiedCount === "number" ? worker.unverifiedCount : null;
+  let ratingDisplay = "No ratings yet";
+  if (hasGenuineRating) {
+    if (vwCount !== null && uvCount !== null) {
+      if (vwCount > 0 && uvCount > 0) {
+        ratingDisplay = `${parsedRating.toFixed(1)} ★ (${reviewCount} · ${vwCount} Verified Work)`;
+      } else if (vwCount > 0) {
+        ratingDisplay = `${parsedRating.toFixed(1)} ★ (${vwCount} Verified Work)`;
+      } else if (uvCount > 0) {
+        ratingDisplay = `${parsedRating.toFixed(1)} ★ (${uvCount} Unverified)`;
+      } else {
+        ratingDisplay = `${parsedRating.toFixed(1)} ★ (${reviewCount} ${reviewCount === 1 ? "review" : "reviews"})`;
+      }
+    } else {
+      ratingDisplay = `${parsedRating.toFixed(1)} ★ (${reviewCount} ${reviewCount === 1 ? "review" : "reviews"})`;
+    }
+  }
   setTextContent(rating, ratingDisplay);
   availability.className = "availability";
   availabilityIcon.setAttribute("aria-hidden", "true");

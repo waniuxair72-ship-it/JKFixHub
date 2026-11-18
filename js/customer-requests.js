@@ -28,6 +28,7 @@ import {
   fetchActiveAnnouncementsForAudience,
   renderAnnouncementsIntoContainer
 } from "./platform-config.js";
+import { mountPublicBadgeIfVerified } from "./badges.js";
 
 let initialized = false;
 let pendingCancellationId = null;
@@ -212,14 +213,24 @@ function buildRequestCard(request) {
 
   card.className = "customer-request-card";
   details.className = "customer-request-card-main";
+  const workerHeader = document.createElement("div");
+  workerHeader.className = "jk-identity-inline";
   setTextContent(worker, request.workerName);
+  workerHeader.appendChild(worker);
+  const workerUid = request.workerUid || (request.workerId ? String(request.workerId) : null);
+  if (workerUid) {
+    const badgeSlot = document.createElement("span");
+    badgeSlot.className = "jk-badge-slot";
+    workerHeader.appendChild(badgeSlot);
+    mountPublicBadgeIfVerified(badgeSlot, workerUid, "worker", { compact: true, forceRefresh: true }).catch(() => {});
+  }
   setTextContent(service, request.service);
   setTextContent(description, request.description);
   metadata.className = "customer-request-card-meta";
   setTextContent(district, request.district);
   setTextContent(timestamp, `Created · ${new Date(request.createdAt).toLocaleString()}`);
   metadata.append(district, timestamp);
-  details.append(worker, service, description, metadata);
+  details.append(workerHeader, service, description, metadata);
   status.className = `customer-request-status status-${request.status.toLowerCase()}`;
   setTextContent(status, request.status);
   actions.className = "customer-request-card-actions";

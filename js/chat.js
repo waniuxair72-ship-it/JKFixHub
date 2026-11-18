@@ -19,6 +19,7 @@ import {
   sendFirestoreChatMessage,
   subscribeToFirestoreChatMessages
 } from "./firestore-service.js";
+import { mountPublicBadgeIfVerified } from "./badges.js";
 
 const MAX_MESSAGE_LENGTH = 1000;
 let initialized = false;
@@ -372,61 +373,71 @@ export function getCurrentChatConversation() {
   return currentChatConversation;
 }
 
+let isClosingChat = false;
+
 export function closeChat(returnToList = true) {
-  activeChatOpToken++;
-  clearChatLoadingTimer();
-  if (chatMessagesUnsubscribe) {
-    try {
-      chatMessagesUnsubscribe();
-    } catch (_) {}
-    chatMessagesUnsubscribe = null;
-  }
-  currentChatConversation = null;
-  closeModal("chatModal");
-  closeActiveConversation();
+  if (isClosingChat) return;
+  isClosingChat = true;
+  try {
+    activeChatOpToken++;
+    clearChatLoadingTimer();
+    if (chatMessagesUnsubscribe) {
+      try {
+        chatMessagesUnsubscribe();
+      } catch (_) {}
+      chatMessagesUnsubscribe = null;
+    }
+    currentChatConversation = null;
+    const chatBadgeSlot = document.getElementById("chatParticipantVerifiedBadge");
+    if (chatBadgeSlot) chatBadgeSlot.replaceChildren();
+    closeModal("chatModal");
+    closeActiveConversation();
 
-  renderedMessageIds.clear();
-  hasLoadedInitialConversation = false;
+    renderedMessageIds.clear();
+    hasLoadedInitialConversation = false;
 
-  const messageList = document.getElementById("chatMessages");
-  if (messageList) {
-    messageList.replaceChildren();
-  }
+    const messageList = document.getElementById("chatMessages");
+    if (messageList) {
+      messageList.replaceChildren();
+    }
 
-  isSending = false;
-  const input = document.getElementById("chatMessageInput");
-  if (input) {
-    input.value = "";
-    input.style.height = "";
-    input.disabled = false;
-    input.placeholder = "Write a message...";
-  }
-  const sendBtn = document.querySelector("#chatForm button[type='submit']");
-  if (sendBtn) sendBtn.disabled = false;
-  if (feedbackTimer) {
-    clearTimeout(feedbackTimer);
-    feedbackTimer = null;
-  }
-  setChatFeedback("");
-  updateMessageCounter();
+    isSending = false;
+    const input = document.getElementById("chatMessageInput");
+    if (input) {
+      input.value = "";
+      input.style.height = "";
+      input.disabled = false;
+      input.placeholder = "Write a message...";
+    }
+    const sendBtn = document.querySelector("#chatForm button[type='submit']");
+    if (sendBtn) sendBtn.disabled = false;
+    if (feedbackTimer) {
+      clearTimeout(feedbackTimer);
+      feedbackTimer = null;
+    }
+    setChatFeedback("");
+    updateMessageCounter();
 
-  if (!returnToList) {
+    if (!returnToList) {
+      returnTo = null;
+      return;
+    }
+
+    const user = getCurrentUser();
+    if (!user) {
+      returnTo = null;
+      return;
+    }
+
+    if (returnTo === "worker") {
+      if (openWorkerDashboard()) openModal("authModal");
+    } else if (returnTo === "customer" && isCustomer()) {
+      openCustomerRequests();
+    }
     returnTo = null;
-    return;
+  } finally {
+    isClosingChat = false;
   }
-
-  const user = getCurrentUser();
-  if (!user) {
-    returnTo = null;
-    return;
-  }
-
-  if (returnTo === "worker") {
-    if (openWorkerDashboard()) openModal("authModal");
-  } else if (returnTo === "customer" && isCustomer()) {
-    openCustomerRequests();
-  }
-  returnTo = null;
 }
 
 export async function openChatForRequest(requestId) {
@@ -609,7 +620,22 @@ export async function openChatForRequest(requestId) {
     : (currentChatConversation.customerName || "Customer");
   const otherRole = isCust ? "worker" : "customer";
 
-  setTextContent(document.getElementById("chatParticipantName"), headerName);
+  const participantNameEl = document.getElementById("chatParticipantName");
+  setTextContent(participantNameEl, headerName);
+  if (participantNameEl && participantNameEl.parentNode) {
+    let chatBadgeSlot = document.getElementById("chatParticipantVerifiedBadge");
+    if (!chatBadgeSlot) {
+      chatBadgeSlot = document.createElement("span");
+      chatBadgeSlot.id = "chatParticipantVerifiedBadge";
+      chatBadgeSlot.className = "jk-badge-slot";
+      participantNameEl.insertAdjacentElement("afterend", chatBadgeSlot);
+    }
+    chatBadgeSlot.replaceChildren();
+    const otherUid = isCust ? workerUid : customerId;
+    if (otherUid) {
+      mountPublicBadgeIfVerified(chatBadgeSlot, otherUid, otherRole, { compact: true, forceRefresh: true }).catch(() => {});
+    }
+  }
   setTextContent(document.getElementById("chatParticipantInitials"), getInitials(headerName));
 
   const avatarEl = document.getElementById("chatParticipantAvatar");

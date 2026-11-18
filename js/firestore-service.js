@@ -25,11 +25,27 @@ import {
   sanitizeReviewTags,
   REVIEW_EDIT_WINDOW_MS
 } from "./security.js";
+import {
+  VERIFICATION_STATUSES,
+  isCustomerOfficiallyVerified,
+  isWorkerOfficiallyVerified,
+  normalizeCustomerVerification,
+  normalizeWorkerVerification
+} from "./membership-schema.js";
+import { setCachedBadgeStatus, clearCachedBadgeStatus } from "./badges.js";
+
+function resolveFirestoreReviewType(r) {
+  if (!r || typeof r !== "object") return "verified_work";
+  if (r.reviewType === "unverified_experience") return "unverified_experience";
+  if (r.reviewType === "verified_work") return "verified_work";
+  if (r.verifiedService === false && !r.requestId) return "unverified_experience";
+  return "verified_work";
+}
 
 /**
  * Pure genuine rating aggregator by worker ID from published reviews only.
- * Never invents defaults, excludes non-published/invalid entries, deduplicates by requestId/id,
- * and uses exact integer-scaled half-up rounding to 1 decimal place.
+ * Never invents defaults, excludes non-published/invalid entries, separates Verified Work
+ * from Unverified Experience counts, deduplicates cleanly, and uses exact half-up 1-decimal rounding.
  */
 function aggregatePublishedReviewsByWorker(reviews) {
   const byWorker = new Map();
@@ -39,7 +55,10 @@ function aggregatePublishedReviewsByWorker(reviews) {
     if (!r || typeof r !== "object") continue;
     if (r.status !== "published") continue;
 
-    const dedupKey = r.requestId || r.id;
+    const rType = resolveFirestoreReviewType(r);
+    const dedupKey = rType === "unverified_experience"
+      ? (r.id || `unv-${r.workerUid || r.workerId}-${r.customerId}`)
+      : (r.requestId || r.id);
     if (dedupKey) {
       if (seenKeys.has(String(dedupKey))) continue;
       seenKeys.add(String(dedupKey));
@@ -52,20 +71,39 @@ function aggregatePublishedReviewsByWorker(reviews) {
     if (!workerKey) continue;
 
     if (!byWorker.has(workerKey)) {
-      byWorker.set(workerKey, { sum: 0, count: 0, distribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 } });
+      byWorker.set(workerKey, {
+        sum: 0,
+        count: 0,
+        verifiedSum: 0,
+        verifiedWorkCount: 0,
+        unverifiedCount: 0,
+        distribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 }
+      });
     }
     const bucket = byWorker.get(workerKey);
     bucket.sum += val;
     bucket.count += 1;
     bucket.distribution[val] += 1;
+    if (rType === "verified_work") {
+      bucket.verifiedSum += val;
+      bucket.verifiedWorkCount += 1;
+    } else {
+      bucket.unverifiedCount += 1;
+    }
   }
 
   const summaries = new Map();
   for (const [workerKey, bucket] of byWorker.entries()) {
     const avg = Math.round((bucket.sum * 10) / bucket.count) / 10;
+    const verifiedWorkAverage = bucket.verifiedWorkCount > 0
+      ? Math.round((bucket.verifiedSum * 10) / bucket.verifiedWorkCount) / 10
+      : null;
     summaries.set(workerKey, {
       rating: avg,
       reviewCount: bucket.count,
+      verifiedWorkCount: bucket.verifiedWorkCount,
+      verifiedWorkAverage,
+      unverifiedCount: bucket.unverifiedCount,
       distribution: bucket.distribution
     });
   }
@@ -295,9 +333,10 @@ export async function getAdminOverviewStats() {
         let suspended = 0;
         workersSnap.forEach((doc) => {
           const d = doc.data();
+          const officiallyVerified = isWorkerOfficiallyVerified(d);
           if (d.status === "suspended") suspended++;
-          if (d.isVerified === true && d.status !== "suspended") verified++;
-          if (d.isVerified === false || d.status === "pending") pending++;
+          if (officiallyVerified && d.status !== "suspended") verified++;
+          if (!officiallyVerified || d.status === "pending") pending++;
         });
         stats.pendingWorkerVerification = pending;
         stats.verifiedWorkers = verified;
@@ -420,11 +459,14 @@ export async function getAdminWorkers() {
     workersSnap.forEach((doc) => {
       const data = (typeof doc.data === "function" ? doc.data() : doc.data) || {};
       const contact = contactMap.get(doc.id) || {};
+      const wv = normalizeWorkerVerification(data);
+      const officiallyVerified = isWorkerOfficiallyVerified(data);
       workers.push({
         id: doc.id,
         ...data,
-        isVerified: Boolean(data.isVerified),
-        status: data.status || (data.isVerified ? "active" : "pending"),
+        isVerified: officiallyVerified,
+        workerVerification: wv,
+        status: data.status || (officiallyVerified ? "active" : "pending"),
         email: data.email || contact.email || null,
         phone: data.phone || contact.phone || null
       });
@@ -444,6 +486,7 @@ export async function getAdminWorkers() {
           rating: null,
           reviewCount: 0,
           isVerified: false,
+          workerVerification: normalizeWorkerVerification({ isVerified: false }),
           status: "pending",
           createdAt: u.createdAt || null,
           email: u.email || null,
@@ -463,10 +506,16 @@ export async function getAdminWorkers() {
         if (agg && agg.reviewCount > 0) {
           w.rating = agg.rating;
           w.reviewCount = agg.reviewCount;
+          w.verifiedWorkCount = agg.verifiedWorkCount;
+          w.verifiedWorkAverage = agg.verifiedWorkAverage;
+          w.unverifiedCount = agg.unverifiedCount;
           w.ratingDistribution = agg.distribution;
         } else {
           w.rating = null;
           w.reviewCount = 0;
+          w.verifiedWorkCount = 0;
+          w.verifiedWorkAverage = null;
+          w.unverifiedCount = 0;
           w.ratingDistribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
         }
       }
@@ -525,18 +574,19 @@ export async function updateAdminWorkerStatus(workerId, updates, adminUid, { rea
 
     const workerRef = methods.doc(db, "workers", String(workerId).trim());
 
-    // Retrieve previous state for accurate audit logging if getDoc is available
+    // Retrieve previous state for accurate audit logging & history preservation
     let previousStatus = "unknown";
     let previousVerified = false;
+    let prevDoc = {};
     let existingDoc = false;
     if (typeof methods.getDoc === "function") {
       try {
         const snap = await methods.getDoc(workerRef);
         if (snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists)) {
           existingDoc = true;
-          const d = (typeof snap.data === "function" ? snap.data() : snap.data) || {};
-          previousStatus = d.status || "unknown";
-          previousVerified = Boolean(d.isVerified);
+          prevDoc = (typeof snap.data === "function" ? snap.data() : snap.data) || {};
+          previousStatus = prevDoc.status || "unknown";
+          previousVerified = isWorkerOfficiallyVerified(prevDoc);
         }
       } catch (_) {}
     }
@@ -545,6 +595,11 @@ export async function updateAdminWorkerStatus(workerId, updates, adminUid, { rea
     const cleanUpdates = { ...updates };
     delete cleanUpdates.email;
     delete cleanUpdates.phone;
+
+    // Rejecting a worker must always revoke verification
+    if (cleanUpdates.status === "rejected" && cleanUpdates.isVerified === undefined) {
+      cleanUpdates.isVerified = false;
+    }
 
     cleanUpdates.updatedAt = new Date().toISOString();
     cleanUpdates.lastModeratedBy = adminUid;
@@ -564,6 +619,7 @@ export async function updateAdminWorkerStatus(workerId, updates, adminUid, { rea
         previousStatus,
         newStatus: previousStatus,
         isVerified: previousVerified,
+        workerVerification: normalizeWorkerVerification(prevDoc),
         alreadyInState: true
       };
     }
@@ -582,13 +638,70 @@ export async function updateAdminWorkerStatus(workerId, updates, adminUid, { rea
       auditAction = "WORKER_PENDING_RESET";
     }
 
-    // Perform database write
+    // Perform database write while preserving & appending workerVerification.history
+    if (cleanUpdates.isVerified !== undefined) {
+      const prevNorm = normalizeWorkerVerification(prevDoc);
+      const nowIso = cleanUpdates.updatedAt;
+      const nextStatusLabel = cleanUpdates.isVerified
+        ? "Verified"
+        : cleanUpdates.status === "rejected"
+          ? "Rejected"
+          : previousVerified
+            ? "Revoked"
+            : "Pending";
+      cleanUpdates.workerVerification = {
+        status: nextStatusLabel,
+        verifiedAt: cleanUpdates.isVerified ? (prevNorm.verifiedAt || nowIso) : null,
+        verifiedBy: cleanUpdates.isVerified ? (prevNorm.verifiedBy || adminUid) : (prevNorm.verifiedBy || null),
+        updatedAt: nowIso,
+        updatedBy: adminUid,
+        internalNote: note || prevNorm.internalNote || "",
+        history: [
+          ...(Array.isArray(prevNorm.history) ? prevNorm.history : []),
+          {
+            previousStatus: prevNorm.status,
+            newStatus: nextStatusLabel,
+            actionBy: adminUid,
+            actionAt: nowIso,
+            ...(note ? { note } : {})
+          }
+        ]
+      };
+    }
+
     if (typeof methods.updateDoc === "function" && existingDoc) {
       await methods.updateDoc(workerRef, cleanUpdates);
     } else if (typeof methods.setDoc === "function") {
       await methods.setDoc(workerRef, cleanUpdates, { merge: true });
     } else if (typeof methods.updateDoc === "function") {
       await methods.updateDoc(workerRef, cleanUpdates);
+    }
+
+    // Keep public non-PII /verifiedBadges/{workerId} strictly synchronized
+    if (cleanUpdates.isVerified !== undefined) {
+      const wUid = String(workerId).trim();
+      const badgeRef = methods.doc(db, "verifiedBadges", wUid);
+      if (cleanUpdates.isVerified === true && typeof methods.setDoc === "function") {
+        const badgeDoc = {
+          uid: wUid,
+          role: "worker",
+          badgeType: "verified_professional",
+          verified: true,
+          verifiedAt: cleanUpdates.workerVerification?.verifiedAt || cleanUpdates.updatedAt,
+          updatedAt: cleanUpdates.updatedAt
+        };
+        try {
+          await methods.setDoc(badgeRef, badgeDoc);
+          setCachedBadgeStatus(wUid, badgeDoc);
+        } catch {}
+      } else if (cleanUpdates.isVerified === false) {
+        setCachedBadgeStatus(wUid, null);
+        if (typeof methods.deleteDoc === "function") {
+          try {
+            await methods.deleteDoc(badgeRef);
+          } catch {}
+        }
+      }
     }
 
     await recordAdminAuditLog({
@@ -612,7 +725,8 @@ export async function updateAdminWorkerStatus(workerId, updates, adminUid, { rea
       error: null,
       previousStatus,
       newStatus: cleanUpdates.status ?? previousStatus,
-      isVerified: cleanUpdates.isVerified ?? previousVerified
+      isVerified: cleanUpdates.isVerified ?? previousVerified,
+      workerVerification: cleanUpdates.workerVerification || normalizeWorkerVerification(prevDoc)
     };
   } catch (err) {
     console.error("[JKFixHub Admin] Worker status update failed:", err?.message || err);
@@ -637,6 +751,7 @@ export async function getAdminCustomers() {
     snap.forEach((doc) => {
       const data = doc.data();
       if (data.role === "customer") {
+        const cv = normalizeCustomerVerification(data);
         customers.push({
           id: doc.id,
           uid: data.uid || doc.id,
@@ -646,6 +761,8 @@ export async function getAdminCustomers() {
           emailVerified: Boolean(data.emailVerified),
           district: data.district || null,
           status: data.status || "active",
+          isVerified: cv.status === "Verified",
+          customerVerification: cv,
           suspensionReason: data.suspensionReason || null,
           suspendedAt: data.suspendedAt || null,
           suspendedBy: data.suspendedBy || null,
@@ -699,6 +816,7 @@ export async function subscribeToAdminCustomers(onUpdate, onError) {
           snapshot.forEach((doc) => {
             const data = typeof doc.data === "function" ? doc.data() : doc;
             if (data && data.role === "customer") {
+              const cv = normalizeCustomerVerification(data);
               customers.push({
                 id: doc.id,
                 uid: data.uid || doc.id,
@@ -708,6 +826,8 @@ export async function subscribeToAdminCustomers(onUpdate, onError) {
                 emailVerified: Boolean(data.emailVerified),
                 district: data.district || null,
                 status: data.status || "active",
+                isVerified: cv.status === "Verified",
+                customerVerification: cv,
                 suspensionReason: data.suspensionReason || null,
                 suspendedAt: data.suspendedAt || null,
                 suspendedBy: data.suspendedBy || null,
@@ -980,6 +1100,9 @@ export async function recalculateWorkerRatingInFirestore(workerId) {
     const agg = summaries.get(String(workerId)) || {
       rating: null,
       reviewCount: 0,
+      verifiedWorkCount: 0,
+      verifiedWorkAverage: null,
+      unverifiedCount: 0,
       distribution: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 }
     };
 
@@ -987,6 +1110,9 @@ export async function recalculateWorkerRatingInFirestore(workerId) {
     await methods.updateDoc(workerRef, {
       rating: agg.rating,
       reviewCount: agg.reviewCount,
+      verifiedWorkCount: agg.verifiedWorkCount,
+      verifiedWorkAverage: agg.verifiedWorkAverage,
+      unverifiedCount: agg.unverifiedCount,
       ratingDistribution: agg.distribution,
       ratingUpdatedAt: new Date().toISOString()
     });
@@ -1245,6 +1371,455 @@ export async function updateAdminCustomerStatus(customerId, status, adminUid, re
   } catch (err) {
     console.error("[JKFixHub Admin] Customer status update failed:", err?.message || err);
     return { success: false, error: err?.message || "Failed to update customer status." };
+  }
+}
+
+/**
+ * Admin: Manually verify, reject, revoke, or annotate a customer's official verification status.
+ * Synchronizes minimal non-PII /verifiedBadges/{uid} and logs an immutable audit event.
+ * Never stores sensitive ID documents or government ID numbers.
+ */
+export async function updateAdminCustomerVerification(
+  customerId,
+  status,
+  adminUid,
+  { internalNote = "", rejectionReason = "" } = {}
+) {
+  if (!isSessionAuthorizedAdmin()) {
+    return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
+  }
+  if (!customerId || typeof customerId !== "string" || !customerId.trim()) {
+    return { success: false, error: "Invalid customer identifier." };
+  }
+  if (!VERIFICATION_STATUSES.includes(status)) {
+    return { success: false, error: `Invalid verification status. Allowed: ${VERIFICATION_STATUSES.join(", ")}.` };
+  }
+
+  const cleanNote = String(internalNote || "").trim().slice(0, 500);
+  const cleanReason = String(rejectionReason || "").trim().slice(0, 500);
+  if (status === "Rejected" && !cleanReason && !cleanNote) {
+    return { success: false, error: "An internal reason is required when rejecting verification." };
+  }
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.doc !== "function") {
+      return { success: false, error: "Firestore database unavailable." };
+    }
+
+    const uid = customerId.trim();
+    const userRef = methods.doc(db, "users", uid);
+    let prevDoc = {};
+    if (typeof methods.getDoc === "function") {
+      try {
+        const snap = await methods.getDoc(userRef);
+        if (snap && snap.exists()) prevDoc = snap.data() || {};
+      } catch {}
+    }
+
+    const prevNorm = normalizeCustomerVerification(prevDoc);
+    const previousStatus = prevNorm.status;
+    const nowIso = new Date().toISOString();
+    const nextHistory = [
+      ...(Array.isArray(prevNorm.history) ? prevNorm.history : []),
+      {
+        previousStatus,
+        newStatus: status,
+        actionBy: adminUid,
+        actionAt: nowIso,
+        ...(cleanNote ? { note: cleanNote } : {}),
+        ...(cleanReason ? { reason: cleanReason } : {})
+      }
+    ];
+
+    const isNowVerified = status === "Verified";
+    const nextCv = {
+      status,
+      verifiedAt: isNowVerified ? nowIso : null,
+      verifiedBy: isNowVerified ? adminUid : prevNorm.verifiedBy,
+      updatedAt: nowIso,
+      updatedBy: adminUid,
+      internalNote: cleanNote || prevNorm.internalNote || "",
+      rejectionReason: status === "Rejected" ? (cleanReason || cleanNote) : null,
+      history: nextHistory
+    };
+
+    const userUpdates = {
+      isVerified: isNowVerified,
+      customerVerification: nextCv,
+      updatedAt: nowIso,
+      lastModeratedBy: adminUid
+    };
+
+    if (typeof methods.updateDoc === "function") {
+      await methods.updateDoc(userRef, userUpdates);
+    } else {
+      await methods.setDoc(userRef, userUpdates, { merge: true });
+    }
+
+    // Sync public non-PII /verifiedBadges/{uid}
+    const badgeRef = methods.doc(db, "verifiedBadges", uid);
+    if (isNowVerified && typeof methods.setDoc === "function") {
+      const badgeDoc = {
+        uid,
+        role: "customer",
+        badgeType: "verified_customer",
+        verified: true,
+        verifiedAt: nowIso,
+        updatedAt: nowIso
+      };
+      await methods.setDoc(badgeRef, badgeDoc);
+      setCachedBadgeStatus(uid, badgeDoc);
+    } else {
+      setCachedBadgeStatus(uid, null);
+      if (typeof methods.deleteDoc === "function") {
+        try {
+          await methods.deleteDoc(badgeRef);
+        } catch {}
+      } else if (typeof methods.setDoc === "function") {
+        try {
+          await methods.setDoc(badgeRef, { uid, role: "customer", badgeType: "verified_customer", verified: false, updatedAt: nowIso });
+        } catch {}
+      }
+    }
+
+    const auditAction = status === "Verified"
+      ? "CUSTOMER_VERIFICATION_GRANTED"
+      : status === "Revoked"
+        ? "CUSTOMER_VERIFICATION_REVOKED"
+        : status === "Rejected"
+          ? "CUSTOMER_VERIFICATION_REJECTED"
+          : "CUSTOMER_VERIFICATION_UPDATED";
+
+    await recordAdminAuditLog({
+      adminUid,
+      action: auditAction,
+      targetType: "customer",
+      targetId: uid,
+      result: "success",
+      details: {
+        previousStatus,
+        newStatus: status,
+        ...(cleanNote ? { note: cleanNote } : {}),
+        ...(cleanReason ? { reason: cleanReason } : {})
+      }
+    });
+
+    invalidateAdminStatsCache();
+    return { success: true, error: null, previousStatus, newStatus: status, customerVerification: nextCv };
+  } catch (err) {
+    console.error("[JKFixHub Admin] Customer verification update failed:", err?.message || err);
+    return { success: false, error: err?.message || "Failed to update customer verification." };
+  }
+}
+
+/**
+ * Admin: Grant, reject, or revoke official JKFixHub Verified Professional badge for a worker.
+ * Synchronizes /workers/{uid} + minimal non-PII /verifiedBadges/{uid} + immutable /auditLogs.
+ * Completely independent of any future JKFixHub Pro membership tier.
+ */
+export async function updateAdminWorkerVerification(
+  workerId,
+  status,
+  adminUid,
+  { internalNote = "" } = {}
+) {
+  if (!isSessionAuthorizedAdmin()) {
+    return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
+  }
+  if (!workerId || typeof workerId !== "string" || !workerId.trim()) {
+    return { success: false, error: "Invalid worker identifier." };
+  }
+  if (!VERIFICATION_STATUSES.includes(status)) {
+    return { success: false, error: `Invalid verification status. Allowed: ${VERIFICATION_STATUSES.join(", ")}.` };
+  }
+
+  const cleanNote = String(internalNote || "").trim().slice(0, 500);
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.doc !== "function") {
+      return { success: false, error: "Firestore database unavailable." };
+    }
+
+    const uid = workerId.trim();
+    const workerRef = methods.doc(db, "workers", uid);
+    let prevDoc = {};
+    if (typeof methods.getDoc === "function") {
+      try {
+        const snap = await methods.getDoc(workerRef);
+        if (snap && snap.exists()) prevDoc = snap.data() || {};
+      } catch {}
+    }
+
+    const prevNorm = normalizeWorkerVerification(prevDoc);
+    const previousStatus = prevNorm.status;
+    const nowIso = new Date().toISOString();
+    const nextHistory = [
+      ...(Array.isArray(prevNorm.history) ? prevNorm.history : []),
+      {
+        previousStatus,
+        newStatus: status,
+        actionBy: adminUid,
+        actionAt: nowIso,
+        ...(cleanNote ? { note: cleanNote } : {})
+      }
+    ];
+
+    const isNowVerified = status === "Verified";
+    const nextWv = {
+      status,
+      verifiedAt: isNowVerified ? nowIso : null,
+      verifiedBy: isNowVerified ? adminUid : prevNorm.verifiedBy,
+      updatedAt: nowIso,
+      updatedBy: adminUid,
+      internalNote: cleanNote || prevNorm.internalNote || "",
+      history: nextHistory
+    };
+
+    const workerUpdates = {
+      isVerified: isNowVerified,
+      ...(isNowVerified && (!prevDoc.status || prevDoc.status === "pending") ? { status: "active" } : {}),
+      workerVerification: nextWv,
+      updatedAt: nowIso,
+      lastModeratedBy: adminUid
+    };
+    if (cleanNote) workerUpdates.adminNotes = cleanNote;
+
+    if (typeof methods.updateDoc === "function") {
+      await methods.updateDoc(workerRef, workerUpdates);
+    } else {
+      await methods.setDoc(workerRef, workerUpdates, { merge: true });
+    }
+
+    // Sync public non-PII /verifiedBadges/{uid}
+    const badgeRef = methods.doc(db, "verifiedBadges", uid);
+    if (isNowVerified && typeof methods.setDoc === "function") {
+      const badgeDoc = {
+        uid,
+        role: "worker",
+        badgeType: "verified_professional",
+        verified: true,
+        verifiedAt: nowIso,
+        updatedAt: nowIso
+      };
+      await methods.setDoc(badgeRef, badgeDoc);
+      setCachedBadgeStatus(uid, badgeDoc);
+    } else {
+      setCachedBadgeStatus(uid, null);
+      if (typeof methods.deleteDoc === "function") {
+        try {
+          await methods.deleteDoc(badgeRef);
+        } catch {}
+      } else if (typeof methods.setDoc === "function") {
+        try {
+          await methods.setDoc(badgeRef, { uid, role: "worker", badgeType: "verified_professional", verified: false, updatedAt: nowIso });
+        } catch {}
+      }
+    }
+
+    const auditAction = status === "Verified"
+      ? "WORKER_BADGE_GRANTED"
+      : status === "Revoked"
+        ? "WORKER_BADGE_REVOKED"
+        : status === "Rejected"
+          ? "WORKER_VERIFICATION_REJECTED"
+          : "WORKER_VERIFICATION_UPDATED";
+
+    await recordAdminAuditLog({
+      adminUid,
+      action: auditAction,
+      targetType: "worker",
+      targetId: uid,
+      result: "success",
+      details: {
+        previousStatus,
+        newStatus: status,
+        ...(cleanNote ? { note: cleanNote } : {})
+      }
+    });
+
+    invalidateAdminStatsCache();
+    return {
+      success: true,
+      error: null,
+      previousStatus,
+      newStatus: status,
+      isVerified: isNowVerified,
+      workerVerification: nextWv
+    };
+  } catch (err) {
+    console.error("[JKFixHub Admin] Worker verification update failed:", err?.message || err);
+    return { success: false, error: err?.message || "Failed to update worker verification." };
+  }
+}
+
+/**
+ * Admin: Safe, idempotent, dry-run-first backfill & reconciliation of public
+ * `/verifiedBadges/{uid}` and `/workers/{uid}.workerVerification` for pre-existing verified workers.
+ *
+ * - Strictly restricted to authorized active admins (`isSessionAuthorizedAdmin()` + Firestore rules).
+ * - Defaults to `dryRun: true` (preview only, zero writes).
+ * - Only creates public badge docs for active verified workers whose `workerVerification.status` is not revoked/rejected.
+ * - Cleans up orphaned `/verifiedBadges/{uid}` for revoked/rejected/deleted/unverified workers and repairs stale `isVerified: true`.
+ * - Never writes PII into `/verifiedBadges/{uid}` and logs one immutable audit record when executed (`dryRun: false`).
+ */
+export async function backfillAdminVerifiedWorkerBadges(adminUid, { dryRun = true } = {}) {
+  if (!isSessionAuthorizedAdmin()) {
+    return { success: false, error: "Access unavailable. This area is restricted to authorized administrators." };
+  }
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.getDocs !== "function" || typeof methods.collection !== "function") {
+      return { success: false, error: "Firestore database unavailable." };
+    }
+
+    const nowIso = new Date().toISOString();
+    const [workersSnap, badgesSnap] = await Promise.all([
+      methods.getDocs(methods.collection(db, "workers")),
+      methods.getDocs(methods.collection(db, "verifiedBadges"))
+    ]);
+
+    const existingBadges = new Map();
+    if (badgesSnap && typeof badgesSnap.forEach === "function") {
+      badgesSnap.forEach((d) => {
+        existingBadges.set(d.id, typeof d.data === "function" ? d.data() : d);
+      });
+    }
+
+    const summary = {
+      dryRun: Boolean(dryRun),
+      totalWorkersScanned: 0,
+      alreadySynced: 0,
+      badgesToCreate: [],
+      workerMetaToBackfill: [],
+      staleBadgesToDelete: [],
+      staleFlagsToRepair: []
+    };
+
+    const workersList = [];
+    if (workersSnap && typeof workersSnap.forEach === "function") {
+      workersSnap.forEach((d) => {
+        workersList.push({ id: d.id, data: (typeof d.data === "function" ? d.data() : d) || {} });
+      });
+    }
+
+    for (const w of workersList) {
+      summary.totalWorkersScanned++;
+      const uid = w.id;
+      const data = w.data;
+      const wv = data.workerVerification;
+      const hasExplicitWv = Boolean(wv && typeof wv === "object" && typeof wv.status === "string" && wv.status.trim());
+      const isEffectivelyVerified = data.status === "active" && isWorkerOfficiallyVerified(data);
+
+      const badgeDoc = existingBadges.get(uid);
+      const hasValidBadge = Boolean(
+        badgeDoc &&
+        badgeDoc.verified === true &&
+        badgeDoc.role === "worker" &&
+        badgeDoc.badgeType === "verified_professional" &&
+        badgeDoc.uid === uid
+      );
+
+      if (isEffectivelyVerified) {
+        let mutated = false;
+        if (!hasValidBadge) {
+          summary.badgesToCreate.push(uid);
+          mutated = true;
+          if (!dryRun && typeof methods.setDoc === "function") {
+            const newBadge = {
+              uid,
+              role: "worker",
+              badgeType: "verified_professional",
+              verified: true,
+              verifiedAt: wv?.verifiedAt || data.updatedAt || data.createdAt || nowIso,
+              updatedAt: nowIso
+            };
+            await methods.setDoc(methods.doc(db, "verifiedBadges", uid), newBadge);
+            setCachedBadgeStatus(uid, newBadge);
+          }
+        }
+        if (!hasExplicitWv) {
+          summary.workerMetaToBackfill.push(uid);
+          mutated = true;
+          if (!dryRun && typeof methods.updateDoc === "function") {
+            await methods.updateDoc(methods.doc(db, "workers", uid), {
+              workerVerification: {
+                status: "Verified",
+                verifiedAt: data.updatedAt || data.createdAt || nowIso,
+                verifiedBy: data.lastModeratedBy || adminUid,
+                updatedAt: nowIso,
+                updatedBy: adminUid,
+                internalNote: typeof data.adminNotes === "string" ? data.adminNotes : "",
+                history: [
+                  {
+                    previousStatus: "Verified",
+                    newStatus: "Verified",
+                    actionBy: adminUid,
+                    actionAt: nowIso,
+                    note: "Idempotent verification metadata backfill"
+                  }
+                ]
+              },
+              updatedAt: nowIso
+            });
+          }
+        }
+        if (!mutated) summary.alreadySynced++;
+      } else {
+        let mutated = false;
+        const explicitStatus = hasExplicitWv ? wv.status.trim() : null;
+        if (data.isVerified === true && (data.status === "deleted" || data.status === "rejected" || (hasExplicitWv && explicitStatus !== "Verified"))) {
+          summary.staleFlagsToRepair.push(uid);
+          mutated = true;
+          if (!dryRun && typeof methods.updateDoc === "function") {
+            await methods.updateDoc(methods.doc(db, "workers", uid), {
+              isVerified: false,
+              updatedAt: nowIso,
+              lastModeratedBy: adminUid
+            });
+          }
+        }
+        if (badgeDoc && badgeDoc.role === "worker") {
+          summary.staleBadgesToDelete.push(uid);
+          mutated = true;
+          if (!dryRun) {
+            setCachedBadgeStatus(uid, null);
+            if (typeof methods.deleteDoc === "function") {
+              await methods.deleteDoc(methods.doc(db, "verifiedBadges", uid));
+            }
+          }
+        }
+        if (!mutated) summary.alreadySynced++;
+      }
+    }
+
+    if (!dryRun) {
+      await recordAdminAuditLog({
+        adminUid,
+        action: "WORKER_BADGES_BACKFILL_EXECUTED",
+        targetType: "verifiedBadges",
+        targetId: "worker_backfill",
+        result: "success",
+        details: {
+          totalWorkersScanned: summary.totalWorkersScanned,
+          badgesCreated: summary.badgesToCreate.length,
+          workerMetaBackfilled: summary.workerMetaToBackfill.length,
+          staleBadgesDeleted: summary.staleBadgesToDelete.length,
+          staleFlagsRepaired: summary.staleFlagsToRepair.length
+        }
+      });
+      invalidateAdminStatsCache();
+    }
+
+    return { success: true, error: null, ...summary };
+  } catch (err) {
+    console.error("[JKFixHub Admin] Worker badges backfill failed:", err?.message || err);
+    return { success: false, error: err?.message || "Failed to backfill verified worker badges." };
   }
 }
 
@@ -1717,8 +2292,8 @@ export async function getAdminAnalyticsData() {
       .sort((a, b) => b.count - a.count);
 
     const suspendedCustomers = customers.filter((c) => c.status === "suspended").length;
-    const verifiedWorkers = workers.filter((w) => w.isVerified === true && w.status !== "suspended").length;
-    const pendingWorkerApprovals = workers.filter((w) => !w.isVerified || w.status === "pending").length;
+    const verifiedWorkers = workers.filter((w) => isWorkerOfficiallyVerified(w) && w.status !== "suspended").length;
+    const pendingWorkerApprovals = workers.filter((w) => !isWorkerOfficiallyVerified(w) || w.status === "pending").length;
     const suspendedWorkers = workers.filter((w) => w.status === "suspended").length;
 
     const resolvedTotal = completedRequests + rejectedRequests + cancelledRequests;
@@ -1796,8 +2371,8 @@ export async function getPublicWorkers({ throwOnError = false } = {}) {
       const data = typeof doc.data === "function" ? doc.data() : doc.data;
       if (!data || typeof data !== "object" || Array.isArray(data)) return;
 
-      // Approval gating: strictly verified AND active
-      if (data.isVerified !== true || data.status !== "active") return;
+      // Approval gating: strictly active AND officially verified (blocks stale isVerified:true if workerVerification is Revoked/Rejected)
+      if (!isWorkerOfficiallyVerified(data) || data.status !== "active") return;
 
       // Malformed profile checks: must have valid string name, service, and district
       if (typeof data.name !== "string" || !data.name.trim()) return;
@@ -1817,7 +2392,7 @@ export async function getPublicWorkers({ throwOnError = false } = {}) {
       const hasValidStoredRating = storedReviewCount > 0 && !Number.isNaN(parsedStoredRating) && parsedStoredRating >= 1 && parsedStoredRating <= 5;
       const rating = hasValidStoredRating ? Math.round(parsedStoredRating * 10) / 10 : null;
       const reviewCount = hasValidStoredRating ? storedReviewCount : 0;
-      const isVerified = true;
+      const isVerified = isWorkerOfficiallyVerified(data);
       const status = "active";
       const services = Array.isArray(data.services) && data.services.length
         ? data.services.join(", ")
@@ -1868,10 +2443,16 @@ export async function getPublicWorkers({ throwOnError = false } = {}) {
           if (agg && agg.reviewCount > 0) {
             w.rating = agg.rating;
             w.reviewCount = agg.reviewCount;
+            w.verifiedWorkCount = agg.verifiedWorkCount;
+            w.verifiedWorkAverage = agg.verifiedWorkAverage;
+            w.unverifiedCount = agg.unverifiedCount;
             w.ratingDistribution = agg.distribution;
           } else {
             w.rating = null;
             w.reviewCount = 0;
+            w.verifiedWorkCount = 0;
+            w.verifiedWorkAverage = null;
+            w.unverifiedCount = 0;
             w.ratingDistribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
           }
         }
@@ -3048,6 +3629,7 @@ export async function createFirestoreReview(reviewData) {
     const docPayload = {
       id: finalReviewId,
       reviewId: finalReviewId,
+      reviewType: "verified_work",
       requestId,
       customerId: String(customerId),
       customerName: String(customerName).trim(),
@@ -3098,6 +3680,152 @@ export async function createFirestoreReview(reviewData) {
       error: err?.message || "Failed to submit review. Please try again."
     };
   }
+}
+
+/**
+ * Creates an Unverified Experience Review (general feedback without a completed service request).
+ * Uses canonical deterministic document ID `unv-${workerUid}-${customerId}` so each active
+ * authenticated customer can submit at most one unverified experience review per worker.
+ * Strictly sets `reviewType: "unverified_experience"`, `verifiedService: false`, `requestId: null`.
+ * Server-side enforced by `isValidUnverifiedReviewCreation()` in firestore.rules.
+ */
+export async function createFirestoreUnverifiedReview(reviewData) {
+  const customerId = reviewData?.customerId || reviewData?.customerUid;
+  const workerUid = reviewData?.workerUid || reviewData?.workerId;
+  const rating = Number(reviewData?.rating);
+  const text = typeof reviewData?.text === "string" ? reviewData.text.trim() : "";
+  const tags = sanitizeReviewTags(reviewData?.tags);
+
+  if (!customerId || !workerUid || !Number.isInteger(rating) || rating < 1 || rating > 5 || text.length > 1200) {
+    return {
+      success: false,
+      reviewId: null,
+      review: null,
+      error: "Missing or invalid review fields (rating must be an integer between 1 and 5)."
+    };
+  }
+
+  if (String(customerId) === String(workerUid)) {
+    return {
+      success: false,
+      reviewId: null,
+      review: null,
+      error: "Workers cannot submit reviews for themselves."
+    };
+  }
+
+  try {
+    const { db } = await initializeFirestoreClient();
+    const methods = await getFirestoreMethods();
+    if (!db || !methods || typeof methods.doc !== "function" || typeof methods.getDoc !== "function" || typeof methods.setDoc !== "function") {
+      return {
+        success: false,
+        reviewId: null,
+        review: null,
+        error: "Reviews database is unavailable. Please check your connection and try again."
+      };
+    }
+
+    const cleanWorkerUid = String(workerUid).trim();
+    const cleanCustomerId = String(customerId).trim();
+    const finalReviewId = `unv-${cleanWorkerUid}-${cleanCustomerId}`;
+    const reviewRef = methods.doc(db, "reviews", finalReviewId);
+
+    const existingSnap = await methods.getDoc(reviewRef);
+    if (existingSnap.exists()) {
+      return {
+        success: false,
+        reviewId: finalReviewId,
+        review: existingSnap.data(),
+        error: "You have already submitted an unverified experience review for this worker."
+      };
+    }
+
+    let workerName = reviewData.workerName || "Service Professional";
+    let service = reviewData.service || null;
+    let district = reviewData.district || null;
+    try {
+      const workerSnap = await methods.getDoc(methods.doc(db, "workers", cleanWorkerUid));
+      if (!workerSnap.exists()) {
+        return {
+          success: false,
+          reviewId: null,
+          review: null,
+          error: "Worker profile not found."
+        };
+      }
+      const wData = workerSnap.data() || {};
+      workerName = wData.name || workerName;
+      service = wData.service || service;
+      district = wData.district || district;
+    } catch {}
+
+    const customerName = reviewData.customerName || "Customer";
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+
+    const docPayload = {
+      id: finalReviewId,
+      reviewId: finalReviewId,
+      reviewType: "unverified_experience",
+      requestId: null,
+      customerId: cleanCustomerId,
+      customerName: String(customerName).trim(),
+      workerUid: cleanWorkerUid,
+      workerId: cleanWorkerUid,
+      workerName: String(workerName).trim(),
+      service,
+      district,
+      verifiedService: false,
+      rating,
+      text,
+      tags,
+      status: "published",
+      createdAt: nowIso,
+      createdAtMs: nowMs,
+      updatedAt: null,
+      editedAt: null,
+      editCount: 0,
+      editHistory: [],
+      moderationHistory: [],
+      workerReply: null,
+      workerReplyAt: null,
+      workerReplyUpdatedAt: null
+    };
+
+    await methods.setDoc(reviewRef, docPayload);
+
+    return {
+      success: true,
+      reviewId: finalReviewId,
+      review: docPayload,
+      error: null
+    };
+  } catch (err) {
+    console.warn("[JKFixHub Review] Unverified review write error:", err?.message || err);
+    if (err?.code === "permission-denied") {
+      return {
+        success: false,
+        reviewId: null,
+        review: null,
+        error: "Permission denied. Only active signed-in customers can submit one general feedback review per worker."
+      };
+    }
+    return {
+      success: false,
+      reviewId: null,
+      review: null,
+      error: err?.message || "Failed to submit feedback. Please try again."
+    };
+  }
+}
+
+/**
+ * Looks up an existing Unverified Experience Review by a customer for a worker.
+ */
+export async function getFirestoreUnverifiedReview(workerUid, customerId) {
+  if (!workerUid || !customerId) return null;
+  return getFirestoreReviewById(`unv-${String(workerUid).trim()}-${String(customerId).trim()}`);
 }
 
 /**

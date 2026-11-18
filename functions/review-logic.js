@@ -24,6 +24,11 @@ const MAX_REVIEW_LENGTH = 1200;
 const REVIEW_EDIT_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_REVIEW_EDITS = 10;
 
+const REVIEW_TYPES = Object.freeze({
+  VERIFIED_WORK: "verified_work",
+  UNVERIFIED_EXPERIENCE: "unverified_experience"
+});
+
 const REVIEW_EXPERIENCE_TAGS = Object.freeze([
   "Punctual",
   "Professional",
@@ -32,6 +37,21 @@ const REVIEW_EXPERIENCE_TAGS = Object.freeze([
   "Fair pricing",
   "Friendly behaviour"
 ]);
+
+function resolveReviewType(review) {
+  if (!review || typeof review !== "object") return REVIEW_TYPES.VERIFIED_WORK;
+  if (review.reviewType === REVIEW_TYPES.UNVERIFIED_EXPERIENCE) {
+    return REVIEW_TYPES.UNVERIFIED_EXPERIENCE;
+  }
+  if (review.reviewType === REVIEW_TYPES.VERIFIED_WORK) {
+    return REVIEW_TYPES.VERIFIED_WORK;
+  }
+  // Backward compatibility: legacy reviews linked to a requestId are Verified Work
+  if (review.verifiedService === false && !review.requestId) {
+    return REVIEW_TYPES.UNVERIFIED_EXPERIENCE;
+  }
+  return REVIEW_TYPES.VERIFIED_WORK;
+}
 
 /**
  * Sanitizes optional experience tags against the authoritative allowlist.
@@ -68,18 +88,31 @@ function sanitizeReviewTags(tags) {
 function calculateGenuineWorkerRating(reviews) {
   const distribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
   if (!Array.isArray(reviews) || reviews.length === 0) {
-    return { rating: null, reviewCount: 0, distribution };
+    return {
+      rating: null,
+      reviewCount: 0,
+      verifiedWorkCount: 0,
+      verifiedWorkAverage: null,
+      unverifiedCount: 0,
+      distribution
+    };
   }
 
   const seen = new Set();
   let sum = 0;
   let count = 0;
+  let verifiedSum = 0;
+  let verifiedCount = 0;
+  let unverifiedCount = 0;
 
   for (const r of reviews) {
     if (!r || typeof r !== "object") continue;
     if (r.status !== "published") continue;
 
-    const dedupKey = r.requestId || r.id;
+    const rType = resolveReviewType(r);
+    const dedupKey = rType === REVIEW_TYPES.UNVERIFIED_EXPERIENCE
+      ? (r.id || `unv-${r.workerUid || r.workerId}-${r.customerId}`)
+      : (r.requestId || r.id);
     if (dedupKey) {
       if (seen.has(String(dedupKey))) continue;
       seen.add(String(dedupKey));
@@ -91,15 +124,36 @@ function calculateGenuineWorkerRating(reviews) {
     sum += val;
     count += 1;
     distribution[val] += 1;
+    if (rType === REVIEW_TYPES.VERIFIED_WORK) {
+      verifiedSum += val;
+      verifiedCount += 1;
+    } else {
+      unverifiedCount += 1;
+    }
   }
 
   if (count === 0) {
-    return { rating: null, reviewCount: 0, distribution };
+    return {
+      rating: null,
+      reviewCount: 0,
+      verifiedWorkCount: 0,
+      verifiedWorkAverage: null,
+      unverifiedCount: 0,
+      distribution
+    };
   }
 
   // Exact integer-scaled half-up rounding to 1 decimal place
   const average = Math.round((sum * 10) / count) / 10;
-  return { rating: average, reviewCount: count, distribution };
+  const verifiedWorkAverage = verifiedCount > 0 ? Math.round((verifiedSum * 10) / verifiedCount) / 10 : null;
+  return {
+    rating: average,
+    reviewCount: count,
+    verifiedWorkCount: verifiedCount,
+    verifiedWorkAverage,
+    unverifiedCount,
+    distribution
+  };
 }
 
 /**
@@ -164,6 +218,9 @@ async function recalculateAndPersistWorkerRating(db, workerUid) {
       await workerRef.update({
         rating: summary.rating,
         reviewCount: summary.reviewCount,
+        verifiedWorkCount: summary.verifiedWorkCount,
+        verifiedWorkAverage: summary.verifiedWorkAverage,
+        unverifiedCount: summary.unverifiedCount,
         ratingDistribution: summary.distribution,
         ratingUpdatedAt: FieldValue.serverTimestamp()
       });
@@ -355,6 +412,7 @@ async function submitReview(db, request) {
   const reviewDoc = {
     id: requestId,
     requestId,
+    reviewType: REVIEW_TYPES.VERIFIED_WORK,
     customerId: uid,
     customerName: requestData.customerName || "Customer",
     workerId,
@@ -418,16 +476,166 @@ async function submitReview(db, request) {
 }
 
 /**
- * Allows the original customer to edit their published review within the 24-hour edit window.
- * Preserves an immutable append-only editHistory audit trail and recalculates worker rating aggregates.
+ * Submits a Type B: Unverified Experience Review (no completed request required).
+ * - Requires authenticated active (non-suspended) customer (no anonymous reviews).
+ * - Blocks self-reviews and duplicate unverified reviews per (customer, worker) via canonical ID.
+ * - Clearly labeled as "unverified_experience" with verifiedService: false.
+ */
+async function submitUnverifiedReview(db, request) {
+  const uid = assertAuthenticated(request);
+  const data = request.data || {};
+  const workerUid = typeof data.workerUid === "string" ? data.workerUid.trim() : "";
+  if (!workerUid || workerUid.length > 128 || /[/\\.\0]/.test(workerUid)) {
+    throw new HttpsError("invalid-argument", "Valid worker identifier is required.");
+  }
+
+  const numRating = Number(data.rating);
+  if (!Number.isInteger(numRating) || numRating < 1 || numRating > 5) {
+    throw new HttpsError("invalid-argument", "Rating must be an integer between 1 and 5.");
+  }
+
+  const rawText = typeof data.text === "string" ? data.text.trim() : "";
+  if (rawText.length > MAX_REVIEW_LENGTH) {
+    throw new HttpsError("invalid-argument", `Review text must be ${MAX_REVIEW_LENGTH} characters or fewer.`);
+  }
+  if (SCRIPT_INJECTION_PATTERN.test(rawText)) {
+    throw new HttpsError("invalid-argument", "Review text contains disallowed script content.");
+  }
+  const cleanText = rawText.replace(HTML_TAG_PATTERN, "").trim();
+  const cleanTags = sanitizeReviewTags(data.tags);
+
+  await assertCustomerNotSuspended(db, uid);
+
+  if (workerUid === uid) {
+    await recordSecurityEvent(db, {
+      type: "SELF_REVIEW_ATTEMPT",
+      actorUid: uid,
+      targetType: "worker",
+      targetId: workerUid,
+      severity: "High",
+      details: { caller: uid, reviewType: REVIEW_TYPES.UNVERIFIED_EXPERIENCE }
+    });
+    throw new HttpsError("failed-precondition", "You cannot submit a review for your own profile.");
+  }
+
+  const workerSnap = await db.collection("workers").doc(workerUid).get();
+  if (!workerSnap.exists) {
+    throw new HttpsError("not-found", "Target worker profile not found.");
+  }
+  const workerData = workerSnap.data() || {};
+
+  let customerName = "Customer";
+  try {
+    const userSnap = await db.collection("users").doc(uid).get();
+    if (userSnap.exists && userSnap.data()?.name) {
+      customerName = String(userSnap.data().name).trim();
+    }
+  } catch {}
+
+  const reviewId = `unv-${workerUid}-${uid}`;
+  const reviewRef = db.collection("reviews").doc(reviewId);
+  const existing = await reviewRef.get();
+  if (existing.exists) {
+    await recordSecurityEvent(db, {
+      type: "DUPLICATE_REVIEW_ATTEMPT",
+      actorUid: uid,
+      targetType: "worker",
+      targetId: workerUid,
+      severity: "Low",
+      details: { existingReviewId: reviewId, reviewType: REVIEW_TYPES.UNVERIFIED_EXPERIENCE }
+    });
+    throw new HttpsError("already-exists", "You have already submitted an unverified experience review for this worker.");
+  }
+
+  const nowMs = Date.now();
+  const reviewDoc = {
+    id: reviewId,
+    requestId: null,
+    reviewType: REVIEW_TYPES.UNVERIFIED_EXPERIENCE,
+    customerId: uid,
+    customerName,
+    workerId: workerUid,
+    workerUid,
+    workerName: workerData.name || "Service Professional",
+    service: workerData.service || null,
+    district: workerData.district || null,
+    verifiedService: false,
+    rating: numRating,
+    text: cleanText,
+    tags: cleanTags,
+    status: "published",
+    createdAt: FieldValue.serverTimestamp(),
+    createdAtMs: nowMs,
+    updatedAt: null,
+    editedAt: null,
+    editCount: 0,
+    editHistory: [],
+    moderationHistory: [],
+    workerReply: null,
+    workerReplyAt: null
+  };
+
+  try {
+    if (typeof reviewRef.create === "function") {
+      await reviewRef.create(reviewDoc);
+    } else {
+      await reviewRef.set(reviewDoc);
+    }
+  } catch (err) {
+    if (err.code === 6 || err.message?.includes("already exists")) {
+      throw new HttpsError("already-exists", "You have already submitted an unverified experience review for this worker.");
+    }
+    throw err;
+  }
+
+  const ratingSummary = await recalculateAndPersistWorkerRating(db, workerUid);
+
+  await recordAuditEvent(db, {
+    actorUid: uid,
+    action: "UNVERIFIED_REVIEW_SUBMITTED",
+    targetType: "review",
+    targetId: reviewId,
+    result: "success",
+    details: { workerId: workerUid, rating: numRating, reviewType: REVIEW_TYPES.UNVERIFIED_EXPERIENCE }
+  });
+
+  return {
+    success: true,
+    reviewId,
+    reviewType: REVIEW_TYPES.UNVERIFIED_EXPERIENCE,
+    ratingSummary,
+    message: "Unverified experience review published."
+  };
+}
+
+/**
+ * Allows the original customer to edit their published review (either review type) within the 24-hour edit window.
+ * Preserves an immutable append-only editHistory audit trail and keeps reviewType & verifiedService immutable.
  *
  * @param {FirebaseFirestore.Firestore} db
  * @param {object} request
  */
 async function editReview(db, request) {
   const uid = assertAuthenticated(request);
-  const { requestId, rating, cleanText, cleanTags } = validateReviewInput(request.data);
-  const reviewId = String(request.data?.reviewId || requestId).trim();
+  const data = request.data || {};
+  const reviewId = String(data.reviewId || data.requestId || "").trim();
+  if (!reviewId || reviewId.length > 200 || /[/\\.\0]/.test(reviewId)) {
+    throw new HttpsError("invalid-argument", "Valid review identifier is required.");
+  }
+
+  const numRating = Number(data.rating);
+  if (!Number.isInteger(numRating) || numRating < 1 || numRating > 5) {
+    throw new HttpsError("invalid-argument", "Rating must be an integer between 1 and 5.");
+  }
+  const rawText = typeof data.text === "string" ? data.text.trim() : "";
+  if (rawText.length > MAX_REVIEW_LENGTH) {
+    throw new HttpsError("invalid-argument", `Review text must be ${MAX_REVIEW_LENGTH} characters or fewer.`);
+  }
+  if (SCRIPT_INJECTION_PATTERN.test(rawText)) {
+    throw new HttpsError("invalid-argument", "Review text contains disallowed script content.");
+  }
+  const cleanText = rawText.replace(HTML_TAG_PATTERN, "").trim();
+  const cleanTags = sanitizeReviewTags(data.tags);
 
   await assertCustomerNotSuspended(db, uid);
 
@@ -454,10 +662,7 @@ async function editReview(db, request) {
     throw new HttpsError("failed-precondition", "Moderated or hidden reviews cannot be edited.");
   }
 
-  const createdMs = typeof prev.createdAtMs === "number"
-    ? prev.createdAtMs
-    : (prev.createdAt ? Date.parse(String(prev.createdAt)) : NaN);
-
+  const createdMs = typeof prev.createdAtMs === "number" ? prev.createdAtMs : NaN;
   if (Number.isNaN(createdMs) || Date.now() > createdMs + REVIEW_EDIT_WINDOW_MS) {
     throw new HttpsError(
       "failed-precondition",
@@ -481,8 +686,9 @@ async function editReview(db, request) {
     }
   ];
 
+  // reviewType, verifiedService, requestId, customerId, workerUid are NEVER mutated on edit
   await reviewRef.update({
-    rating,
+    rating: numRating,
     text: cleanText,
     tags: cleanTags,
     editedAt: nowIso,
@@ -503,8 +709,9 @@ async function editReview(db, request) {
     targetId: reviewId,
     result: "success",
     details: {
+      reviewType: resolveReviewType(prev),
       previousRating: prev.rating,
-      newRating: rating,
+      newRating: numRating,
       editCount: nextHistory.length
     }
   });
@@ -518,12 +725,15 @@ async function editReview(db, request) {
 }
 
 module.exports = {
+  REVIEW_TYPES,
   REVIEW_EXPERIENCE_TAGS,
   REVIEW_EDIT_WINDOW_MS,
+  resolveReviewType,
   sanitizeReviewTags,
   calculateGenuineWorkerRating,
   recalculateAndPersistWorkerRating,
   validateReviewInput,
   submitReview,
+  submitUnverifiedReview,
   editReview
 };

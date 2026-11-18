@@ -47,6 +47,20 @@ import {
   renderAnalyticsView
 } from "./admin-platform-views.js";
 
+import {
+  renderCustomerVerificationView,
+  renderVerificationBadgesView
+} from "./admin-verification-views.js";
+
+import {
+  createVerifiedCustomerBadge,
+  createVerifiedWorkerBadge
+} from "./badges.js";
+import {
+  isWorkerOfficiallyVerified,
+  normalizeCustomerVerification
+} from "./membership-schema.js";
+
 import { isMaintenanceCurrentlyActive } from "./platform-config.js";
 import { initializeTheme } from "./theme.js";
 import { initializeAdminCanvas } from "./admin-canvas.js";
@@ -81,6 +95,8 @@ const NAV_GROUPS = [
   {
     category: "TRUST & SAFETY",
     items: [
+      { id: "customer-verification", label: "Customer Verification", icon: "🪪" },
+      { id: "verification-badges", label: "Verification & Badges", icon: "🏅" },
       { id: "reports-moderation", label: "Reports and Moderation", icon: "🛡️" }
     ]
   },
@@ -638,6 +654,12 @@ async function renderActiveView() {
       case "services-districts":
         await renderServicesDistrictsView(container, getPlatformViewContext());
         break;
+      case "customer-verification":
+        await renderCustomerVerificationView(container, getPlatformViewContext());
+        break;
+      case "verification-badges":
+        await renderVerificationBadgesView(container, getPlatformViewContext());
+        break;
       case "reports-moderation":
       case "reports":
       case "reviews":
@@ -1180,9 +1202,10 @@ async function renderWorkersView(container) {
         const distMatch = String(w.district || "").toLowerCase().includes(q);
         if (!idMatch && !nameMatch && !serviceMatch && !distMatch) return false;
       }
-      // Verification
-      if (vFilter === "verified" && !w.isVerified) return false;
-      if (vFilter === "pending" && Boolean(w.isVerified)) return false;
+      // Verification (canonical fail-closed check against stale isVerified)
+      const wVer = isWorkerOfficiallyVerified(w);
+      if (vFilter === "verified" && !wVer) return false;
+      if (vFilter === "pending" && wVer) return false;
       // Status
       if (sFilter !== "all" && String(w.status || "").toLowerCase() !== sFilter.toLowerCase()) return false;
       // District
@@ -1226,8 +1249,17 @@ async function renderWorkersView(container) {
       tdId.title = String(w.id || "—");
       row.appendChild(tdId);
 
+      const wVerified = isWorkerOfficiallyVerified(w);
       const tdName = document.createElement("td");
-      tdName.textContent = String(w.name || "Worker");
+      const nameWrap = document.createElement("div");
+      nameWrap.className = "admin-identity-cell";
+      const nameTxt = document.createElement("span");
+      nameTxt.textContent = String(w.name || "Worker");
+      nameWrap.appendChild(nameTxt);
+      if (wVerified) {
+        nameWrap.appendChild(createVerifiedWorkerBadge({ compact: true }));
+      }
+      tdName.appendChild(nameWrap);
       row.appendChild(tdName);
 
       const tdService = document.createElement("td");
@@ -1242,7 +1274,13 @@ async function renderWorkersView(container) {
       const wRevCount = typeof w.reviewCount === "number" && w.reviewCount > 0 ? w.reviewCount : 0;
       const wRatingNum = Number(w.rating);
       const hasValidWorkerRating = wRevCount > 0 && !Number.isNaN(wRatingNum) && wRatingNum >= 1 && wRatingNum <= 5;
-      tdRating.textContent = hasValidWorkerRating ? `★ ${wRatingNum.toFixed(1)} (${wRevCount})` : "No ratings yet";
+      const wVwCount = typeof w.verifiedWorkCount === "number" ? w.verifiedWorkCount : null;
+      const wUvCount = typeof w.unverifiedCount === "number" ? w.unverifiedCount : null;
+      tdRating.textContent = hasValidWorkerRating
+        ? (wVwCount !== null && wUvCount !== null && (wVwCount > 0 || wUvCount > 0)
+          ? `★ ${wRatingNum.toFixed(1)} (${wRevCount} · ${wVwCount}V/${wUvCount}U)`
+          : `★ ${wRatingNum.toFixed(1)} (${wRevCount})`)
+        : "No ratings yet";
       row.appendChild(tdRating);
 
       const tdStatus = document.createElement("td");
@@ -1254,8 +1292,8 @@ async function renderWorkersView(container) {
 
       const tdVer = document.createElement("td");
       const verPill = document.createElement("span");
-      verPill.className = `admin-status-pill ${w.isVerified ? "verified" : "pending"}`;
-      verPill.textContent = w.isVerified ? "Verified" : "Pending";
+      verPill.className = `admin-status-pill ${wVerified ? "verified" : "pending"}`;
+      verPill.textContent = wVerified ? "Verified" : (w.workerVerification?.status || "Pending");
       tdVer.appendChild(verPill);
       row.appendChild(tdVer);
 
@@ -1322,7 +1360,7 @@ async function renderWorkersView(container) {
         modButtons.className = "admin-table-actions";
         modButtons.style.marginTop = "8px";
 
-        if (!w.isVerified || w.status === "pending") {
+        if (!isWorkerOfficiallyVerified(w) || w.status === "pending") {
           const mApprove = document.createElement("button");
           mApprove.type = "button";
           mApprove.className = "admin-table-btn approve";
@@ -1333,6 +1371,7 @@ async function renderWorkersView(container) {
               showToast(`Worker ${w.name} verified and published.`);
               w.isVerified = true;
               w.status = "active";
+              if (res.workerVerification) w.workerVerification = res.workerVerification;
               const modalBackdrop = document.getElementById("adminActionModal");
               if (modalBackdrop) modalBackdrop.hidden = true;
               renderTable();
@@ -1352,6 +1391,7 @@ async function renderWorkersView(container) {
               showToast(`Worker ${w.name} application rejected.`);
               w.isVerified = false;
               w.status = "rejected";
+              if (res.workerVerification) w.workerVerification = res.workerVerification;
               const modalBackdrop = document.getElementById("adminActionModal");
               if (modalBackdrop) modalBackdrop.hidden = true;
               renderTable();
@@ -1431,7 +1471,7 @@ async function renderWorkersView(container) {
       actionsBox.appendChild(inspectBtn);
 
       // 2. Contextual table-level actions
-      if (!w.isVerified || w.status === "pending") {
+      if (!isWorkerOfficiallyVerified(w) || w.status === "pending") {
         const approveBtn = document.createElement("button");
         approveBtn.type = "button";
         approveBtn.className = "admin-table-btn approve";
@@ -1448,6 +1488,7 @@ async function renderWorkersView(container) {
                 showToast(`Worker ${w.name} verified and active.`);
                 w.isVerified = true;
                 w.status = "active";
+                if (res.workerVerification) w.workerVerification = res.workerVerification;
                 renderTable();
               } else {
                 showToast(res.error || "Failed to approve worker.");
@@ -1473,6 +1514,7 @@ async function renderWorkersView(container) {
                 showToast(`Worker ${w.name} application rejected.`);
                 w.isVerified = false;
                 w.status = "rejected";
+                if (res.workerVerification) w.workerVerification = res.workerVerification;
                 renderTable();
               } else {
                 showToast(res.error || "Failed to reject application.");
@@ -1546,6 +1588,7 @@ async function renderWorkersView(container) {
                 showToast(`Worker ${w.name} application reopened.`);
                 w.isVerified = false;
                 w.status = "pending";
+                if (res.workerVerification) w.workerVerification = res.workerVerification;
                 renderTable();
               } else {
                 showToast(res.error || "Failed to reopen application.");
@@ -1754,7 +1797,16 @@ async function renderCustomersView(container) {
       const row = document.createElement("tr");
 
       const tdName = document.createElement("td");
-      tdName.textContent = String(c.name || "Customer");
+      const cvNorm = normalizeCustomerVerification(c);
+      const cNameWrap = document.createElement("div");
+      cNameWrap.className = "admin-identity-cell";
+      const cNameTxt = document.createElement("span");
+      cNameTxt.textContent = String(c.name || "Customer");
+      cNameWrap.appendChild(cNameTxt);
+      if (cvNorm.status === "Verified") {
+        cNameWrap.appendChild(createVerifiedCustomerBadge({ compact: true }));
+      }
+      tdName.appendChild(cNameWrap);
       tdName.title = String(c.uid || c.id);
       row.appendChild(tdName);
 
@@ -1813,6 +1865,7 @@ async function renderCustomersView(container) {
         grid.appendChild(createDetailItem("Phone Number", c.phone || "Not provided"));
         grid.appendChild(createDetailItem("Email Address", c.email || "Not provided"));
         grid.appendChild(createDetailItem("Email Verified", c.emailVerified ? "Yes (Verified)" : "No (Pending)"));
+        grid.appendChild(createDetailItem("Customer Verification Badge", normalizeCustomerVerification(c).status));
         grid.appendChild(createDetailItem("District", c.district || "—"));
         grid.appendChild(createDetailItem("Account Created", formatDateTime(c.createdAt)));
         if (accStatus === "suspended") {
@@ -2827,7 +2880,7 @@ async function renderReviewsView(container) {
 
     const thead = document.createElement("thead");
     const headRow = document.createElement("tr");
-    ["Request / ID", "Customer", "Worker", "Rating", "Review & Tags", "Reports", "Submitted", "Status", "Actions"].forEach((txt) => {
+    ["Request / ID", "Type", "Customer", "Worker", "Rating", "Review & Tags", "Reports", "Submitted", "Status", "Actions"].forEach((txt) => {
       const th = document.createElement("th");
       th.textContent = txt;
       headRow.appendChild(th);
@@ -2843,10 +2896,21 @@ async function renderReviewsView(container) {
       const validRatingStr = Number.isInteger(ratingNum) && ratingNum >= 1 && ratingNum <= 5
         ? `★ ${ratingNum}.0`
         : "—";
+      const isVerifiedWorkRev = rev.reviewType === "unverified_experience"
+        ? false
+        : (rev.reviewType === "verified_work" || rev.verifiedService === true || Boolean(rev.requestId));
+      const revTypeLabel = isVerifiedWorkRev ? "Verified Work" : "Unverified Experience";
 
       const tdId = document.createElement("td");
       tdId.textContent = String(rev.requestId || rev.id);
       row.appendChild(tdId);
+
+      const tdType = document.createElement("td");
+      const typePill = document.createElement("span");
+      typePill.className = `admin-status-pill ${isVerifiedWorkRev ? "verified" : "pending"}`;
+      typePill.textContent = revTypeLabel;
+      tdType.appendChild(typePill);
+      row.appendChild(tdType);
 
       const tdCust = document.createElement("td");
       tdCust.textContent = String(rev.customerName || rev.customerId || "—");
@@ -2898,7 +2962,8 @@ async function renderReviewsView(container) {
         grid.className = "admin-detail-grid";
 
         grid.appendChild(createDetailItem("Review ID", rev.id));
-        grid.appendChild(createDetailItem("Related Service Request", rev.requestId || "—"));
+        grid.appendChild(createDetailItem("Review Type", revTypeLabel));
+        grid.appendChild(createDetailItem("Related Service Request", rev.requestId || "None (General Feedback)"));
         grid.appendChild(createDetailItem("Rating", validRatingStr));
         grid.appendChild(createDetailItem("Publication Status", rev.status || "published"));
         grid.appendChild(createDetailItem("Customer", `${rev.customerName || "Customer"} (${rev.customerId || "—"})`));

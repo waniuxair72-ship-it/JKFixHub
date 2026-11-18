@@ -42,6 +42,8 @@ import {
   normalizeService,
   setButtonLoading
 } from "./security.js";
+import { createVerifiedWorkerBadge } from "./badges.js";
+import { isWorkerOfficiallyVerified } from "./membership-schema.js";
 
 const markupPattern = /<\s*\/?\s*[a-z!][^>]*>/i;
 
@@ -205,7 +207,13 @@ function renderSelectedWorker(worker) {
   avatar.className = "avatar";
   setTextContent(avatar, worker?.initials || "--");
   details.className = "request-worker-details";
+  const nameRow = document.createElement("div");
+  nameRow.className = "jk-identity-inline";
   setTextContent(name, worker?.name || "Professional");
+  nameRow.appendChild(name);
+  if (isWorkerOfficiallyVerified(worker)) {
+    nameRow.appendChild(createVerifiedWorkerBadge({ compact: true }));
+  }
   setTextContent(service, worker?.service || "");
   const wCount = typeof worker?.reviewCount === "number" && worker.reviewCount > 0 ? worker.reviewCount : 0;
   const wRatingNum = Number(worker?.rating);
@@ -213,7 +221,7 @@ function renderSelectedWorker(worker) {
     ? `${wRatingNum.toFixed(1)} ★ (${wCount})`
     : "New Worker · No ratings yet";
   setTextContent(districtRating, `${worker?.district || "J&K"} · ${ratingStr}`);
-  details.append(name, service, districtRating);
+  details.append(nameRow, service, districtRating);
   container.append(avatar, details);
 }
 

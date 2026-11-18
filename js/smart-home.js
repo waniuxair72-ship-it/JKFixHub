@@ -35,6 +35,8 @@ import {
   fetchActiveAnnouncementsForAudience,
   renderAnnouncementsIntoContainer
 } from "./platform-config.js";
+import { createVerifiedCustomerBadge, createVerifiedWorkerBadge } from "./badges.js";
+import { isCustomerOfficiallyVerified, isWorkerOfficiallyVerified } from "./membership-schema.js";
 
 let initialized = false;
 let isCustomerSyncing = false;
@@ -74,7 +76,26 @@ export function renderCustomerHome(user, options = {}) {
   const chatsDesc = document.getElementById("customerChatsDesc");
 
   const displayName = user?.name ? user.name.split(" ")[0] : "Customer";
-  if (nameEl) setTextContent(nameEl, displayName);
+  if (nameEl) {
+    setTextContent(nameEl, displayName);
+    let badgeSlot = document.getElementById("customerHomeVerifiedBadgeSlot");
+    if (!badgeSlot && nameEl.parentNode) {
+      badgeSlot = document.createElement("span");
+      badgeSlot.id = "customerHomeVerifiedBadgeSlot";
+      badgeSlot.className = "jk-badge-slot";
+      nameEl.insertAdjacentElement("afterend", badgeSlot);
+    }
+    if (badgeSlot) {
+      const isVerifiedCustomer = isCustomerOfficiallyVerified(user);
+      if (isVerifiedCustomer) {
+        badgeSlot.replaceChildren(createVerifiedCustomerBadge({ compact: true }));
+        badgeSlot.hidden = false;
+      } else {
+        badgeSlot.replaceChildren();
+        badgeSlot.hidden = true;
+      }
+    }
+  }
   if (districtEl) setTextContent(districtEl, user?.district || "Jammu & Kashmir");
 
   // Account suspension notice (preserves historical access & support)
@@ -243,9 +264,17 @@ export function renderWorkerHome(user, options = {}) {
     }
   }
   if (verificationEl) {
-    const isVerified = Boolean(user?.isVerified || worker?.isVerified);
-    setTextContent(verificationEl, isVerified ? "Verified worker" : "Pending verification");
-    verificationEl.className = isVerified ? "worker-verification-badge verified" : "worker-verification-badge";
+    // Strictly evaluate live user verification first so stale cached worker.isVerified:true never overrides revocation
+    const isVerified = user && (user.workerVerification || user.isVerified !== undefined)
+      ? isWorkerOfficiallyVerified(user)
+      : isWorkerOfficiallyVerified(worker);
+    if (isVerified) {
+      verificationEl.replaceChildren(createVerifiedWorkerBadge({ fullName: true }));
+      verificationEl.className = "worker-verification-badge-slot";
+    } else {
+      setTextContent(verificationEl, "Pending verification");
+      verificationEl.className = "worker-verification-badge";
+    }
   }
   if (expBadge) {
     setTextContent(expBadge, worker?.experience || user?.experience || "Experience");

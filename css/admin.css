@@ -2170,3 +2170,184 @@
     font-size: 0.78rem;
   }
 }
+
+/* ----------------------------------------------------------------------------
+   VERIFICATION & OFFICIAL TRUST BADGES (Admin Views)
+   ---------------------------------------------------------------------------- */
+.admin-identity-cell {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-cell-sub {
+  font-size: 0.72rem;
+  color: var(--admin-ink-muted);
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.admin-info-banner {
+  padding: 12px 15px;
+  margin-bottom: 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--admin-border-medium);
+  background: var(--admin-bg-surface-raised);
+  font-size: 0.83rem;
+  line-height: 1.48;
+  color: var(--admin-ink-secondary);
+}
+
+.admin-badge-legend-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 16px 18px;
+  margin-bottom: 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--admin-border-medium);
+  background: var(--admin-bg-surface);
+  box-shadow: var(--admin-shadow-sm);
+}
+
+.admin-badge-legend-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.admin-badge-legend-col strong {
+  font-size: 0.88rem;
+  color: var(--admin-ink-primary);
+}
+
+.admin-badge-showcase {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-muted-copy {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.48;
+  color: var(--admin-ink-muted);
+}
+
+.admin-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 9px 11px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--admin-border-medium);
+  background: var(--admin-bg-surface);
+  color: var(--admin-ink-primary);
+  font-family: inherit;
+  font-size: 0.84rem;
+  resize: vertical;
+}
+
+.admin-verification-history {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0 0 0 14px;
+  border-left: 2px solid var(--admin-border-medium);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.admin-verification-history-item {
+  padding: 8px 10px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--admin-border-subtle);
+  background: var(--admin-bg-surface);
+}
+
+.admin-verification-history-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.81rem;
+  color: var(--admin-ink-primary);
+}
+
+.admin-verification-history-time,
+.admin-verification-history-meta {
+  font-size: 0.74rem;
+  color: var(--admin-ink-muted);
+}
+
+.admin-verification-history-note {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  color: var(--admin-ink-secondary);
+}
+
+/* Official Trust Badges inside Admin Panel */
+.jk-verified-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 6px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.jk-verified-badge.is-compact {
+  padding: 2px 7px 2px 5px;
+  font-size: 0.68rem;
+  gap: 4px;
+}
+
+.jk-badge-svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  display: block;
+}
+
+.jk-verified-badge.is-compact .jk-badge-svg {
+  width: 13px;
+  height: 13px;
+}
+
+.jk-badge-customer {
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+  border: 1px solid rgba(37, 99, 235, 0.28);
+}
+
+[data-theme="dark"] .jk-badge-customer {
+  background: rgba(59, 130, 246, 0.22);
+  color: #93c5fd;
+  border-color: rgba(96, 165, 250, 0.38);
+}
+
+.jk-badge-worker {
+  background: rgba(13, 148, 136, 0.13);
+  color: #0f766e;
+  border: 1px solid rgba(13, 148, 136, 0.30);
+}
+
+[data-theme="dark"] .jk-badge-worker {
+  background: rgba(20, 184, 166, 0.22);
+  color: #5eead4;
+  border-color: rgba(45, 212, 191, 0.38);
+}
+
+@media (max-width: 768px) {
+  .admin-badge-legend-card {
+    grid-template-columns: 1fr;
+  }
+}

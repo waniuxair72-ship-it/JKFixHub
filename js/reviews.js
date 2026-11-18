@@ -14,15 +14,22 @@
 
 import { closeModal, openModal } from "./modals.js";
 import {
+  REVIEW_TYPES,
+  resolveReviewType,
   addWorkerReviewReply,
   calculateWorkerRating,
   createCustomerReview,
+  createUnverifiedCustomerReview,
   editCustomerReview,
   getCustomerRequestById,
+  getCustomerRequests,
   getCurrentUser,
   getReviewById,
   getReviewByRequestId,
+  getUnverifiedReviewForWorker,
   getReviewsForWorker,
+  getWorkerById,
+  isAuthenticated,
   isCustomer,
   isWorker,
   upsertStoredReview,
@@ -43,12 +50,19 @@ import {
 } from "./security.js";
 import {
   createFirestoreReview,
+  createFirestoreUnverifiedReview,
   updateFirestoreCustomerReview,
   addFirestoreWorkerReviewReply,
   getWorkerFirestoreReviewsWithMeta,
   getFirestoreReviewById,
-  getFirestoreReviewByRequestId
+  getFirestoreReviewByRequestId,
+  getFirestoreUnverifiedReview
 } from "./firestore-service.js";
+import {
+  createVerifiedCustomerBadge,
+  createVerifiedWorkerBadge,
+  hydratePublicBadgesForUids
+} from "./badges.js";
 
 /**
  * Authoritatively determines if a given review belongs to the authenticated worker.
@@ -144,8 +158,10 @@ const MAX_REPLY_LENGTH = 600;
 
 let initialized = false;
 let activeReviewRequestId = null;
+let activeReviewMode = REVIEW_TYPES.VERIFIED_WORK;
+let activeUnverifiedWorker = null;
 let activeEditReviewId = null;
-let lastSubmittedRequestId = null;
+let lastSubmittedReviewId = null;
 let activeReplyReviewId = null;
 let activeViewedReviewId = null;
 let isSubmittingReview = false;
@@ -233,13 +249,14 @@ function setReplyError(message) {
   }
 }
 
-function toggleReviewModalMode(showSuccess, { isEdit = false, rating = 5 } = {}) {
+function toggleReviewModalMode(showSuccess, { isEdit = false, rating = 5, reviewType = REVIEW_TYPES.VERIFIED_WORK } = {}) {
   const formSec = document.getElementById("reviewFormSection");
   const successSec = document.getElementById("reviewSuccessSection");
   if (formSec) formSec.hidden = Boolean(showSuccess);
   if (successSec) {
     successSec.hidden = !showSuccess;
     if (showSuccess) {
+      const isVerifiedWork = reviewType === REVIEW_TYPES.VERIFIED_WORK;
       setTextContent(
         document.getElementById("reviewSuccessHeading"),
         isEdit ? "Review updated" : "Thank you for your review"
@@ -248,7 +265,9 @@ function toggleReviewModalMode(showSuccess, { isEdit = false, rating = 5 } = {})
         document.getElementById("reviewSuccessMessage"),
         isEdit
           ? "Your updated review has been saved and the technician's rating has been recalculated."
-          : "Your verified feedback has been published and now contributes to this technician's genuine rating."
+          : isVerifiedWork
+            ? "Your Verified Work review has been published and now contributes to this technician's genuine rating."
+            : "Your general feedback has been published as an Unverified Experience review."
       );
       setTextContent(
         document.getElementById("reviewSuccessRating"),
@@ -300,19 +319,21 @@ export async function openLeaveReviewModal(requestId) {
   }
 
   activeReviewRequestId = requestId;
+  activeReviewMode = REVIEW_TYPES.VERIFIED_WORK;
+  activeUnverifiedWorker = null;
   activeEditReviewId = null;
   const form = document.getElementById("reviewForm");
   if (form) form.reset();
 
   toggleReviewModalMode(false);
   setReviewError("");
-  setTextContent(document.getElementById("reviewModalTag"), "Verified Customer Review");
-  setTextContent(document.getElementById("reviewModalTitle"), "Leave a review.");
+  setTextContent(document.getElementById("reviewModalTag"), "Verified Work Review");
+  setTextContent(document.getElementById("reviewModalTitle"), "Leave a verified review.");
   setTextContent(document.getElementById("reviewModalSubtitle"), "Share honest feedback on your completed service request.");
   setTextContent(document.getElementById("reviewTargetWorker"), request.workerName);
   setTextContent(document.getElementById("reviewTargetService"), request.service);
   setTextContent(document.getElementById("reviewTargetDistrict"), request.district);
-  setTextContent(document.getElementById("reviewSubmitButton"), "Submit Review");
+  setTextContent(document.getElementById("reviewSubmitButton"), "Submit Verified Review");
   const editNotice = document.getElementById("reviewEditNotice");
   if (editNotice) editNotice.hidden = true;
 
@@ -327,9 +348,172 @@ export async function openLeaveReviewModal(requestId) {
 
   closeModal("customerRequestsModal");
   closeModal("customerRequestDetailsModal");
+  closeModal("profileModal");
   openModal("reviewModal");
   document.getElementById("reviewTextInput")?.focus();
   return true;
+}
+
+/**
+ * Opens the Unverified Experience Review modal for an authenticated active customer
+ * wishing to leave general feedback without a completed service request.
+ */
+export async function openUnverifiedReviewModal(workerOrId) {
+  if (!isCustomer() || !hasCapability("customer", "submitReview")) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", getCurrentUser()?.role || null);
+    return { success: false, reason: "customer_required" };
+  }
+
+  const user = getCurrentUser();
+  if (user?.status === "suspended") {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || "customer");
+    return { success: false, reason: "suspended" };
+  }
+
+  const worker = typeof workerOrId === "object" && workerOrId !== null
+    ? workerOrId
+    : getWorkerById(workerOrId);
+  if (!worker) {
+    recordSecurityEvent("INVALID_REQUEST", "customer");
+    return { success: false, reason: "worker_not_found" };
+  }
+
+  const workerUid = String(worker.firebaseUid || worker.workerUid || worker.uid || worker.id);
+  const callerUid = String(user.firebaseUid || user.uid || user.id || "");
+  if (!callerUid || callerUid === workerUid) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || null);
+    return { success: false, reason: "self_review_blocked" };
+  }
+
+  let existing = getUnverifiedReviewForWorker(workerUid, callerUid);
+  if (!existing && user.authProvider === "firebase") {
+    try {
+      existing = await getFirestoreUnverifiedReview(workerUid, callerUid);
+      if (existing) upsertStoredReview(existing);
+    } catch {}
+  }
+
+  if (existing) {
+    await openViewReviewModal(existing.id);
+    return { success: true, existing: true };
+  }
+
+  activeReviewRequestId = null;
+  activeReviewMode = REVIEW_TYPES.UNVERIFIED_EXPERIENCE;
+  activeUnverifiedWorker = {
+    workerUid,
+    workerName: worker.name || "Service Professional",
+    service: worker.service || "General Service",
+    district: worker.district || "Jammu & Kashmir"
+  };
+  activeEditReviewId = null;
+
+  const form = document.getElementById("reviewForm");
+  if (form) form.reset();
+
+  toggleReviewModalMode(false);
+  setReviewError("");
+  setTextContent(document.getElementById("reviewModalTag"), "Unverified Experience Review");
+  setTextContent(document.getElementById("reviewModalTitle"), "Leave general feedback.");
+  setTextContent(
+    document.getElementById("reviewModalSubtitle"),
+    "This feedback is not linked to a completed JKFixHub request and will be clearly labeled as Unverified Experience."
+  );
+  setTextContent(document.getElementById("reviewTargetWorker"), activeUnverifiedWorker.workerName);
+  setTextContent(document.getElementById("reviewTargetService"), activeUnverifiedWorker.service);
+  setTextContent(document.getElementById("reviewTargetDistrict"), activeUnverifiedWorker.district);
+  setTextContent(document.getElementById("reviewSubmitButton"), "Publish General Feedback");
+
+  const editNotice = document.getElementById("reviewEditNotice");
+  if (editNotice) {
+    setTextContent(
+      editNotice,
+      "Note: Only one Unverified Experience review is allowed per worker. It will never be labeled as Verified Work."
+    );
+    editNotice.hidden = false;
+  }
+
+  document.querySelectorAll('input[name="reviewRating"]').forEach((input) => {
+    input.checked = input.value === "5";
+  });
+  updateStarSelectionUI(5);
+  setSelectedExperienceTags([]);
+  updateReviewCharCount();
+
+  closeModal("profileModal");
+  openModal("reviewModal");
+  document.getElementById("reviewTextInput")?.focus();
+  return { success: true };
+}
+
+/**
+ * Handles the "Did you hire this worker?" selector inside a Worker Profile modal.
+ * @param {string} workerId
+ * @param {"verified"|"unverified"} choice
+ * @param {HTMLElement|null} [feedbackEl]
+ */
+export async function openProfileReviewOption(workerId, choice, feedbackEl = null) {
+  const showFeedback = (msg) => {
+    if (feedbackEl) {
+      setTextContent(feedbackEl, msg);
+      feedbackEl.hidden = !msg;
+    }
+  };
+
+  showFeedback("");
+
+  if (!isAuthenticated()) {
+    showFeedback("Please sign in with a customer account to leave a review.");
+    closeModal("profileModal");
+    document.getElementById("authContinue")?.click();
+    return false;
+  }
+
+  const user = getCurrentUser();
+  if (!isCustomer()) {
+    showFeedback("Only customer accounts can submit worker reviews.");
+    return false;
+  }
+
+  if (user?.status === "suspended") {
+    showFeedback("Suspended accounts cannot submit new reviews.");
+    return false;
+  }
+
+  const worker = getWorkerById(workerId);
+  const targetUid = String(worker?.firebaseUid || worker?.workerUid || worker?.uid || workerId || "");
+  const callerUid = String(user?.firebaseUid || user?.uid || user?.id || "");
+  if (callerUid && targetUid && callerUid === targetUid) {
+    showFeedback("You cannot review your own worker profile.");
+    return false;
+  }
+
+  if (choice === "unverified") {
+    const res = await openUnverifiedReviewModal(worker || workerId);
+    if (!res?.success) {
+      showFeedback("Unable to open general feedback form for this profile.");
+      return false;
+    }
+    return true;
+  }
+
+  // Choice === "verified": find a completed request between this customer and worker
+  const customerReqs = getCustomerRequests().filter((req) => {
+    if (!req || req.status !== "Completed") return false;
+    const reqWorkerIds = [req.workerUid, req.workerId != null ? String(req.workerId) : null].filter(Boolean).map(String);
+    return reqWorkerIds.includes(targetUid) || reqWorkerIds.includes(String(workerId));
+  });
+
+  if (customerReqs.length === 0) {
+    showFeedback(
+      "No completed JKFixHub service request found with this worker yet. Verified Work reviews require a completed booking — or select \"No, I want to leave general feedback\" to submit an Unverified Experience review."
+    );
+    return false;
+  }
+
+  const unreviewed = customerReqs.find((req) => !getReviewByRequestId(req.id));
+  const targetReq = unreviewed || customerReqs[0];
+  return openLeaveReviewModal(targetReq.id);
 }
 
 export async function openEditReviewModal(reviewIdOrRequestId) {
@@ -353,7 +537,11 @@ export async function openEditReviewModal(reviewIdOrRequestId) {
     return false;
   }
 
+  const rType = resolveReviewType(review);
+  const isVerifiedWork = rType === REVIEW_TYPES.VERIFIED_WORK;
   activeReviewRequestId = review.requestId || review.id;
+  activeReviewMode = rType;
+  activeUnverifiedWorker = null;
   activeEditReviewId = review.id;
 
   const form = document.getElementById("reviewForm");
@@ -361,11 +549,17 @@ export async function openEditReviewModal(reviewIdOrRequestId) {
 
   toggleReviewModalMode(false);
   setReviewError("");
-  setTextContent(document.getElementById("reviewModalTag"), "Edit Verified Review");
+  setTextContent(
+    document.getElementById("reviewModalTag"),
+    isVerifiedWork ? "Edit Verified Work Review" : "Edit Unverified Experience Review"
+  );
   setTextContent(document.getElementById("reviewModalTitle"), "Edit your review.");
   setTextContent(document.getElementById("reviewModalSubtitle"), "Previous versions are preserved in the audit trail.");
   setTextContent(document.getElementById("reviewTargetWorker"), review.workerName || "Service Professional");
-  setTextContent(document.getElementById("reviewTargetService"), review.service || "Completed Service");
+  setTextContent(
+    document.getElementById("reviewTargetService"),
+    review.service || (isVerifiedWork ? "Completed Service" : "General Feedback")
+  );
   setTextContent(document.getElementById("reviewTargetDistrict"), review.district || "Jammu & Kashmir");
   setTextContent(document.getElementById("reviewSubmitButton"), "Save Changes");
 
@@ -373,7 +567,7 @@ export async function openEditReviewModal(reviewIdOrRequestId) {
   if (editNotice) {
     setTextContent(
       editNotice,
-      `Limited-time edit window: ~${eligibility.remainingHours} ${eligibility.remainingHours === 1 ? "hour" : "hours"} remaining. Request & technician identity cannot be changed.`
+      `Limited-time edit window: ~${eligibility.remainingHours} ${eligibility.remainingHours === 1 ? "hour" : "hours"} remaining. Review type and technician identity cannot be changed.`
     );
     editNotice.hidden = false;
   }
@@ -396,11 +590,11 @@ export async function openEditReviewModal(reviewIdOrRequestId) {
   return true;
 }
 
-export async function openViewReviewModal(requestId) {
-  let review = getReviewByRequestId(requestId) || getReviewById(requestId);
+export async function openViewReviewModal(requestIdOrReviewId) {
+  let review = getReviewByRequestId(requestIdOrReviewId) || getReviewById(requestIdOrReviewId);
   if (!review) {
     try {
-      review = await getFirestoreReviewByRequestId(requestId);
+      review = await getFirestoreReviewById(requestIdOrReviewId) || await getFirestoreReviewByRequestId(requestIdOrReviewId);
       if (review) {
         upsertStoredReview(review);
       }
@@ -411,11 +605,13 @@ export async function openViewReviewModal(requestId) {
   if (!review) return false;
 
   activeViewedReviewId = review.id;
+  const rType = resolveReviewType(review);
+  const typeLabel = rType === REVIEW_TYPES.VERIFIED_WORK ? "Verified Work" : "Unverified Experience";
   const ratingLabel = REVIEW_RATING_LABELS[Number(review.rating)] || "";
   setTextContent(document.getElementById("viewReviewWorker"), review.workerName || "Service Professional");
   setTextContent(
     document.getElementById("viewReviewRating"),
-    `${renderStarSymbols(review.rating)} ${review.rating}.0${ratingLabel ? ` · ${ratingLabel}` : ""}`
+    `${renderStarSymbols(review.rating)} ${review.rating}.0${ratingLabel ? ` · ${ratingLabel}` : ""} · ${typeLabel}`
   );
   setTextContent(document.getElementById("viewReviewDate"), formatReviewDate(review.createdAt));
 
@@ -531,26 +727,41 @@ export async function openWorkerReplyModal(reviewId) {
   return true;
 }
 
-export function buildReviewCard(review, isCurrentWorker = false) {
+export function buildReviewCard(review, isCurrentWorker = false, badgeMap = null) {
   const card = document.createElement("article");
   const header = document.createElement("div");
   const authorWrap = document.createElement("div");
   const author = document.createElement("strong");
-  const verifiedPill = document.createElement("span");
+  const typePill = document.createElement("span");
   const meta = document.createElement("div");
   const stars = document.createElement("span");
   const date = document.createElement("time");
 
+  const reviewType = resolveReviewType(review);
+  const isVerifiedWork = reviewType === REVIEW_TYPES.VERIFIED_WORK;
+
   card.className = "review-card";
   card.dataset.reviewId = review.id;
+  card.dataset.reviewType = reviewType;
   header.className = "review-card-header";
   authorWrap.className = "review-author-wrap";
   author.className = "review-author";
   setTextContent(author, review.customerName || "Customer");
 
-  verifiedPill.className = "review-verified-pill";
-  setTextContent(verifiedPill, "Verified Completed Service");
-  authorWrap.append(author, verifiedPill);
+  authorWrap.appendChild(author);
+
+  // Show distinct JKFixHub Verified Customer badge ONLY if customer is genuinely verified by admin
+  const customerBadge = badgeMap && review.customerId ? badgeMap.get(String(review.customerId)) : null;
+  if (customerBadge && customerBadge.verified === true && customerBadge.badgeType === "verified_customer") {
+    authorWrap.appendChild(createVerifiedCustomerBadge({ compact: true }));
+  }
+
+  typePill.className = isVerifiedWork
+    ? "review-type-pill review-verified-pill is-verified-work"
+    : "review-type-pill is-unverified-experience";
+  typePill.dataset.reviewTypePill = reviewType;
+  setTextContent(typePill, isVerifiedWork ? "Verified Work" : "Unverified Experience");
+  authorWrap.appendChild(typePill);
 
   meta.className = "review-card-meta";
   stars.className = "review-rating-stars";
@@ -592,26 +803,41 @@ export function buildReviewCard(review, isCurrentWorker = false) {
   } else {
     const text = document.createElement("p");
     text.className = "review-text is-muted";
-    setTextContent(text, "Verified star rating without additional written comment.");
+    setTextContent(
+      text,
+      isVerifiedWork
+        ? "Verified Work star rating without additional written comment."
+        : "Unverified Experience rating without additional written comment."
+    );
     card.appendChild(text);
   }
 
   if (review.workerReply) {
     const replyBox = document.createElement("div");
     const replyHeader = document.createElement("div");
+    const replyAuthorWrap = document.createElement("div");
     const replyAuthor = document.createElement("strong");
     const replyDate = document.createElement("time");
     const replyText = document.createElement("p");
 
     replyBox.className = "worker-reply-box";
     replyHeader.className = "worker-reply-header";
+    replyAuthorWrap.className = "worker-reply-author-wrap";
     setTextContent(replyAuthor, `${review.workerName || "Service Professional"} · Worker Response`);
+    replyAuthorWrap.appendChild(replyAuthor);
+
+    const wUid = String(review.workerUid || review.workerId || "");
+    const workerBadge = badgeMap && wUid ? badgeMap.get(wUid) : null;
+    if (workerBadge && workerBadge.verified === true && workerBadge.badgeType === "verified_professional") {
+      replyAuthorWrap.appendChild(createVerifiedWorkerBadge({ compact: true }));
+    }
+
     const dateStr = review.workerReplyAt ? formatReviewDate(review.workerReplyAt) : "";
     const editedSuffix = review.workerReplyUpdatedAt ? " · Edited" : "";
     if (dateStr || editedSuffix) {
       setTextContent(replyDate, `${dateStr}${editedSuffix}`);
     }
-    replyHeader.append(replyAuthor, replyDate);
+    replyHeader.append(replyAuthorWrap, replyDate);
 
     replyText.className = "worker-reply-text";
     setTextContent(replyText, review.workerReply);
@@ -673,10 +899,29 @@ function buildRatingSummaryCard(summary) {
   countWrap.className = "reviews-aggregate-count";
   setTextContent(
     countWrap,
-    `Based on ${summary.reviewCount} ${summary.reviewCount === 1 ? "verified review" : "verified reviews"}`
+    `Based on ${summary.reviewCount} published ${summary.reviewCount === 1 ? "review" : "reviews"}`
   );
 
-  overview.append(avgNumber, avgStars, countWrap);
+  // Separate transparent breakdown of Verified Work vs Unverified Experience reviews
+  const breakdownWrap = document.createElement("div");
+  breakdownWrap.className = "reviews-type-breakdown";
+  const vwCount = Number(summary.verifiedWorkCount || 0);
+  const uvCount = Number(summary.unverifiedCount || 0);
+
+  const vwChip = document.createElement("span");
+  vwChip.className = "reviews-type-stat is-verified-work";
+  const vwAvgSuffix = vwCount > 0 && uvCount > 0 && typeof summary.verifiedWorkAverage === "number"
+    ? ` (${summary.verifiedWorkAverage.toFixed(1)} ★)`
+    : "";
+  setTextContent(vwChip, `Verified Work: ${vwCount}${vwAvgSuffix}`);
+
+  const uvChip = document.createElement("span");
+  uvChip.className = "reviews-type-stat is-unverified-experience";
+  setTextContent(uvChip, `Unverified Experience: ${uvCount}`);
+
+  breakdownWrap.append(vwChip, uvChip);
+
+  overview.append(avgNumber, avgStars, countWrap, breakdownWrap);
 
   // Right 5-star distribution breakdown
   const distWrap = document.createElement("div");
@@ -853,9 +1098,16 @@ export async function renderWorkerReviews(workerId, container, options = {}) {
   cardsList.className = "reviews-cards-list";
   wrapper.appendChild(cardsList);
 
+  // Hydrate public non-PII verified badges for review authors & worker
+  let badgeMap = new Map();
+  const uidsToHydrate = [
+    String(workerId),
+    ...allPublishedReviews.map((r) => r.customerId).filter(Boolean).map(String)
+  ];
+
   const mountCards = () => {
     const sorted = sortWorkerReviews(allPublishedReviews, activeSort);
-    cardsList.replaceChildren(...sorted.map((rev) => buildReviewCard(rev, isReviewForWorker(rev, user))));
+    cardsList.replaceChildren(...sorted.map((rev) => buildReviewCard(rev, isReviewForWorker(rev, user), badgeMap)));
   };
 
   sortSelect.addEventListener("change", () => {
@@ -865,11 +1117,19 @@ export async function renderWorkerReviews(workerId, container, options = {}) {
 
   mountCards();
   container.replaceChildren(wrapper);
+
+  // Refresh cards with live public verification badges once fetched (always fresh against revocations)
+  hydratePublicBadgesForUids(uidsToHydrate, { forceRefresh: true })
+    .then((resolved) => {
+      badgeMap = resolved || new Map();
+      mountCards();
+    })
+    .catch(() => {});
 }
 
 async function handleReviewFormSubmit(event) {
   event.preventDefault();
-  if (isSubmittingReview || !activeReviewRequestId) return;
+  if (isSubmittingReview || (!activeReviewRequestId && !activeEditReviewId && !activeUnverifiedWorker)) return;
 
   const ratingInput = document.querySelector('input[name="reviewRating"]:checked');
   const textInput = document.getElementById("reviewTextInput");
@@ -908,6 +1168,7 @@ async function handleReviewFormSubmit(event) {
   const submitBtn = document.getElementById("reviewSubmitButton") || event.target?.querySelector('button[type="submit"]');
   const originalBtnText = submitBtn ? submitBtn.textContent : "Submit Review";
   const isEditing = Boolean(activeEditReviewId);
+  const submittedMode = activeReviewMode;
 
   isSubmittingReview = true;
   setReviewError("");
@@ -918,6 +1179,8 @@ async function handleReviewFormSubmit(event) {
 
   const finishedRequestId = activeReviewRequestId;
   const editReviewId = activeEditReviewId;
+  const unverifiedTarget = activeUnverifiedWorker;
+  let savedIdForView = finishedRequestId || editReviewId;
 
   try {
     if (isEditing) {
@@ -947,6 +1210,57 @@ async function handleReviewFormSubmit(event) {
       }
 
       if (savedReview) {
+        savedIdForView = savedReview.id;
+        upsertStoredReview(savedReview);
+        const targetWrk = savedReview.workerUid || savedReview.workerId;
+        if (targetWrk) {
+          syncDiscoveredWorkerRating(targetWrk);
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("jkfixhub:ratings-updated", { detail: { workerId: String(targetWrk) } }));
+          }
+        }
+      }
+    } else if (submittedMode === REVIEW_TYPES.UNVERIFIED_EXPERIENCE && unverifiedTarget) {
+      let savedReview = null;
+      if (user.authProvider === "firebase") {
+        const res = await createFirestoreUnverifiedReview({
+          customerId,
+          customerName: user.name || "Customer",
+          workerUid: unverifiedTarget.workerUid,
+          workerName: unverifiedTarget.workerName,
+          service: unverifiedTarget.service,
+          district: unverifiedTarget.district,
+          rating,
+          text,
+          tags
+        });
+        if (!res.success) {
+          setReviewError(res.error || "Failed to submit feedback. Please try again.");
+          return;
+        }
+        savedReview = res.review;
+      }
+
+      try {
+        const localCreated = createUnverifiedCustomerReview({
+          workerUid: unverifiedTarget.workerUid,
+          workerName: unverifiedTarget.workerName,
+          service: unverifiedTarget.service,
+          district: unverifiedTarget.district,
+          rating,
+          text,
+          tags
+        });
+        if (!savedReview) savedReview = localCreated;
+      } catch (localErr) {
+        if (!savedReview) {
+          setReviewError(localErr?.message || "Failed to submit feedback.");
+          return;
+        }
+      }
+
+      if (savedReview) {
+        savedIdForView = savedReview.id;
         upsertStoredReview(savedReview);
         const targetWrk = savedReview.workerUid || savedReview.workerId;
         if (targetWrk) {
@@ -990,6 +1304,7 @@ async function handleReviewFormSubmit(event) {
       }
 
       if (savedReview) {
+        savedIdForView = savedReview.id;
         upsertStoredReview(savedReview);
         const targetWrk = savedReview.workerUid || savedReview.workerId;
         if (targetWrk) {
@@ -1001,10 +1316,11 @@ async function handleReviewFormSubmit(event) {
       }
     }
 
-    lastSubmittedRequestId = finishedRequestId;
+    lastSubmittedReviewId = savedIdForView;
     activeReviewRequestId = null;
+    activeUnverifiedWorker = null;
     activeEditReviewId = null;
-    toggleReviewModalMode(true, { isEdit: isEditing, rating });
+    toggleReviewModalMode(true, { isEdit: isEditing, rating, reviewType: submittedMode });
   } catch (err) {
     setReviewError(err?.message || getSafeErrorMessage("invalidRequest"));
   } finally {
@@ -1124,6 +1440,17 @@ export function initializeReviews() {
       return;
     }
 
+    const profileChoiceBtn = target.closest("[data-profile-review-choice]");
+    if (profileChoiceBtn) {
+      const choice = profileChoiceBtn.dataset.profileReviewChoice;
+      const workerId = profileChoiceBtn.dataset.workerId;
+      const feedbackEl = document.getElementById("profileReviewSelectorFeedback");
+      openProfileReviewOption(workerId, choice, feedbackEl).catch((err) => {
+        console.warn("[JKFixHub Review] openProfileReviewOption error:", err);
+      });
+      return;
+    }
+
     const leaveBtn = target.closest("[data-leave-review]");
     if (leaveBtn) {
       openLeaveReviewModal(leaveBtn.dataset.leaveReview).catch((err) => {
@@ -1157,10 +1484,10 @@ export function initializeReviews() {
     }
 
     if (target.closest("#reviewSuccessViewBtn")) {
-      const reqId = lastSubmittedRequestId;
+      const revId = lastSubmittedReviewId;
       closeModal("reviewModal");
-      if (reqId) {
-        openViewReviewModal(reqId).catch(() => {});
+      if (revId) {
+        openViewReviewModal(revId).catch(() => {});
       }
       return;
     }

@@ -49,6 +49,8 @@ import {
   initializeFirestoreClient,
   getFirestoreMethods
 } from "./firebase-config.js";
+import { createVerifiedWorkerBadge, mountPublicBadgeIfVerified } from "./badges.js";
+import { isWorkerOfficiallyVerified } from "./membership-schema.js";
 
 const statDefinitions = [
   ["Total Requests", "total"],
@@ -176,7 +178,16 @@ function buildRequestCard(request) {
   aside.className = "dashboard-request-aside";
   status.className = `dashboard-request-status status-${(request.status || "pending").toLowerCase()}`;
 
+  const titleRow = document.createElement("div");
+  titleRow.className = "jk-identity-inline";
   setTextContent(title, request.customerName || request.customer || "Customer");
+  titleRow.appendChild(title);
+  if (request.customerId) {
+    const custBadgeSlot = document.createElement("span");
+    custBadgeSlot.className = "jk-badge-slot";
+    titleRow.appendChild(custBadgeSlot);
+    mountPublicBadgeIfVerified(custBadgeSlot, request.customerId, "customer", { compact: true, forceRefresh: true }).catch(() => {});
+  }
   setTextContent(service, request.service);
   setTextContent(description, request.problemDescription || request.description || "No problem description provided.");
 
@@ -186,7 +197,7 @@ function buildRequestCard(request) {
   setTextContent(status, request.status || "Pending");
 
   meta.append(location, time);
-  main.append(title, service, description, meta);
+  main.append(titleRow, service, description, meta);
   aside.append(status);
 
   if (request.status === "Pending") {
@@ -463,13 +474,20 @@ function renderDashboard(worker) {
     ["workerDashboardDistrict", worker.district],
     ["workerDashboardExperience", worker.experience],
     ["workerDashboardRating", ratingDetail],
-    ["workerDashboardAvailabilityLabel", worker.availability],
-    ["workerDashboardVerification", getCurrentUser()?.isVerified ? "Verified worker" : "Pending verification"]
+    ["workerDashboardAvailabilityLabel", worker.availability]
   ];
 
   setTextContent(initials, worker.initials);
   for (const [id, value] of fields) {
     setTextContent(document.getElementById(id), value);
+  }
+  const verifyEl = document.getElementById("workerDashboardVerification");
+  if (verifyEl) {
+    if (isWorkerOfficiallyVerified(getCurrentUser())) {
+      verifyEl.replaceChildren(createVerifiedWorkerBadge({ fullName: true }));
+    } else {
+      setTextContent(verifyEl, "Pending verification");
+    }
   }
   document.getElementById("workerDashboardAvailability").value =
     ["Available", "Busy", "Offline"].includes(worker.availability) ? worker.availability : "Busy";

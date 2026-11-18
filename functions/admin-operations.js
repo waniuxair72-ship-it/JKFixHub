@@ -157,6 +157,15 @@ async function adminUpdateWorkerStatus(db, request) {
   const prevData = snap.data() || {};
   const previousStatus = prevData.status || "pending";
   const previousVerified = Boolean(prevData.isVerified);
+  const prevWv = prevData.workerVerification || {};
+  const prevVerStatus = typeof prevWv.status === "string"
+    ? prevWv.status
+    : (previousVerified ? "Verified" : (previousStatus === "rejected" ? "Rejected" : "Pending"));
+
+  // Rejecting a worker always revokes verification if isVerified was not explicitly set
+  if (updates.status === "rejected" && updates.isVerified === undefined) {
+    updates.isVerified = false;
+  }
 
   // Idempotency guard: if worker is already in exact requested status & verification state, skip redundant write/log
   const statusSame = updates.status === undefined || updates.status === previousStatus;
@@ -165,7 +174,56 @@ async function adminUpdateWorkerStatus(db, request) {
     return { success: true, workerId, alreadyInState: true, updates: {} };
   }
 
+  const nowIso = new Date().toISOString();
+  if (updates.isVerified !== undefined) {
+    const nextVerStatus = updates.isVerified
+      ? "Verified"
+      : updates.status === "rejected"
+        ? "Rejected"
+        : previousVerified
+          ? "Revoked"
+          : "Pending";
+    const prevHistory = Array.isArray(prevWv.history) ? prevWv.history : [];
+    updates.workerVerification = {
+      status: nextVerStatus,
+      verifiedAt: updates.isVerified ? (prevWv.verifiedAt || nowIso) : null,
+      verifiedBy: updates.isVerified ? (prevWv.verifiedBy || adminRecord.uid) : (prevWv.verifiedBy || null),
+      updatedAt: nowIso,
+      updatedBy: adminRecord.uid,
+      internalNote: note || prevWv.internalNote || "",
+      history: [
+        ...prevHistory,
+        {
+          previousStatus: prevVerStatus,
+          newStatus: nextVerStatus,
+          actionBy: adminRecord.uid,
+          actionAt: nowIso,
+          ...(note ? { note } : {})
+        }
+      ]
+    };
+  }
+
   await workerRef.update(updates);
+
+  // Strictly synchronize public non-PII /verifiedBadges/{workerId}
+  if (updates.isVerified !== undefined) {
+    const badgeRef = db.collection("verifiedBadges").doc(String(workerId));
+    if (updates.isVerified === true) {
+      await badgeRef.set({
+        uid: String(workerId),
+        role: "worker",
+        badgeType: "verified_professional",
+        verified: true,
+        verifiedAt: updates.workerVerification?.verifiedAt || nowIso,
+        updatedAt: nowIso
+      });
+    } else {
+      try {
+        await badgeRef.delete();
+      } catch {}
+    }
+  }
 
   const action = updates.isVerified === true
     ? "WORKER_APPROVED"
@@ -801,9 +859,419 @@ async function adminManageAnnouncement(db, request) {
   return { success: true, announcementId, announcement: { id: announcementId, ...docData } };
 }
 
+const ALLOWED_VERIFICATION_STATUSES = Object.freeze([
+  "Not Verified",
+  "Pending",
+  "Verified",
+  "Rejected",
+  "Revoked"
+]);
+
+/**
+ * Admin: Manually verify, reject, revoke, or annotate a customer's verification status.
+ * Synchronizes minimal non-PII /verifiedBadges/{uid} and logs an immutable audit event.
+ */
+async function adminUpdateCustomerVerification(db, request) {
+  let adminRecord;
+  try {
+    adminRecord = await assertActiveAdmin(db, request);
+  } catch (err) {
+    await recordSecurityEvent(db, {
+      type: "UNAUTHORIZED_ADMIN_ACTION",
+      actorUid: request?.auth?.uid || null,
+      targetType: "customer_verification",
+      severity: "High",
+      details: { operation: "adminUpdateCustomerVerification" }
+    });
+    throw err;
+  }
+
+  const { customerId, status, internalNote = "", rejectionReason = "" } = request.data || {};
+  validateEntityId(customerId, "customer");
+  if (!ALLOWED_VERIFICATION_STATUSES.includes(status)) {
+    throw new HttpsError(
+      "invalid-argument",
+      `Invalid verification status. Allowed: ${ALLOWED_VERIFICATION_STATUSES.join(", ")}.`
+    );
+  }
+
+  const cleanNote = String(internalNote || "").trim().slice(0, 500);
+  const cleanReason = String(rejectionReason || "").trim().slice(0, 500);
+  if (status === "Rejected" && !cleanReason && !cleanNote) {
+    throw new HttpsError("invalid-argument", "An internal reason is required when rejecting verification.");
+  }
+
+  const userRef = db.collection("users").doc(String(customerId));
+  const snap = await userRef.get();
+  if (!snap.exists) {
+    throw new HttpsError("not-found", `Customer #${customerId} not found.`);
+  }
+
+  const prev = snap.data() || {};
+  const prevCv = prev.customerVerification || {};
+  const previousStatus = ALLOWED_VERIFICATION_STATUSES.includes(prevCv.status) ? prevCv.status : "Not Verified";
+  const nowIso = new Date().toISOString();
+  const prevHistory = Array.isArray(prevCv.history) ? prevCv.history : [];
+  const nextHistory = [
+    ...prevHistory,
+    {
+      previousStatus,
+      newStatus: status,
+      actionBy: adminRecord.uid,
+      actionAt: nowIso,
+      ...(cleanNote ? { note: cleanNote } : {}),
+      ...(cleanReason ? { reason: cleanReason } : {})
+    }
+  ];
+
+  const isNowVerified = status === "Verified";
+  const nextCv = {
+    status,
+    verifiedAt: isNowVerified ? nowIso : null,
+    verifiedBy: isNowVerified ? adminRecord.uid : (prevCv.verifiedBy || null),
+    updatedAt: nowIso,
+    updatedBy: adminRecord.uid,
+    internalNote: cleanNote || prevCv.internalNote || "",
+    rejectionReason: status === "Rejected" ? (cleanReason || cleanNote) : null,
+    history: nextHistory
+  };
+
+  await userRef.update({
+    isVerified: isNowVerified,
+    customerVerification: nextCv,
+    updatedAt: FieldValue.serverTimestamp(),
+    lastModeratedBy: adminRecord.uid
+  });
+
+  const badgeRef = db.collection("verifiedBadges").doc(String(customerId));
+  if (isNowVerified) {
+    await badgeRef.set({
+      uid: String(customerId),
+      role: "customer",
+      badgeType: "verified_customer",
+      verified: true,
+      verifiedAt: nowIso,
+      updatedAt: nowIso
+    });
+  } else {
+    try {
+      await badgeRef.delete();
+    } catch {}
+  }
+
+  const auditAction = status === "Verified"
+    ? "CUSTOMER_VERIFICATION_GRANTED"
+    : status === "Revoked"
+      ? "CUSTOMER_VERIFICATION_REVOKED"
+      : status === "Rejected"
+        ? "CUSTOMER_VERIFICATION_REJECTED"
+        : "CUSTOMER_VERIFICATION_UPDATED";
+
+  await recordAuditEvent(db, {
+    actorUid: adminRecord.uid,
+    action: auditAction,
+    targetType: "customer",
+    targetId: customerId,
+    result: "success",
+    details: {
+      previousStatus,
+      newStatus: status,
+      ...(cleanNote ? { note: cleanNote } : {}),
+      ...(cleanReason ? { reason: cleanReason } : {})
+    }
+  });
+
+  return { success: true, customerId, customerVerification: nextCv };
+}
+
+/**
+ * Admin: Grant, reject, or revoke official JKFixHub Verified Professional status for a worker.
+ * Completely independent of any future JKFixHub Pro membership tier.
+ */
+async function adminUpdateWorkerVerification(db, request) {
+  let adminRecord;
+  try {
+    adminRecord = await assertActiveAdmin(db, request);
+  } catch (err) {
+    await recordSecurityEvent(db, {
+      type: "UNAUTHORIZED_ADMIN_ACTION",
+      actorUid: request?.auth?.uid || null,
+      targetType: "worker_verification",
+      severity: "High",
+      details: { operation: "adminUpdateWorkerVerification" }
+    });
+    throw err;
+  }
+
+  const { workerId, status, internalNote = "" } = request.data || {};
+  validateEntityId(workerId, "worker");
+  if (!ALLOWED_VERIFICATION_STATUSES.includes(status)) {
+    throw new HttpsError(
+      "invalid-argument",
+      `Invalid verification status. Allowed: ${ALLOWED_VERIFICATION_STATUSES.join(", ")}.`
+    );
+  }
+
+  const cleanNote = String(internalNote || "").trim().slice(0, 500);
+  const workerRef = db.collection("workers").doc(String(workerId));
+  const snap = await workerRef.get();
+  if (!snap.exists) {
+    throw new HttpsError("not-found", `Worker #${workerId} not found.`);
+  }
+
+  const prev = snap.data() || {};
+  const prevWv = prev.workerVerification || {};
+  const previousStatus = ALLOWED_VERIFICATION_STATUSES.includes(prevWv.status)
+    ? prevWv.status
+    : (prev.isVerified === true ? "Verified" : "Not Verified");
+  const nowIso = new Date().toISOString();
+  const prevHistory = Array.isArray(prevWv.history) ? prevWv.history : [];
+  const nextHistory = [
+    ...prevHistory,
+    {
+      previousStatus,
+      newStatus: status,
+      actionBy: adminRecord.uid,
+      actionAt: nowIso,
+      ...(cleanNote ? { note: cleanNote } : {})
+    }
+  ];
+
+  const isNowVerified = status === "Verified";
+  const nextWv = {
+    status,
+    verifiedAt: isNowVerified ? nowIso : null,
+    verifiedBy: isNowVerified ? adminRecord.uid : (prevWv.verifiedBy || null),
+    updatedAt: nowIso,
+    updatedBy: adminRecord.uid,
+    internalNote: cleanNote || prevWv.internalNote || "",
+    history: nextHistory
+  };
+
+  await workerRef.update({
+    isVerified: isNowVerified,
+    ...(isNowVerified && prev.status === "pending" ? { status: "active" } : {}),
+    workerVerification: nextWv,
+    updatedAt: FieldValue.serverTimestamp(),
+    lastModeratedBy: adminRecord.uid
+  });
+
+  const badgeRef = db.collection("verifiedBadges").doc(String(workerId));
+  if (isNowVerified) {
+    await badgeRef.set({
+      uid: String(workerId),
+      role: "worker",
+      badgeType: "verified_professional",
+      verified: true,
+      verifiedAt: nowIso,
+      updatedAt: nowIso
+    });
+  } else {
+    try {
+      await badgeRef.delete();
+    } catch {}
+  }
+
+  const auditAction = status === "Verified"
+    ? "WORKER_BADGE_GRANTED"
+    : status === "Revoked"
+      ? "WORKER_BADGE_REVOKED"
+      : status === "Rejected"
+        ? "WORKER_VERIFICATION_REJECTED"
+        : "WORKER_VERIFICATION_UPDATED";
+
+  await recordAuditEvent(db, {
+    actorUid: adminRecord.uid,
+    action: auditAction,
+    targetType: "worker",
+    targetId: workerId,
+    result: "success",
+    details: {
+      previousStatus,
+      newStatus: status,
+      ...(cleanNote ? { note: cleanNote } : {})
+    }
+  });
+
+  return { success: true, workerId, isVerified: isNowVerified, workerVerification: nextWv };
+}
+
+/**
+ * Admin: Safe, idempotent backfill & reconciliation of public /verifiedBadges/{uid}
+ * and /workers/{uid}.workerVerification for pre-existing verified production workers.
+ *
+ * Safety Guarantees:
+ * - Strictly restricted to active verified administrators (`assertActiveAdmin`).
+ * - Defaults to `dryRun: true` (preview only, zero writes) unless explicitly invoked with `{ dryRun: false }`.
+ * - Only grants public badge docs to active workers with `isVerified === true` AND without a revoked/rejected `workerVerification.status`.
+ * - Repairs stale `isVerified: true` conflicts where `workerVerification.status !== "Verified"` by setting `isVerified: false`.
+ * - Removes any orphaned `/verifiedBadges/{uid}` for revoked/rejected/deleted/unverified workers.
+ * - Never writes PII into `/verifiedBadges/{uid}` and never overwrites existing `verifiedAt` or `history`.
+ * - Completely idempotent: running a second time produces zero additional mutations.
+ */
+async function adminBackfillVerifiedWorkerBadges(db, request) {
+  let adminRecord;
+  try {
+    adminRecord = await assertActiveAdmin(db, request);
+  } catch (err) {
+    await recordSecurityEvent(db, {
+      type: "UNAUTHORIZED_ADMIN_ACTION",
+      actorUid: request?.auth?.uid || null,
+      targetType: "verifiedBadges",
+      severity: "High",
+      details: { operation: "adminBackfillVerifiedWorkerBadges" }
+    });
+    throw err;
+  }
+
+  const dryRun = request?.data?.dryRun !== false; // Safe default: true
+  const nowIso = new Date().toISOString();
+
+  const [workersSnap, badgesSnap] = await Promise.all([
+    db.collection("workers").get(),
+    db.collection("verifiedBadges").get()
+  ]);
+
+  const existingBadges = new Map();
+  badgesSnap.forEach((doc) => {
+    existingBadges.set(doc.id, doc.data() || {});
+  });
+
+  const summary = {
+    dryRun,
+    totalWorkersScanned: 0,
+    alreadySynced: 0,
+    badgesToCreate: [],
+    workerMetaToBackfill: [],
+    staleBadgesToDelete: [],
+    staleFlagsToRepair: []
+  };
+
+  const workerDocs = [];
+  workersSnap.forEach((doc) => {
+    workerDocs.push({ id: doc.id, data: doc.data() || {}, ref: doc.ref });
+  });
+
+  for (const w of workerDocs) {
+    summary.totalWorkersScanned++;
+    const uid = w.id;
+    const data = w.data;
+    const wv = data.workerVerification;
+    const hasExplicitWv = Boolean(wv && typeof wv === "object" && typeof wv.status === "string" && wv.status.trim());
+    const explicitWvStatus = hasExplicitWv ? wv.status.trim() : null;
+    const isDeletedOrRejected = data.status === "deleted" || data.status === "rejected";
+    const isEffectivelyVerified =
+      !isDeletedOrRejected &&
+      data.status === "active" &&
+      data.isVerified === true &&
+      (!hasExplicitWv || explicitWvStatus === "Verified");
+
+    const badgeDoc = existingBadges.get(uid);
+    const hasValidWorkerBadge = Boolean(
+      badgeDoc &&
+      badgeDoc.verified === true &&
+      badgeDoc.role === "worker" &&
+      badgeDoc.badgeType === "verified_professional" &&
+      badgeDoc.uid === uid
+    );
+
+    if (isEffectivelyVerified) {
+      let mutated = false;
+      if (!hasValidWorkerBadge) {
+        summary.badgesToCreate.push(uid);
+        mutated = true;
+        if (!dryRun) {
+          await db.collection("verifiedBadges").doc(uid).set({
+            uid,
+            role: "worker",
+            badgeType: "verified_professional",
+            verified: true,
+            verifiedAt: wv?.verifiedAt || data.updatedAt || data.createdAt || nowIso,
+            updatedAt: nowIso
+          });
+        }
+      }
+      if (!hasExplicitWv) {
+        summary.workerMetaToBackfill.push(uid);
+        mutated = true;
+        if (!dryRun) {
+          await w.ref.update({
+            workerVerification: {
+              status: "Verified",
+              verifiedAt: data.updatedAt || data.createdAt || nowIso,
+              verifiedBy: data.lastModeratedBy || adminRecord.uid,
+              updatedAt: nowIso,
+              updatedBy: adminRecord.uid,
+              internalNote: typeof data.adminNotes === "string" ? data.adminNotes : "",
+              history: [
+                {
+                  previousStatus: "Verified",
+                  newStatus: "Verified",
+                  actionBy: adminRecord.uid,
+                  actionAt: nowIso,
+                  note: "Idempotent verification metadata backfill"
+                }
+              ]
+            },
+            updatedAt: nowIso
+          });
+        }
+      }
+      if (!mutated) {
+        summary.alreadySynced++;
+      }
+    } else {
+      let mutated = false;
+      // Repair stale isVerified: true if explicit workerVerification is Revoked/Rejected/Pending/Not Verified
+      if (data.isVerified === true && (isDeletedOrRejected || (hasExplicitWv && explicitWvStatus !== "Verified"))) {
+        summary.staleFlagsToRepair.push(uid);
+        mutated = true;
+        if (!dryRun) {
+          await w.ref.update({
+            isVerified: false,
+            updatedAt: nowIso,
+            lastModeratedBy: adminRecord.uid
+          });
+        }
+      }
+      // Remove any orphaned /verifiedBadges/{uid} for unverified/revoked/deleted workers
+      if (badgeDoc && badgeDoc.role === "worker") {
+        summary.staleBadgesToDelete.push(uid);
+        mutated = true;
+        if (!dryRun) {
+          await db.collection("verifiedBadges").doc(uid).delete();
+        }
+      }
+      if (!mutated) {
+        summary.alreadySynced++;
+      }
+    }
+  }
+
+  if (!dryRun) {
+    await recordAuditEvent(db, {
+      actorUid: adminRecord.uid,
+      action: "WORKER_BADGES_BACKFILL_EXECUTED",
+      targetType: "verifiedBadges",
+      targetId: "worker_backfill",
+      result: "success",
+      details: {
+        totalWorkersScanned: summary.totalWorkersScanned,
+        badgesCreated: summary.badgesToCreate.length,
+        workerMetaBackfilled: summary.workerMetaToBackfill.length,
+        staleBadgesDeleted: summary.staleBadgesToDelete.length,
+        staleFlagsRepaired: summary.staleFlagsToRepair.length
+      }
+    });
+  }
+
+  return { success: true, ...summary };
+}
+
 module.exports = {
   ALLOWED_WORKER_STATUSES,
   ALLOWED_CUSTOMER_STATUSES,
+  ALLOWED_VERIFICATION_STATUSES,
   ALLOWED_REPORT_STATUSES,
   ALLOWED_REVIEW_STATUSES,
   ALLOWED_ANNOUNCEMENT_AUDIENCES,
@@ -812,6 +1280,9 @@ module.exports = {
   validateEntityId,
   adminUpdateWorkerStatus,
   adminUpdateCustomerStatus,
+  adminUpdateCustomerVerification,
+  adminUpdateWorkerVerification,
+  adminBackfillVerifiedWorkerBadges,
   adminUpdatePlatformConfig,
   adminManageAnnouncement,
   adminModerateReport,

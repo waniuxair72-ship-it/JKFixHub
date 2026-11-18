@@ -208,7 +208,7 @@ service cloud.firestore {
         (!('actor' in request.resource.data) || request.resource.data.actor == request.auth.uid);
     }
 
-    // Customer Review Creation Validation:
+    // Customer Review Creation Validation (Type A: Verified Work Review):
     // 1. Reviewer is authenticated, active (not suspended/deleting), and matches request customerId.
     // 2. Underlying service request exists, is Completed, and belongs to caller.
     // 3. Rating is integer 1 to 5.
@@ -217,12 +217,14 @@ service cloud.firestore {
     // 6. Initial status is published (client cannot set moderation flags).
     // 7. Worker reply cannot be forged at creation.
     // 8. Canonical deterministic Review ID == requestId AND no legacy rev-<requestId> doc exists
-    //    (mathematically guarantees at most 1 review per completed request).
+    //    (mathematically guarantees at most 1 verified work review per completed request).
     function isValidReviewCreation(reviewId) {
       return isAuthenticated() &&
         !isUserSuspended(request.auth.uid) &&
         !isAccountDeletionInProgress(request.auth.uid) &&
         request.resource.data.customerId == request.auth.uid &&
+        request.resource.data.get('reviewType', 'verified_work') == 'verified_work' &&
+        request.resource.data.get('verifiedService', true) == true &&
         reviewId == request.resource.data.requestId &&
         !exists(/databases/$(database)/documents/reviews/$("rev-" + request.resource.data.requestId)) &&
         exists(/databases/$(database)/documents/requests/$(request.resource.data.requestId)) &&
@@ -246,10 +248,45 @@ service cloud.firestore {
         (!('workerReply' in request.resource.data) || request.resource.data.workerReply == null);
     }
 
-    // Customer Limited-Time Review Editing (within 24 hours of submission):
+    // Customer Review Creation Validation (Type B: Unverified Experience Review):
+    // 1. Authenticated active customer (no anonymous reviews, not suspended/deleting).
+    // 2. Clearly typed as "unverified_experience" with verifiedService == false and requestId == null.
+    // 3. Target worker must exist and cannot be the customer themselves (no self-review).
+    // 4. Deterministic doc ID == "unv-" + workerUid + "-" + customerId prevents duplicates atomically.
+    // 5. Same strict rating (1..5), text (<= 1,200), tags (<= 6), createdAtMs, and moderation protections.
+    function isValidUnverifiedReviewCreation(reviewId) {
+      return isAuthenticated() &&
+        !isUserSuspended(request.auth.uid) &&
+        !isAccountDeletionInProgress(request.auth.uid) &&
+        request.resource.data.customerId == request.auth.uid &&
+        request.resource.data.reviewType == "unverified_experience" &&
+        request.resource.data.get('verifiedService', false) == false &&
+        (!('requestId' in request.resource.data) || request.resource.data.requestId == null) &&
+        request.resource.data.workerUid is string &&
+        request.resource.data.workerUid.size() > 0 &&
+        request.resource.data.workerUid != request.auth.uid &&
+        exists(/databases/$(database)/documents/workers/$(request.resource.data.workerUid)) &&
+        reviewId == "unv-" + request.resource.data.workerUid + "-" + request.auth.uid &&
+        request.resource.data.rating is int &&
+        request.resource.data.rating >= 1 &&
+        request.resource.data.rating <= 5 &&
+        request.resource.data.text is string &&
+        request.resource.data.text.size() <= 1200 &&
+        (!('tags' in request.resource.data) || (request.resource.data.tags is list && request.resource.data.tags.size() <= 6)) &&
+        (!('editHistory' in request.resource.data) || (request.resource.data.editHistory is list && request.resource.data.editHistory.size() == 0)) &&
+        (!('createdAtMs' in request.resource.data) || (
+          request.resource.data.createdAtMs is int &&
+          request.resource.data.createdAtMs <= request.time.toMillis() + 60000 &&
+          request.resource.data.createdAtMs >= request.time.toMillis() - 60000
+        )) &&
+        request.resource.data.status == "published" &&
+        (!('workerReply' in request.resource.data) || request.resource.data.workerReply == null);
+    }
+
+    // Customer Limited-Time Review Editing (within 24 hours of submission, both review types):
     // 1. Caller is the original review customer, active, and not deleting account.
     // 2. Review is still published and within 24h (86,400,000 ms) of createdAtMs.
-    // 3. Ownership, worker identity, request link, status, and worker reply remain immutable.
+    // 3. Ownership, worker identity, request link, reviewType, verifiedService, status, and reply are IMMUTABLE.
     // 4. Edit audit trail (editHistory) must strictly grow (append-only, max 10 edits).
     function isValidCustomerReviewEdit() {
       return isAuthenticated() &&
@@ -262,7 +299,9 @@ service cloud.firestore {
         request.time.toMillis() <= resource.data.createdAtMs + 86400000 &&
         request.resource.data.customerId == resource.data.customerId &&
         request.resource.data.workerUid == resource.data.workerUid &&
-        request.resource.data.requestId == resource.data.requestId &&
+        request.resource.data.get('requestId', null) == resource.data.get('requestId', null) &&
+        request.resource.data.get('reviewType', 'verified_work') == resource.data.get('reviewType', 'verified_work') &&
+        request.resource.data.get('verifiedService', true) == resource.data.get('verifiedService', true) &&
         request.resource.data.status == resource.data.status &&
         request.resource.data.createdAtMs == resource.data.createdAtMs &&
         request.resource.data.rating is int &&
@@ -352,6 +391,11 @@ service cloud.firestore {
                     request.resource.data.uid == uid &&
                     request.resource.data.role in ['customer', 'worker'] &&
                     request.resource.data.get('status', 'active') == 'active' &&
+                    request.resource.data.get('isVerified', false) == false &&
+                    !('customerVerification' in request.resource.data) &&
+                    !('verificationStatus' in request.resource.data) &&
+                    !('membership' in request.resource.data) &&
+                    !('promotionalPlacement' in request.resource.data) &&
                     isDistrictEnabled(request.resource.data.get('district', '')) &&
                     (
                       (request.resource.data.role == 'customer' && isCustomerRegistrationEnabled()) ||
@@ -363,7 +407,9 @@ service cloud.firestore {
                        request.resource.data.role == resource.data.role &&
                        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
                          'status', 'suspensionReason', 'suspendedAt', 'suspendedBy',
-                         'reactivatedAt', 'reactivatedBy', 'lastModeratedBy'
+                         'reactivatedAt', 'reactivatedBy', 'lastModeratedBy',
+                         'isVerified', 'customerVerification', 'verificationStatus',
+                         'membership', 'promotionalPlacement'
                        ])) || isAdmin();
       allow delete: if isAdmin();
     }
@@ -390,7 +436,11 @@ service cloud.firestore {
     // - Admins have full inspection and moderation privileges.
     // ------------------------------------------------------------------------
     match /workers/{workerId} {
-      allow read: if (resource.data.isVerified == true && resource.data.status == "active") ||
+      allow read: if (
+                     resource.data.isVerified == true &&
+                     resource.data.status == "active" &&
+                     (!('workerVerification' in resource.data) || resource.data.workerVerification.status == "Verified")
+                   ) ||
                    (isAuthenticated() && request.auth.uid == workerId) ||
                    isAdmin();
       allow create: if (
@@ -402,6 +452,9 @@ service cloud.firestore {
         !isAccountDeletionInProgress(workerId) &&
         !('email' in request.resource.data) &&
         !('phone' in request.resource.data) &&
+        !('workerVerification' in request.resource.data) &&
+        !('membership' in request.resource.data) &&
+        !('promotionalPlacement' in request.resource.data) &&
         request.resource.data.isVerified == false &&
         request.resource.data.status == "pending" &&
         (!('rating' in request.resource.data) || request.resource.data.rating == null) &&
@@ -413,6 +466,9 @@ service cloud.firestore {
         !isAccountDeletionInProgress(workerId) &&
         !('email' in request.resource.data) &&
         !('phone' in request.resource.data) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'workerVerification', 'membership', 'promotionalPlacement', 'lastModeratedBy'
+        ]) &&
         (request.resource.data.get('district', '') == resource.data.get('district', '') ||
           isDistrictEnabled(request.resource.data.get('district', ''))) &&
         (request.resource.data.get('service', '') == resource.data.get('service', '') ||
@@ -474,7 +530,7 @@ service cloud.firestore {
       allow read: if resource.data.status == "published" ||
                   isAdmin() ||
                   (isAuthenticated() && (resource.data.customerId == request.auth.uid || resource.data.workerUid == request.auth.uid));
-      allow create: if isValidReviewCreation(reviewId) || isAdmin();
+      allow create: if isValidReviewCreation(reviewId) || isValidUnverifiedReviewCreation(reviewId) || isAdmin();
       allow update: if isValidWorkerReviewReply() || isValidCustomerReviewEdit() || isAdmin();
       allow delete: if isAdmin();
     }
@@ -597,6 +653,24 @@ service cloud.firestore {
         isAnnouncementAudienceMatch()
       );
       allow create, update, delete: if isAdmin();
+    }
+
+    // ------------------------------------------------------------------------
+    // 12. Official Verification Badges: /verifiedBadges/{uid}
+    // ------------------------------------------------------------------------
+    // - Contains ONLY minimal non-PII public badge status (role, badgeType, verified, verifiedAt).
+    // - Strictly admin-write-only; customers & workers can NEVER grant or modify badges.
+    // - Deleted or marked verified=false immediately upon revocation or account deletion.
+    // ------------------------------------------------------------------------
+    match /verifiedBadges/{uid} {
+      allow read: if true;
+      allow create, update: if isAdmin() &&
+        request.resource.data.keys().hasOnly(['uid', 'role', 'badgeType', 'verified', 'verifiedAt', 'updatedAt']) &&
+        request.resource.data.uid == uid &&
+        request.resource.data.role in ['customer', 'worker'] &&
+        request.resource.data.badgeType in ['verified_customer', 'verified_professional'] &&
+        request.resource.data.verified is bool;
+      allow delete: if isAdmin();
     }
 
     // ------------------------------------------------------------------------

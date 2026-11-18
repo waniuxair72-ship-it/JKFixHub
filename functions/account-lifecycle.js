@@ -316,11 +316,21 @@ async function sanitizeUserData(db, uid) {
   const workerRef = db.collection("workers").doc(uid);
   const workerSnap = await workerRef.get();
   if (workerSnap.exists) {
+    const nowIso = new Date().toISOString();
     await workerRef.update({
       name: "Former Professional",
       availability: "Offline",
       isVerified: false,
       status: "deleted",
+      workerVerification: {
+        status: "Revoked",
+        verifiedAt: null,
+        verifiedBy: null,
+        updatedAt: nowIso,
+        updatedBy: "account_deletion",
+        internalNote: "",
+        history: []
+      },
       deletedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp()
     });
@@ -405,8 +415,13 @@ async function sanitizeUserData(db, uid) {
     }
   }
 
-  // 3f. Hard Delete Direct User Profile (/users/{uid})
+  // 3f. Hard Delete Direct User Profile (/users/{uid}) & Revoke Public Verification Badge (/verifiedBadges/{uid})
   await db.collection("users").doc(uid).delete();
+  try {
+    await db.collection("verifiedBadges").doc(uid).delete();
+  } catch {
+    // Non-fatal if badge document never existed
+  }
 
   return {
     workerTombstoned: workerSnap.exists,

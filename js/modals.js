@@ -17,6 +17,8 @@ import {
   validatePersonName
 } from "./security.js";
 import { renderWorkerReviews } from "./reviews.js";
+import { createVerifiedWorkerBadge } from "./badges.js";
+import { isWorkerOfficiallyVerified } from "./membership-schema.js";
 
 function setRegistrationError(field, errorElement, message) {
   setTextContent(errorElement, message);
@@ -94,20 +96,14 @@ export function openWorkerProfile(id) {
   const badgesRow = document.createElement("div");
   badgesRow.className = "profile-badges-row";
 
-  const verificationBadge = document.createElement("span");
-  verificationBadge.className = worker.isVerified
-    ? "worker-verified-badge"
-    : worker.isDemo
-      ? "demo-badge"
-      : "worker-pending-badge";
-  setTextContent(
-    verificationBadge,
-    worker.isVerified
-      ? "Verified Professional"
-      : worker.isDemo
-        ? "Sample Profile"
-        : "Pending Verification"
-  );
+  let verificationBadge;
+  if (isWorkerOfficiallyVerified(worker)) {
+    verificationBadge = createVerifiedWorkerBadge({ fullName: true });
+  } else {
+    verificationBadge = document.createElement("span");
+    verificationBadge.className = worker.isDemo ? "demo-badge" : "worker-pending-badge";
+    setTextContent(verificationBadge, worker.isDemo ? "Sample Profile" : "Pending Verification");
+  }
 
   const availabilityBadge = document.createElement("span");
   availabilityBadge.className = "availability";
@@ -124,13 +120,34 @@ export function openWorkerProfile(id) {
   const parsedStored = Number(worker.rating);
   const hasStoredGenuine = storedCount > 0 && !Number.isNaN(parsedStored) && parsedStored >= 1 && parsedStored <= 5;
 
+  const formatProfileRatingText = (avgVal, totalCount, vwCount = null, uvCount = null) => {
+    const revLabel = `${totalCount} ${totalCount === 1 ? "review" : "reviews"}`;
+    if (typeof vwCount === "number" && typeof uvCount === "number") {
+      if (vwCount > 0 && uvCount > 0) {
+        return `${avgVal.toFixed(1)} ★ (${revLabel} · ${vwCount} Verified Work, ${uvCount} Unverified)`;
+      }
+      if (vwCount > 0) {
+        return `${avgVal.toFixed(1)} ★ (${revLabel} · ${vwCount} Verified Work)`;
+      }
+      if (uvCount > 0) {
+        return `${avgVal.toFixed(1)} ★ (${revLabel} · ${uvCount} Unverified Experience)`;
+      }
+    }
+    return `${avgVal.toFixed(1)} ★ (${revLabel})`;
+  };
+
   let ratingText = "No ratings yet";
   let isNewWorker = true;
   if (agg && agg.reviewCount > 0) {
-    ratingText = `${agg.average.toFixed(1)} ★ (${agg.reviewCount} ${agg.reviewCount === 1 ? "review" : "reviews"})`;
+    ratingText = formatProfileRatingText(agg.average, agg.reviewCount, agg.verifiedWorkCount, agg.unverifiedCount);
     isNewWorker = false;
   } else if (hasStoredGenuine) {
-    ratingText = `${parsedStored.toFixed(1)} ★ (${storedCount} ${storedCount === 1 ? "review" : "reviews"})`;
+    ratingText = formatProfileRatingText(
+      parsedStored,
+      storedCount,
+      typeof worker.verifiedWorkCount === "number" ? worker.verifiedWorkCount : null,
+      typeof worker.unverifiedCount === "number" ? worker.unverifiedCount : null
+    );
     isNewWorker = false;
   }
 
@@ -205,12 +222,56 @@ export function openWorkerProfile(id) {
   const reviewsTitle = document.createElement("h4");
   reviewsTitle.className = "profile-reviews-title";
   setTextContent(reviewsTitle, "Customer Reviews");
+
+  // Two-option review selector ("Did you hire this worker?")
+  const reviewSelector = document.createElement("div");
+  reviewSelector.className = "profile-review-selector";
+  reviewSelector.id = "profileReviewSelector";
+
+  const selectorHeading = document.createElement("strong");
+  selectorHeading.className = "profile-review-selector-title";
+  setTextContent(selectorHeading, "Did you hire this worker?");
+
+  const selectorHint = document.createElement("p");
+  selectorHint.className = "profile-review-selector-hint";
+  setTextContent(
+    selectorHint,
+    "Verified Work reviews are tied to a completed JKFixHub request. General feedback is clearly marked as Unverified Experience."
+  );
+
+  const selectorBtns = document.createElement("div");
+  selectorBtns.className = "profile-review-selector-actions";
+
+  const hiredYesBtn = document.createElement("button");
+  hiredYesBtn.type = "button";
+  hiredYesBtn.className = "button primary profile-review-choice-btn";
+  hiredYesBtn.dataset.profileReviewChoice = "verified";
+  hiredYesBtn.dataset.workerId = String(workerUid);
+  setTextContent(hiredYesBtn, "Yes, I completed a service with this worker");
+
+  const hiredNoBtn = document.createElement("button");
+  hiredNoBtn.type = "button";
+  hiredNoBtn.className = "button subtle profile-review-choice-btn";
+  hiredNoBtn.dataset.profileReviewChoice = "unverified";
+  hiredNoBtn.dataset.workerId = String(workerUid);
+  setTextContent(hiredNoBtn, "No, I want to leave general feedback");
+
+  selectorBtns.append(hiredYesBtn, hiredNoBtn);
+
+  const selectorFeedback = document.createElement("p");
+  selectorFeedback.id = "profileReviewSelectorFeedback";
+  selectorFeedback.className = "profile-review-selector-feedback";
+  selectorFeedback.setAttribute("role", "status");
+  selectorFeedback.hidden = true;
+
+  reviewSelector.append(selectorHeading, selectorHint, selectorBtns, selectorFeedback);
+
   const reviewsList = document.createElement("div");
   reviewsList.className = "profile-reviews-list";
-  reviewsSection.append(reviewsTitle, reviewsList);
+  reviewsSection.append(reviewsTitle, reviewSelector, reviewsList);
   details.append(reviewsSection);
 
-  // Safely render verified public customer reviews and sync header rating live
+  // Safely render verified & unverified public customer reviews and sync header rating live
   try {
     if (typeof renderWorkerReviews === "function") {
       renderWorkerReviews(workerUid, reviewsList, {
@@ -221,7 +282,12 @@ export function openWorkerProfile(id) {
             if (ratingEl) {
               setTextContent(
                 ratingEl,
-                `${summary.average.toFixed(1)} ★ (${summary.reviewCount} ${summary.reviewCount === 1 ? "review" : "reviews"})`
+                formatProfileRatingText(
+                  summary.average,
+                  summary.reviewCount,
+                  summary.verifiedWorkCount,
+                  summary.unverifiedCount
+                )
               );
             }
             if (newBadgeEl) newBadgeEl.hidden = true;

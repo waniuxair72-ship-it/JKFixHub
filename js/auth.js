@@ -68,6 +68,17 @@ import {
   isServiceCurrentlyEnabled,
   getAllConfiguredServices
 } from "./platform-config.js";
+import {
+  isCustomerOfficiallyVerified,
+  isWorkerOfficiallyVerified,
+  normalizeCustomerVerification,
+  normalizeWorkerVerification
+} from "./membership-schema.js";
+import {
+  clearCachedBadgeStatus,
+  createVerifiedCustomerBadge,
+  createVerifiedWorkerBadge
+} from "./badges.js";
 
 const ALLOWED_DISTRICTS = Object.freeze([
   "Shopian",
@@ -1517,6 +1528,19 @@ export async function resolveUserProfile(firebaseUser, { attemptSelfHeal = true 
     (workerLookup.exists && workerLookup.data?.adminNotes) ||
     null;
 
+  const customerVerification = role === "customer"
+    ? normalizeCustomerVerification(userLookup.exists ? userLookup.data : cachedProfile)
+    : null;
+  const workerVerification = role === "worker"
+    ? normalizeWorkerVerification(workerLookup.exists ? workerLookup.data : cachedProfile)
+    : null;
+
+  if (role === "customer") {
+    isVerified = isCustomerOfficiallyVerified(userLookup.exists ? userLookup.data : cachedProfile);
+  } else if (role === "worker") {
+    isVerified = isWorkerOfficiallyVerified(workerLookup.exists ? workerLookup.data : cachedProfile);
+  }
+
   return {
     role,
     name,
@@ -1529,6 +1553,8 @@ export async function resolveUserProfile(firebaseUser, { attemptSelfHeal = true 
     workerId: workerId || (role === "worker" ? uid : null),
     emailVerified: isEmailVerified,
     isVerified: Boolean(isVerified),
+    customerVerification,
+    workerVerification,
     status: effectiveStatus,
     suspensionReason,
     authProvider: "firebase",
@@ -1608,6 +1634,8 @@ export async function signInUser({ email, password }) {
           workerId: profile.workerId || null,
           emailVerified: Boolean(user.emailVerified),
           isVerified: Boolean(profile.isVerified),
+          customerVerification: profile.customerVerification || null,
+          workerVerification: profile.workerVerification || null,
           status: profile.status || (profile.role === "worker" ? "pending" : "active"),
           suspensionReason: profile.suspensionReason || null,
           authProvider: "firebase",
@@ -2116,6 +2144,7 @@ export function demoLogout() {
   stopCustomerDetailsSubscription();
   stopWorkerDashboardSubscription();
   unsubscribeAllFirestoreListeners();
+  clearCachedBadgeStatus();
   resetDemoChatState();
   clearCurrentUser();
   clearRequestState();
@@ -2564,17 +2593,24 @@ export function showAccountView(preserveFeedback = false) {
     }
   }
 
-  // Worker status badge (high-contrast pending status)
+  // Official JKFixHub verification badge (Worker or Manually Verified Customer)
   const workerStatusBadge = document.getElementById("authWorkerStatusBadge");
   if (workerStatusBadge) {
     if (user.role === "worker") {
-      setTextContent(
-        workerStatusBadge,
-        user.isVerified ? "✓ Verified Worker" : "Pending Verification"
-      );
-      workerStatusBadge.className = `auth-worker-badge ${user.isVerified ? "verified" : "pending"}`;
+      if (isWorkerOfficiallyVerified(user)) {
+        workerStatusBadge.replaceChildren(createVerifiedWorkerBadge({ fullName: true }));
+        workerStatusBadge.className = "auth-official-badge-slot";
+      } else {
+        setTextContent(workerStatusBadge, "Pending Verification");
+        workerStatusBadge.className = "auth-worker-badge pending";
+      }
+      workerStatusBadge.hidden = false;
+    } else if (user.role === "customer" && isCustomerOfficiallyVerified(user)) {
+      workerStatusBadge.replaceChildren(createVerifiedCustomerBadge({ fullName: true }));
+      workerStatusBadge.className = "auth-official-badge-slot";
       workerStatusBadge.hidden = false;
     } else {
+      workerStatusBadge.replaceChildren();
       workerStatusBadge.hidden = true;
     }
   }
@@ -2768,7 +2804,7 @@ export async function saveCustomerProfile({ name, email, phone, district }) {
           return { success: false, error: "Database update failed." };
         }
 
-        // Update state
+        // Update state (strictly preserve admin-controlled customerVerification)
         saveApplicationProfile(user.id, {
           role: "customer",
           name: trimmedName,
@@ -2776,7 +2812,8 @@ export async function saveCustomerProfile({ name, email, phone, district }) {
           phone: trimmedPhone,
           district,
           emailVerified: user.emailVerified,
-          isVerified: false,
+          isVerified: Boolean(user.isVerified),
+          customerVerification: user.customerVerification || null,
           authProvider: "firebase",
           createdAt: user.createdAt
         });
@@ -2812,7 +2849,8 @@ export async function saveCustomerProfile({ name, email, phone, district }) {
       phone: trimmedPhone,
       district,
       emailVerified: Boolean(user.emailVerified),
-      isVerified: false,
+      isVerified: Boolean(user.isVerified),
+      customerVerification: user.customerVerification || null,
       authProvider: user.authProvider || "demo",
       createdAt: user.createdAt || new Date().toISOString()
     });
@@ -3476,6 +3514,8 @@ export function initializeAuth() {
                   emailVerified: Boolean(firebaseUser.emailVerified),
                   workerId: profile.workerId || null,
                   isVerified: Boolean(profile.isVerified),
+                  customerVerification: profile.customerVerification || null,
+                  workerVerification: profile.workerVerification || null,
                   status: profile.status || (profile.role === "worker" ? "pending" : "active"),
                   suspensionReason: profile.suspensionReason || null,
                   authProvider: "firebase",

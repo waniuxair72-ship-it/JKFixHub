@@ -19,6 +19,10 @@ import {
   getRecordedAbuseSignals,
   resetAbuseSignals
 } from "./abuse.js";
+import {
+  isCustomerOfficiallyVerified,
+  isWorkerOfficiallyVerified
+} from "./membership-schema.js";
 
 export const AUTH_STATUS = Object.freeze({
   LOADING: "AUTH_LOADING",
@@ -303,7 +307,19 @@ export function setCurrentUser(user) {
     photo: typeof user.photo === "string" ? user.photo : null,
     district: typeof user.district === "string" ? user.district : null,
     createdAt: typeof user.createdAt === "string" ? user.createdAt : null,
-    isVerified: Boolean(user.isVerified),
+    isVerified: Boolean(
+      user.role === "customer"
+        ? isCustomerOfficiallyVerified(user)
+        : user.role === "worker"
+          ? isWorkerOfficiallyVerified(user)
+          : user.isVerified
+    ),
+    customerVerification: user.customerVerification && typeof user.customerVerification === "object"
+      ? { ...user.customerVerification }
+      : null,
+    workerVerification: user.workerVerification && typeof user.workerVerification === "object"
+      ? { ...user.workerVerification }
+      : null,
     status: typeof user.status === "string" && user.status.trim() ? user.status.trim() : (user.role === "worker" ? "pending" : "active"),
     suspensionReason: typeof user.suspensionReason === "string" && user.suspensionReason.trim() ? user.suspensionReason.trim() : null,
     authProvider: user.authProvider === "firebase" ? "firebase" : "demo",
@@ -1033,6 +1049,25 @@ export function clearRequestState() {
 // #REVIEWS_STATE
 // ==========================================
 
+export const REVIEW_TYPES = Object.freeze({
+  VERIFIED_WORK: "verified_work",
+  UNVERIFIED_EXPERIENCE: "unverified_experience"
+});
+
+export function resolveReviewType(review) {
+  if (!review || typeof review !== "object") return REVIEW_TYPES.VERIFIED_WORK;
+  if (review.reviewType === REVIEW_TYPES.UNVERIFIED_EXPERIENCE) {
+    return REVIEW_TYPES.UNVERIFIED_EXPERIENCE;
+  }
+  if (review.reviewType === REVIEW_TYPES.VERIFIED_WORK) {
+    return REVIEW_TYPES.VERIFIED_WORK;
+  }
+  if (review.verifiedService === false && !review.requestId) {
+    return REVIEW_TYPES.UNVERIFIED_EXPERIENCE;
+  }
+  return REVIEW_TYPES.VERIFIED_WORK;
+}
+
 export function createCustomerReview(data) {
   const user = state.currentUser;
   if (!user || user.role !== "customer" || !hasCapability(user.role, "submitReview")) {
@@ -1105,6 +1140,7 @@ export function createCustomerReview(data) {
   const review = {
     id: request.id,
     requestId: request.id,
+    reviewType: REVIEW_TYPES.VERIFIED_WORK,
     customerId: user.id,
     customerName: request.customerName,
     workerId: request.workerId,
@@ -1135,6 +1171,109 @@ export function createCustomerReview(data) {
   }
   recordSecurityEvent("REVIEW_SUBMITTED", user.role);
   return copyReview(review);
+}
+
+/**
+ * Creates a Type B: Unverified Experience Review in local state (no completed request required).
+ * Enforces active authenticated customer, non-self-review, and 1 unverified review per (customer, worker).
+ */
+export function createUnverifiedCustomerReview(data) {
+  const user = state.currentUser;
+  if (!user || user.role !== "customer" || !hasCapability(user.role, "submitReview")) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || null);
+    throw new Error("Only authenticated customers can submit reviews.");
+  }
+  if (user.status === "suspended") {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user.role);
+    throw new Error("Suspended accounts cannot submit reviews.");
+  }
+  if (!data || typeof data !== "object") {
+    throw new TypeError("Review data must be an object.");
+  }
+
+  const workerUid = data.workerUid || (data.workerId != null ? String(data.workerId) : null);
+  if (!workerUid) {
+    throw new TypeError("A valid worker identifier is required.");
+  }
+  if (String(workerUid) === String(user.id) || String(workerUid) === String(user.firebaseUid || "")) {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user.role);
+    throw new Error("You cannot submit a review for your own profile.");
+  }
+
+  const canonicalId = `unv-${workerUid}-${user.id}`;
+  const existing = state.reviews.find(
+    (item) =>
+      item.id === canonicalId ||
+      (resolveReviewType(item) === REVIEW_TYPES.UNVERIFIED_EXPERIENCE &&
+        String(item.workerUid || item.workerId) === String(workerUid) &&
+        String(item.customerId) === String(user.id))
+  );
+  if (existing) {
+    throw new Error("You have already submitted an unverified experience review for this worker.");
+  }
+
+  const normalizedRating = Number(data.rating);
+  if (!Number.isInteger(normalizedRating) || normalizedRating < 1 || normalizedRating > 5) {
+    throw new RangeError("Rating must be an integer between 1 and 5.");
+  }
+  const rawText = typeof data.text === "string" ? data.text.trim() : "";
+  if (!validateReview(rawText) || markupPattern.test(rawText)) {
+    if (markupPattern.test(rawText)) {
+      recordSecurityEvent("SUSPICIOUS_INPUT", user.role);
+    }
+    throw new TypeError("Invalid review text.");
+  }
+
+  const cleanTags = sanitizeReviewTags(data.tags);
+  const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
+  const worker = getWorkerById(workerUid);
+
+  const review = {
+    id: canonicalId,
+    requestId: null,
+    reviewType: REVIEW_TYPES.UNVERIFIED_EXPERIENCE,
+    customerId: user.id,
+    customerName: user.name || "Customer",
+    workerId: workerUid,
+    workerUid: String(workerUid),
+    workerName: data.workerName || worker?.name || "Service Professional",
+    service: data.service || worker?.service || null,
+    district: data.district || worker?.district || null,
+    verifiedService: false,
+    rating: normalizedRating,
+    text: rawText,
+    tags: cleanTags,
+    createdAt: nowIso,
+    createdAtMs: nowMs,
+    updatedAt: null,
+    editedAt: null,
+    editCount: 0,
+    editHistory: [],
+    moderationHistory: [],
+    workerReply: null,
+    workerReplyAt: null,
+    workerReplyUpdatedAt: null,
+    status: "published"
+  };
+
+  state.reviews.push(review);
+  syncDiscoveredWorkerRating(workerUid);
+  recordSecurityEvent("UNVERIFIED_REVIEW_SUBMITTED", user.role);
+  return copyReview(review);
+}
+
+export function getUnverifiedReviewForWorker(workerId, customerId = state.currentUser?.id) {
+  if (!workerId || !customerId) return null;
+  const canonicalId = `unv-${workerId}-${customerId}`;
+  const review = state.reviews.find(
+    (item) =>
+      item.id === canonicalId ||
+      (resolveReviewType(item) === REVIEW_TYPES.UNVERIFIED_EXPERIENCE &&
+        String(item.workerUid || item.workerId) === String(workerId) &&
+        String(item.customerId) === String(customerId))
+  );
+  return review ? copyReview(review) : null;
 }
 
 export function editCustomerReview(reviewId, data) {
@@ -1248,6 +1387,9 @@ export function calculateWorkerRating(reviews) {
       rating: null,
       reviewCount: 0,
       average: 0,
+      verifiedWorkCount: 0,
+      verifiedWorkAverage: null,
+      unverifiedCount: 0,
       displayRating: "No ratings yet",
       distribution
     };
@@ -1256,6 +1398,9 @@ export function calculateWorkerRating(reviews) {
   const seenKeys = new Set();
   let totalRating = 0;
   let validCount = 0;
+  let verifiedSum = 0;
+  let verifiedWorkCount = 0;
+  let unverifiedCount = 0;
 
   for (const r of reviews) {
     if (!r || typeof r !== "object") continue;
@@ -1263,11 +1408,13 @@ export function calculateWorkerRating(reviews) {
     // Must be published (not hidden, flagged, rejected, or deleted)
     if (r.status && r.status !== "published") continue;
 
-    // Deduplicate by requestId if present, else by review id
-    const dedupKey = r.requestId || r.id;
+    const rType = resolveReviewType(r);
+    const dedupKey = rType === REVIEW_TYPES.UNVERIFIED_EXPERIENCE
+      ? (r.id || `unv-${r.workerUid || r.workerId}-${r.customerId}`)
+      : (r.requestId || r.id);
     if (dedupKey) {
-      if (seenKeys.has(dedupKey)) continue;
-      seenKeys.add(dedupKey);
+      if (seenKeys.has(String(dedupKey))) continue;
+      seenKeys.add(String(dedupKey));
     }
 
     const val = Number(r.rating);
@@ -1276,6 +1423,12 @@ export function calculateWorkerRating(reviews) {
     totalRating += val;
     validCount += 1;
     distribution[val] += 1;
+    if (rType === REVIEW_TYPES.VERIFIED_WORK) {
+      verifiedSum += val;
+      verifiedWorkCount += 1;
+    } else {
+      unverifiedCount += 1;
+    }
   }
 
   if (validCount === 0) {
@@ -1283,6 +1436,9 @@ export function calculateWorkerRating(reviews) {
       rating: null,
       reviewCount: 0,
       average: 0,
+      verifiedWorkCount: 0,
+      verifiedWorkAverage: null,
+      unverifiedCount: 0,
       displayRating: "No ratings yet",
       distribution
     };
@@ -1290,10 +1446,14 @@ export function calculateWorkerRating(reviews) {
 
   // Integer-scaled half-up rounding to 1 decimal place
   const avg = Math.round((totalRating * 10) / validCount) / 10;
+  const verifiedWorkAverage = verifiedWorkCount > 0 ? Math.round((verifiedSum * 10) / verifiedWorkCount) / 10 : null;
   return {
     rating: avg,
     reviewCount: validCount,
     average: avg,
+    verifiedWorkCount,
+    verifiedWorkAverage,
+    unverifiedCount,
     displayRating: `${avg.toFixed(1)} ★`,
     distribution
   };
@@ -1319,6 +1479,9 @@ export function syncDiscoveredWorkerRating(workerId, explicitSummary = null) {
     if (w) {
       w.rating = summary.reviewCount > 0 ? summary.rating : null;
       w.reviewCount = summary.reviewCount;
+      w.verifiedWorkCount = summary.verifiedWorkCount || 0;
+      w.verifiedWorkAverage = summary.verifiedWorkAverage ?? null;
+      w.unverifiedCount = summary.unverifiedCount || 0;
       w.ratingDistribution = summary.distribution;
     }
   }
@@ -1335,10 +1498,12 @@ export function upsertStoredReview(review) {
   // Never invent timestamps for legacy reviews: preserve exact existing values or null.
   const createdAt = review.createdAt !== undefined ? review.createdAt : null;
   const parsedCreatedMs = typeof review.createdAtMs === "number" ? review.createdAtMs : null;
+  const reviewType = resolveReviewType(review);
 
   const normalized = {
     id: String(review.id),
     requestId: review.requestId || null,
+    reviewType,
     customerId: review.customerId ? String(review.customerId) : null,
     customerName: review.customerName || "Customer",
     workerUid: review.workerUid ? String(review.workerUid) : (review.workerId ? String(review.workerId) : null),
@@ -1346,7 +1511,7 @@ export function upsertStoredReview(review) {
     workerName: review.workerName || "Service Professional",
     service: review.service || null,
     district: review.district || null,
-    verifiedService: review.verifiedService !== false,
+    verifiedService: reviewType === REVIEW_TYPES.VERIFIED_WORK,
     rating: validRating,
     text: String(review.text || ""),
     tags: Array.isArray(review.tags) ? sanitizeReviewTags(review.tags) : [],
