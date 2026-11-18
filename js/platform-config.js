@@ -15,7 +15,30 @@ import {
   initializeFirestoreClient,
   getFirestoreMethods
 } from "./firebase-config.js";
-import { setTextContent, normalizeService } from "./security.js";
+import { setTextContent, normalizeService, SERVICE_SYNONYMS } from "./security.js";
+
+export const NO_EXPIRY_MS = 8640000000000000;
+
+/**
+ * Expands disabled service names to include all lowercase canonical synonyms
+ * so Firestore Security Rules block both canonical names and legacy aliases (e.g. "Plumbing" + "Plumber").
+ */
+export function expandDisabledServiceNames(services) {
+  const disabledSet = new Set();
+  for (const s of services || []) {
+    if (!s || s.enabled !== false || typeof s.name !== "string") continue;
+    const rawLower = s.name.trim().toLowerCase();
+    const normLower = normalizeService(s.name).toLowerCase();
+    if (rawLower) disabledSet.add(rawLower);
+    if (normLower) disabledSet.add(normLower);
+    for (const [alias, canonical] of Object.entries(SERVICE_SYNONYMS)) {
+      if (canonical.toLowerCase() === rawLower || canonical.toLowerCase() === normLower) {
+        disabledSet.add(alias.toLowerCase());
+      }
+    }
+  }
+  return [...disabledSet];
+}
 
 export const DEFAULT_JK_DISTRICTS = Object.freeze([
   "Anantnag",
@@ -117,9 +140,7 @@ export function normalizePlatformConfig(raw) {
         }))
     : defaults.districts;
 
-  const disabledServices = services
-    .filter((s) => s.enabled === false)
-    .map((s) => s.name.toLowerCase());
+  const disabledServices = expandDisabledServiceNames(services);
 
   const disabledDistricts = districts
     .filter((d) => d.enabled === false)
@@ -347,7 +368,11 @@ export async function fetchActiveAnnouncementsForAudience(audience) {
     const colRef = methods.collection(db, "announcements");
     let queryRef = colRef;
     if (typeof methods.query === "function" && typeof methods.where === "function") {
-      queryRef = methods.query(colRef, methods.where("status", "==", "published"));
+      queryRef = methods.query(
+        colRef,
+        methods.where("status", "==", "published"),
+        methods.where("audience", "in", ["everyone", audience])
+      );
     }
 
     const snap = await methods.getDocs(queryRef);
@@ -486,7 +511,7 @@ export function renderPlatformMaintenanceBanner(config = cachedPlatformConfig) {
     banner.className = "platform-maintenance-banner";
     banner.setAttribute("role", "status");
     banner.setAttribute("aria-live", "polite");
-    const header = document.querySelector("header.topbar") || document.body.firstChild;
+    const header = document.querySelector("header.site-header, header.topbar") || document.body.firstChild;
     if (header && header.parentNode) {
       header.parentNode.insertBefore(banner, header.nextSibling);
     } else {
@@ -514,8 +539,12 @@ export function renderPlatformMaintenanceBanner(config = cachedPlatformConfig) {
   const desc = document.createElement("span");
   let msg = config.maintenanceMessage || "JK FixHub is undergoing scheduled updates.";
   if (config.maintenanceEnd) {
-    const endDate = formatAnnouncementDate(config.maintenanceEnd);
-    if (endDate) msg += ` Expected completion: ${endDate}.`;
+    try {
+      const endD = new Date(config.maintenanceEnd);
+      if (!Number.isNaN(endD.getTime())) {
+        msg += ` Expected completion: ${endD.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}.`;
+      }
+    } catch (_) {}
   }
   setTextContent(desc, msg);
 

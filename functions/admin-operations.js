@@ -21,6 +21,50 @@ const ALLOWED_REVIEW_STATUSES = Object.freeze(["published", "hidden", "flagged"]
 const ALLOWED_ANNOUNCEMENT_AUDIENCES = Object.freeze(["customers", "workers", "everyone"]);
 const ALLOWED_ANNOUNCEMENT_PRIORITIES = Object.freeze(["normal", "important", "urgent"]);
 const ALLOWED_ANNOUNCEMENT_STATUSES = Object.freeze(["draft", "published", "paused", "archived", "expired"]);
+const NO_EXPIRY_MS = 8640000000000000;
+
+const SERVICE_SYNONYMS = Object.freeze({
+  plumber: "Plumbing",
+  plumbing: "Plumbing",
+  carpenter: "Carpentry",
+  carpentry: "Carpentry",
+  electrician: "Electrician",
+  electrical: "Electrician",
+  "electrical repair": "Electrician",
+  appliance: "Appliance repair",
+  "appliance repair": "Appliance repair",
+  "washing machine": "Washing Machine Repair",
+  "washing machine repair": "Washing Machine Repair",
+  refrigerator: "Refrigerator Repair",
+  "refrigerator repair": "Refrigerator Repair",
+  fridge: "Refrigerator Repair",
+  "fridge repair": "Refrigerator Repair",
+  heater: "Heater Repair",
+  "heater repair": "Heater Repair",
+  "tv repair": "TV / Electronics Repair",
+  "electronics repair": "TV / Electronics Repair",
+  electronics: "TV / Electronics Repair",
+  "tv / electronics repair": "TV / Electronics Repair",
+  "tv & electronics repair": "TV / Electronics Repair",
+  "tv & electronics": "TV / Electronics Repair"
+});
+
+function expandDisabledServices(services) {
+  const disabledSet = new Set();
+  for (const s of services || []) {
+    if (!s || s.enabled !== false || typeof s.name !== "string") continue;
+    const lower = s.name.trim().toLowerCase();
+    const canonical = (SERVICE_SYNONYMS[lower] || s.name.trim()).toLowerCase();
+    if (lower) disabledSet.add(lower);
+    if (canonical) disabledSet.add(canonical);
+    for (const [alias, target] of Object.entries(SERVICE_SYNONYMS)) {
+      if (target.toLowerCase() === lower || target.toLowerCase() === canonical) {
+        disabledSet.add(alias.toLowerCase());
+      }
+    }
+  }
+  return [...disabledSet];
+}
 
 /**
  * Validates document identifier to prevent path traversal or malformed queries.
@@ -112,6 +156,13 @@ async function adminUpdateWorkerStatus(db, request) {
   const prevData = snap.data() || {};
   const previousStatus = prevData.status || "pending";
   const previousVerified = Boolean(prevData.isVerified);
+
+  // Idempotency guard: if worker is already in exact requested status & verification state, skip redundant write/log
+  const statusSame = updates.status === undefined || updates.status === previousStatus;
+  const verifiedSame = updates.isVerified === undefined || updates.isVerified === previousVerified;
+  if (statusSame && verifiedSame && !note) {
+    return { success: true, workerId, alreadyInState: true, updates: {} };
+  }
 
   await workerRef.update(updates);
 
@@ -317,6 +368,12 @@ async function adminUpdateCustomerStatus(db, request) {
 
   const previousStatus = prevData.status || "active";
   const cleanReason = String(reason || "").trim().slice(0, 500);
+
+  // Idempotency guard: avoid overwriting original suspendedAt or duplicating audit logs
+  if (previousStatus === status) {
+    return { success: true, customerId, previousStatus, newStatus: status, alreadyInState: true };
+  }
+
   const nowIso = new Date().toISOString();
 
   const updates = {
@@ -404,12 +461,34 @@ async function adminUpdatePlatformConfig(db, request) {
 
   if (patch.maintenanceStart !== undefined) {
     previousValues.maintenanceStart = prev.maintenanceStart || null;
-    allowedUpdates.maintenanceStart = patch.maintenanceStart ? String(patch.maintenanceStart).slice(0, 64) : null;
+    if (patch.maintenanceStart === null || patch.maintenanceStart === "") {
+      allowedUpdates.maintenanceStart = null;
+    } else {
+      const startMs = Date.parse(String(patch.maintenanceStart));
+      if (Number.isNaN(startMs)) {
+        throw new HttpsError("invalid-argument", "Invalid maintenanceStart timestamp.");
+      }
+      allowedUpdates.maintenanceStart = new Date(startMs).toISOString();
+    }
   }
 
   if (patch.maintenanceEnd !== undefined) {
     previousValues.maintenanceEnd = prev.maintenanceEnd || null;
-    allowedUpdates.maintenanceEnd = patch.maintenanceEnd ? String(patch.maintenanceEnd).slice(0, 64) : null;
+    if (patch.maintenanceEnd === null || patch.maintenanceEnd === "") {
+      allowedUpdates.maintenanceEnd = null;
+    } else {
+      const endMs = Date.parse(String(patch.maintenanceEnd));
+      if (Number.isNaN(endMs)) {
+        throw new HttpsError("invalid-argument", "Invalid maintenanceEnd timestamp.");
+      }
+      allowedUpdates.maintenanceEnd = new Date(endMs).toISOString();
+    }
+  }
+
+  const effStart = allowedUpdates.maintenanceStart !== undefined ? allowedUpdates.maintenanceStart : (prev.maintenanceStart || null);
+  const effEnd = allowedUpdates.maintenanceEnd !== undefined ? allowedUpdates.maintenanceEnd : (prev.maintenanceEnd || null);
+  if (effStart && effEnd && Date.parse(effEnd) <= Date.parse(effStart)) {
+    throw new HttpsError("invalid-argument", "maintenanceEnd must be after maintenanceStart.");
   }
 
   if (patch.customerRegistrationEnabled !== undefined) {
@@ -462,9 +541,7 @@ async function adminUpdatePlatformConfig(db, request) {
     });
     previousValues.disabledServices = prev.disabledServices || [];
     allowedUpdates.services = sanitizedServices;
-    allowedUpdates.disabledServices = sanitizedServices
-      .filter((s) => !s.enabled)
-      .map((s) => s.name.toLowerCase());
+    allowedUpdates.disabledServices = expandDisabledServices(sanitizedServices);
   }
 
   if (patch.districts !== undefined) {
@@ -632,7 +709,7 @@ async function adminManageAnnouncement(db, request) {
   }
 
   let expiresAt = null;
-  let expiresAtMs = null;
+  let expiresAtMs = NO_EXPIRY_MS;
   if (data.expiresAt && String(data.expiresAt).trim()) {
     expiresAt = String(data.expiresAt).trim();
     expiresAtMs = Date.parse(expiresAt);
@@ -642,6 +719,7 @@ async function adminManageAnnouncement(db, request) {
     if (expiresAtMs <= publishAtMs) {
       throw new HttpsError("invalid-argument", "Expiry date must be after the publish date.");
     }
+    expiresAt = new Date(expiresAtMs).toISOString();
   }
 
   const docData = {
@@ -652,7 +730,7 @@ async function adminManageAnnouncement(db, request) {
     status,
     publishAt: new Date(publishAtMs).toISOString(),
     publishAtMs,
-    expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : null,
+    expiresAt,
     expiresAtMs,
     updatedAt: nowIso,
     updatedBy: adminRecord.uid

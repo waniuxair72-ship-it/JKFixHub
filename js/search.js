@@ -1,6 +1,11 @@
 import { getWorkers, setDiscoveredWorkers } from "./store.js";
 import { getPublicWorkers } from "./firestore-service.js";
 import {
+  getCachedPlatformConfig,
+  isServiceCurrentlyEnabled,
+  isDistrictCurrentlyEnabled
+} from "./platform-config.js";
+import {
   setTextContent,
   workerMatchesService,
   normalizeService,
@@ -106,7 +111,20 @@ function buildWorkerCard(worker) {
   requestButton.className = "button primary";
   requestButton.type = "button";
   requestButton.dataset.requestWorker = String(worker.id);
-  requestButton.textContent = "Request Service";
+  const cfg = getCachedPlatformConfig();
+  const serviceDisabled = worker.service && !isServiceCurrentlyEnabled(worker.service, cfg);
+  const districtDisabled = worker.district && !isDistrictCurrentlyEnabled(worker.district, cfg);
+  const requestsPaused = cfg.newRequestsEnabled === false;
+  if (requestsPaused || serviceDisabled || districtDisabled) {
+    requestButton.textContent = requestsPaused ? "Requests Paused" : "Currently Unavailable";
+    requestButton.title = requestsPaused
+      ? cfg.newRequestsPauseMessage
+      : serviceDisabled
+        ? `${worker.service} is currently unavailable`
+        : `${worker.district} is currently unavailable`;
+  } else {
+    requestButton.textContent = "Request Service";
+  }
   actions.append(profileButton, requestButton);
   card.append(top, metadata, actions);
   return card;

@@ -121,6 +121,10 @@ export async function openLeaveReviewModal(requestId) {
   }
 
   const user = getCurrentUser();
+  if (user?.status === "suspended") {
+    recordSecurityEvent("UNAUTHORIZED_UI_ACTION", user?.role || "customer");
+    return false;
+  }
   const callerUid = user?.firebaseUid || user?.uid || user?.id;
   const workerTargetUid = request.workerUid || (request.workerId ? String(request.workerId) : null);
   if (callerUid && workerTargetUid && callerUid === workerTargetUid) {
@@ -456,6 +460,11 @@ async function handleReviewFormSubmit(event) {
   const customerId = user?.firebaseUid || user?.uid || user?.id;
   if (!customerId) {
     setReviewError("Please sign in to submit a review.");
+    return;
+  }
+  if (user?.status === "suspended") {
+    const reasonPart = user.suspensionReason ? ` Reason: ${user.suspensionReason}` : "";
+    setReviewError(`Your account is currently suspended and cannot submit new reviews.${reasonPart}`);
     return;
   }
 

@@ -242,9 +242,26 @@ describe("JKFixHub Admin Platform Control Centre — Backend Security & Operatio
     assert.equal(res.success, true);
 
     const cfg = await readDoc(db, "platformConfig", "public");
-    assert.deepEqual(cfg.disabledServices, ["plumbing"]);
+    assert.ok(cfg.disabledServices.includes("plumbing"));
+    assert.ok(cfg.disabledServices.includes("plumber")); // Synonym expansion prevents bypass
     assert.deepEqual(cfg.disabledDistricts, ["kupwara"]);
     assert.equal(cfg.services.length, 3);
+  });
+
+  test("7b. Maintenance schedule validation rejects invalid ISO dates and end <= start", async () => {
+    await assert.rejects(
+      () => adminUpdatePlatformConfig(db, {
+        auth: { uid: ACTIVE_ADMIN_UID },
+        data: {
+          patch: {
+            maintenanceMode: true,
+            maintenanceStart: "2026-11-18T14:00:00.000Z",
+            maintenanceEnd: "2026-11-18T12:00:00.000Z"
+          }
+        }
+      }),
+      (err) => err.code === "invalid-argument"
+    );
   });
 
   // --------------------------------------------------------------------------
@@ -352,6 +369,16 @@ describe("JKFixHub Admin Platform Control Centre — Backend Security & Operatio
     const logs = await readCol(db, "auditLogs");
     assert.ok(logs.some((l) => l.action === "CUSTOMER_SUSPENDED" && l.targetId === CUSTOMER_UID));
     assert.ok(logs.some((l) => l.action === "CUSTOMER_REACTIVATED" && l.targetId === CUSTOMER_UID));
+
+    // Idempotency: re-activating already-active customer returns alreadyInState without duplicate audit log
+    const beforeCount = logs.length;
+    const idem = await adminUpdateCustomerStatus(db, {
+      auth: { uid: ACTIVE_ADMIN_UID },
+      data: { customerId: CUSTOMER_UID, status: "active" }
+    });
+    assert.equal(idem.success, true);
+    assert.equal(idem.alreadyInState, true);
+    assert.equal((await readCol(db, "auditLogs")).length, beforeCount);
   });
 
   test("10. Worker approval, rejection, and suspension record previous & new statuses in auditLogs", async () => {

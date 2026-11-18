@@ -600,7 +600,7 @@ export function switchAuthTab(tabName) {
 export async function registerCustomer({ name, identifier, email, phone, district, password, confirmPassword }) {
   clearAuthFieldErrors();
 
-  const platformConfig = await loadPlatformConfig();
+  const platformConfig = await loadPlatformConfig({ forceRefresh: true });
   if (platformConfig.customerRegistrationEnabled === false) {
     const errorMsg = "New customer registrations are currently paused by platform administration. Please check back later.";
     setAuthFeedback(errorMsg, true);
@@ -785,16 +785,33 @@ export async function registerCustomer({ name, identifier, email, phone, distric
 
         if (createdUser) {
           console.warn("[JKFixHub Auth] Customer registration profile creation failed:", error?.message || error);
+          const isPermDenied = /permission[- ]denied/i.test(String(error?.code || error?.message || ""));
+          let rolledBack = false;
+          if (!isRecoveredAccount && isPermDenied) {
+            try {
+              if (typeof methods.deleteUser === "function") {
+                await methods.deleteUser(createdUser);
+                rolledBack = true;
+              } else if (typeof createdUser.delete === "function") {
+                await createdUser.delete();
+                rolledBack = true;
+              }
+            } catch (rollbackErr) {
+              console.warn("[JKFixHub Auth] Auth rollback notice:", rollbackErr?.message || rollbackErr);
+            }
+          }
           clearCurrentUser();
-          if (typeof methods.signOut === "function") {
+          if (!rolledBack && typeof methods.signOut === "function") {
             try {
               await methods.signOut(auth);
             } catch (_) {}
           }
           updateAccountControls();
-          const safeMessage = "Your account was created, but setting up your profile encountered an error. Please try signing in or contact support.";
+          const safeMessage = isPermDenied
+            ? "Customer registration is currently paused or unavailable. No active account was created."
+            : "Your account was created, but setting up your profile encountered an error. Please try signing in or contact support.";
           setAuthFeedback(safeMessage, true);
-          return { success: false, error: safeMessage, partialFailure: true };
+          return { success: false, error: safeMessage, partialFailure: !rolledBack, rolledBack };
         }
 
         const safeMessage = mapFirebaseAuthError(error);
@@ -857,7 +874,7 @@ export async function registerCustomer({ name, identifier, email, phone, distric
 export async function registerWorker({ name, email, phone, district, service, experience, availability, password, confirmPassword }) {
   clearAuthFieldErrors();
 
-  const platformConfig = await loadPlatformConfig();
+  const platformConfig = await loadPlatformConfig({ forceRefresh: true });
   if (platformConfig.workerRegistrationEnabled === false) {
     const errorMsg = "New worker registrations are currently paused by platform administration. Please check back later.";
     setAuthFeedback(errorMsg, true);
@@ -1121,17 +1138,35 @@ export async function registerWorker({ name, email, phone, district, service, ex
 
       if (createdUser) {
         console.warn("[JKFixHub Auth] Worker registration profile creation notice:", error?.message || error);
-        
-        const isRecoverable = error?.code === "unavailable" ||
+
+        const isPermDenied = /permission[- ]denied/i.test(String(error?.code || error?.message || ""));
+        let rolledBack = false;
+        if (!isRecoveredAccount && isPermDenied) {
+          try {
+            if (typeof methods.deleteUser === "function") {
+              await methods.deleteUser(createdUser);
+              rolledBack = true;
+            } else if (typeof createdUser.delete === "function") {
+              await createdUser.delete();
+              rolledBack = true;
+            }
+          } catch (rollbackErr) {
+            console.warn("[JKFixHub Auth] Worker auth rollback notice:", rollbackErr?.message || rollbackErr);
+          }
+        }
+
+        const isRecoverable = !isPermDenied && (
+          error?.code === "unavailable" ||
           error?.code === "deadline-exceeded" ||
           error?.code === "network-request-failed" ||
           (typeof navigator !== "undefined" && navigator.onLine === false) ||
           error?.message?.toLowerCase().includes("network") ||
-          error?.message?.toLowerCase().includes("fetch");
+          error?.message?.toLowerCase().includes("fetch")
+        );
 
         if (!isRecoverable) {
           clearCurrentUser();
-          if (typeof methods.signOut === "function") {
+          if (!rolledBack && typeof methods.signOut === "function") {
             try {
               await methods.signOut(auth);
             } catch (_) {}
@@ -1140,10 +1175,12 @@ export async function registerWorker({ name, email, phone, district, service, ex
         } else {
           console.info("[JKFixHub Auth] Preserving authenticated worker session for recovery after recoverable error.");
         }
-        
-        const safeMessage = "Worker account was created, but setting up your profile encountered an error. Please try signing in or contact support.";
+
+        const safeMessage = isPermDenied
+          ? "Worker registration is currently paused or unavailable. No active profile was created."
+          : "Worker account was created, but setting up your profile encountered an error. Please try signing in or contact support.";
         setAuthFeedback(safeMessage, true);
-        return { success: false, error: safeMessage, partialFailure: true, recoverable: isRecoverable };
+        return { success: false, error: safeMessage, partialFailure: !rolledBack, rolledBack, recoverable: isRecoverable };
       }
 
       const safeMessage = mapFirebaseAuthError(error);
@@ -3425,7 +3462,8 @@ export function initializeAuth() {
                   emailVerified: Boolean(firebaseUser.emailVerified),
                   workerId: profile.workerId || null,
                   isVerified: Boolean(profile.isVerified),
-                  status: profile.status || (profile.role === "worker" ? "pending" : null),
+                  status: profile.status || (profile.role === "worker" ? "pending" : "active"),
+                  suspensionReason: profile.suspensionReason || null,
                   authProvider: "firebase",
                   createdAt: profile.createdAt || new Date().toISOString()
                 };

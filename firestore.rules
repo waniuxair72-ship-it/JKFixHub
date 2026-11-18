@@ -106,10 +106,21 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(uid)).data.get('status', 'active') == 'suspended';
     }
 
+    function isWorkerSuspended(workerUid) {
+      return exists(/databases/$(database)/documents/workers/$(workerUid)) &&
+        get(/databases/$(database)/documents/workers/$(workerUid)).data.get('status', 'active') == 'suspended';
+    }
+
     function currentUserRole() {
       return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
         ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'customer')
         : (isAuthenticated() && exists(/databases/$(database)/documents/workers/$(request.auth.uid)) ? 'worker' : 'customer');
+    }
+
+    function isAnnouncementAudienceMatch() {
+      return resource.data.audience == "everyone" ||
+        (resource.data.audience == "customers" && currentUserRole() == "customer") ||
+        (resource.data.audience == "workers" && currentUserRole() == "worker");
     }
 
     function isAnnouncementActiveForUser() {
@@ -117,11 +128,7 @@ service cloud.firestore {
         resource.data.status == "published" &&
         (!('publishAtMs' in resource.data) || resource.data.publishAtMs == null || resource.data.publishAtMs <= request.time.toMillis()) &&
         (!('expiresAtMs' in resource.data) || resource.data.expiresAtMs == null || resource.data.expiresAtMs > request.time.toMillis()) &&
-        (
-          resource.data.audience == "everyone" ||
-          (resource.data.audience == "customers" && currentUserRole() == "customer") ||
-          (resource.data.audience == "workers" && currentUserRole() == "worker")
-        );
+        isAnnouncementAudienceMatch();
     }
 
     // Core Service Request Protection:
@@ -211,6 +218,7 @@ service cloud.firestore {
     // 7. Review ID matches requestId or rev-<requestId> (ensures 1 review per request).
     function isValidReviewCreation(reviewId) {
       return isAuthenticated() &&
+        !isUserSuspended(request.auth.uid) &&
         request.resource.data.customerId == request.auth.uid &&
         (reviewId == request.resource.data.requestId || reviewId == "rev-" + request.resource.data.requestId) &&
         exists(/databases/$(database)/documents/requests/$(request.resource.data.requestId)) &&
@@ -295,6 +303,7 @@ service cloud.firestore {
                     request.resource.data.uid == uid &&
                     request.resource.data.role in ['customer', 'worker'] &&
                     request.resource.data.get('status', 'active') == 'active' &&
+                    isDistrictEnabled(request.resource.data.get('district', '')) &&
                     (
                       (request.resource.data.role == 'customer' && isCustomerRegistrationEnabled()) ||
                       (request.resource.data.role == 'worker' && isWorkerRegistrationEnabled())
@@ -303,10 +312,10 @@ service cloud.firestore {
                        !isAccountDeletionInProgress(uid) &&
                        request.resource.data.uid == resource.data.uid &&
                        request.resource.data.role == resource.data.role &&
-                       request.resource.data.get('status', 'active') == resource.data.get('status', 'active') &&
-                       request.resource.data.get('suspensionReason', null) == resource.data.get('suspensionReason', null) &&
-                       request.resource.data.get('suspendedAt', null) == resource.data.get('suspendedAt', null) &&
-                       request.resource.data.get('suspendedBy', null) == resource.data.get('suspendedBy', null)) || isAdmin();
+                       !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+                         'status', 'suspensionReason', 'suspendedAt', 'suspendedBy',
+                         'reactivatedAt', 'reactivatedBy', 'lastModeratedBy'
+                       ])) || isAdmin();
       allow delete: if isAdmin();
     }
 
@@ -339,6 +348,8 @@ service cloud.firestore {
         isAuthenticated() &&
         request.auth.uid == workerId &&
         isWorkerRegistrationEnabled() &&
+        isDistrictEnabled(request.resource.data.get('district', '')) &&
+        isServiceEnabled(request.resource.data.get('service', '')) &&
         !isAccountDeletionInProgress(workerId) &&
         !('email' in request.resource.data) &&
         !('phone' in request.resource.data) &&
@@ -353,6 +364,10 @@ service cloud.firestore {
         !isAccountDeletionInProgress(workerId) &&
         !('email' in request.resource.data) &&
         !('phone' in request.resource.data) &&
+        (request.resource.data.get('district', '') == resource.data.get('district', '') ||
+          isDistrictEnabled(request.resource.data.get('district', ''))) &&
+        (request.resource.data.get('service', '') == resource.data.get('service', '') ||
+          isServiceEnabled(request.resource.data.get('service', ''))) &&
         request.resource.data.isVerified == resource.data.isVerified &&
         request.resource.data.status == resource.data.status &&
         resource.data.get('rating', null) == request.resource.data.get('rating', null) &&
@@ -381,6 +396,7 @@ service cloud.firestore {
       allow create: if (isEmailVerified() &&
                     request.resource.data.customerId == request.auth.uid &&
                     !isUserSuspended(request.auth.uid) &&
+                    !isWorkerSuspended(request.resource.data.workerUid) &&
                     areNewRequestsEnabled() &&
                     isServiceEnabled(request.resource.data.get('service', '')) &&
                     isDistrictEnabled(request.resource.data.get('district', '')) &&
@@ -489,7 +505,12 @@ service cloud.firestore {
     // - Tamper-resistant: updating or deleting audit logs is strictly denied.
     // ------------------------------------------------------------------------
     match /auditLogs/{auditId} {
-      allow create: if isAdmin() && request.resource.data.adminUid == request.auth.uid;
+      allow create: if isAdmin() &&
+                    request.resource.data.adminUid == request.auth.uid &&
+                    request.resource.data.action is string &&
+                    request.resource.data.action.size() > 0 &&
+                    request.resource.data.targetType is string &&
+                    request.resource.data.targetId is string;
       allow read: if isAdmin();
       allow update, delete: if false;
     }
@@ -520,7 +541,12 @@ service cloud.firestore {
     // - Draft, paused, archived, and expired announcements are NEVER exposed to ordinary users.
     // ------------------------------------------------------------------------
     match /announcements/{announcementId} {
-      allow read: if isAdmin() || isAnnouncementActiveForUser();
+      allow get: if isAdmin() || isAnnouncementActiveForUser();
+      allow list: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.status == "published" &&
+        isAnnouncementAudienceMatch()
+      );
       allow create, update, delete: if isAdmin();
     }
 

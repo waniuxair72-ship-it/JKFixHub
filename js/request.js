@@ -474,7 +474,7 @@ export function initializeRequestFlow() {
       return;
     }
 
-    const platformConfig = await loadPlatformConfig();
+    const platformConfig = await loadPlatformConfig({ forceRefresh: true });
     if (platformConfig.newRequestsEnabled === false) {
       setRequestFeedback(
         platformConfig.newRequestsPauseMessage || "New service requests are temporarily paused. Existing requests remain accessible.",
@@ -484,9 +484,19 @@ export function initializeRequestFlow() {
       return;
     }
 
-    if (!isServiceCurrentlyEnabled(serviceValue, platformConfig)) {
+    if (worker.status === "suspended") {
       setRequestFeedback(
-        `The service category "${serviceValue}" is currently unavailable for new requests.`,
+        "This technician profile is currently unavailable for new requests.",
+        true,
+        false
+      );
+      return;
+    }
+
+    const canonicalService = normalizeService(serviceValue) || serviceValue;
+    if (!isServiceCurrentlyEnabled(canonicalService, platformConfig)) {
+      setRequestFeedback(
+        `The service category "${canonicalService}" is currently unavailable for new requests.`,
         true,
         false
       );
@@ -532,7 +542,7 @@ export function initializeRequestFlow() {
         workerUid,
         workerId: workerUid,
         workerName: worker.name,
-        service: serviceValue,
+        service: canonicalService,
         district: worker.district,
         problemDescription: descriptionValue,
         customerLocation: locationValue,

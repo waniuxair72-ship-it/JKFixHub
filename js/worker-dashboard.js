@@ -25,7 +25,10 @@ import {
 import { renderWorkerReviews } from "./reviews.js";
 import {
   fetchActiveAnnouncementsForAudience,
-  renderAnnouncementsIntoContainer
+  renderAnnouncementsIntoContainer,
+  getCachedPlatformConfig,
+  isServiceCurrentlyEnabled,
+  isDistrictCurrentlyEnabled
 } from "./platform-config.js";
 import {
   getSafeErrorMessage,
@@ -665,6 +668,16 @@ async function handleProfileSave(event) {
   const selectedService = service.value;
   const selectedDistrict = district.value;
   const selectedAvailability = availability.value;
+
+  const liveCfg = getCachedPlatformConfig();
+  if (selectedDistrict !== worker.district && !isDistrictCurrentlyEnabled(selectedDistrict, liveCfg)) {
+    setEditError(district, `${selectedDistrict} is currently unavailable.`, document.getElementById("editWorkerDistrictError"));
+    return;
+  }
+  if (selectedService !== worker.service && !isServiceCurrentlyEnabled(selectedService, liveCfg)) {
+    setEditError(service, `The service "${selectedService}" is currently unavailable.`, document.getElementById("editWorkerServiceError"));
+    return;
+  }
 
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
     setFeedback("Network connection error. Please check your internet connection and try again.", true);

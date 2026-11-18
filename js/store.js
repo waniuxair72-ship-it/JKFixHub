@@ -302,6 +302,8 @@ export function setCurrentUser(user) {
     district: typeof user.district === "string" ? user.district : null,
     createdAt: typeof user.createdAt === "string" ? user.createdAt : null,
     isVerified: Boolean(user.isVerified),
+    status: typeof user.status === "string" && user.status.trim() ? user.status.trim() : (user.role === "worker" ? "pending" : "active"),
+    suspensionReason: typeof user.suspensionReason === "string" && user.suspensionReason.trim() ? user.suspensionReason.trim() : null,
     authProvider: user.authProvider === "firebase" ? "firebase" : "demo",
     ...(user.role === "worker"
       ? {

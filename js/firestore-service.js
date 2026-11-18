@@ -18,7 +18,8 @@ import {
 import {
   normalizePlatformConfig,
   setCachedPlatformConfig,
-  invalidatePlatformConfigCache
+  invalidatePlatformConfigCache,
+  NO_EXPIRY_MS
 } from "./platform-config.js";
 
 let adminSessionProvider = null;
@@ -472,6 +473,20 @@ export async function updateAdminWorkerStatus(workerId, updates, adminUid, { rea
     const note = (adminNotes || reason || "").trim();
     if (note) {
       cleanUpdates.adminNotes = note;
+    }
+
+    // Idempotency guard: if existing worker already matches requested status & isVerified without a new note, avoid duplicate audit logs
+    const statusUnchanged = cleanUpdates.status === undefined || cleanUpdates.status === previousStatus;
+    const verifiedUnchanged = cleanUpdates.isVerified === undefined || cleanUpdates.isVerified === previousVerified;
+    if (existingDoc && statusUnchanged && verifiedUnchanged && !note) {
+      return {
+        success: true,
+        error: null,
+        previousStatus,
+        newStatus: previousStatus,
+        isVerified: previousVerified,
+        alreadyInState: true
+      };
     }
 
     // Determine specific audit action
@@ -1041,6 +1056,12 @@ export async function updateAdminCustomerStatus(customerId, status, adminUid, re
     }
 
     const cleanReason = String(reason || "").trim().slice(0, 500);
+
+    // Idempotency guard: avoid overwriting suspendedAt or creating duplicate audit entries
+    if (previousStatus === status) {
+      return { success: true, error: null, previousStatus, newStatus: status, alreadyInState: true };
+    }
+
     const nowIso = new Date().toISOString();
     const updates = {
       status,
@@ -1265,7 +1286,7 @@ export async function createAdminAnnouncement(payload, adminUid) {
   }
 
   let expiresAt = null;
-  let expiresAtMs = null;
+  let expiresAtMs = NO_EXPIRY_MS;
   if (payload?.expiresAt && String(payload.expiresAt).trim()) {
     expiresAtMs = Date.parse(payload.expiresAt);
     if (Number.isNaN(expiresAtMs)) {
@@ -1347,7 +1368,7 @@ export async function updateAdminAnnouncement(announcementId, payload, adminUid)
   }
 
   let expiresAt = null;
-  let expiresAtMs = null;
+  let expiresAtMs = NO_EXPIRY_MS;
   if (payload?.expiresAt && String(payload.expiresAt).trim()) {
     expiresAtMs = Date.parse(payload.expiresAt);
     if (Number.isNaN(expiresAtMs)) {
@@ -1441,6 +1462,10 @@ export async function updateAdminAnnouncementStatus(announcementId, status, admi
           prev = (typeof snap.data === "function" ? snap.data() : snap.data) || {};
         }
       } catch (_) {}
+    }
+
+    if (prev.status === status) {
+      return { success: true, error: null, alreadyInState: true };
     }
 
     const nowIso = new Date().toISOString();

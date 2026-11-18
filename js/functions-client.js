@@ -232,12 +232,12 @@ export async function callAdminManageAnnouncement({ operation, announcementId = 
   });
 }
 
-export async function callAdminModerateReport({ reportId, status }) {
-  return await invokeCallableFunction("adminModerateReport", { reportId, status });
+export async function callAdminModerateReport({ reportId, status, note = "" }) {
+  return await invokeCallableFunction("adminModerateReport", { reportId, status, note });
 }
 
-export async function callAdminModerateReview({ reviewId, status }) {
-  return await invokeCallableFunction("adminModerateReview", { reviewId, status });
+export async function callAdminModerateReview({ reviewId, status, note = "" }) {
+  return await invokeCallableFunction("adminModerateReview", { reviewId, status, note });
 }
 
 // ----------------------------------------------------------------------------
