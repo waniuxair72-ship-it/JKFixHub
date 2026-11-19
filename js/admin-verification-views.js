@@ -29,6 +29,23 @@ import {
   createVerifiedWorkerBadge
 } from "./badges.js";
 
+export function formatVerificationStatusLabel(status) {
+  switch (status) {
+    case "Verified":
+      return "Verified";
+    case "Pending":
+      return "Waiting for Review";
+    case "Rejected":
+      return "Declined";
+    case "Revoked":
+      return "Badge Removed";
+    case "Not Verified":
+      return "Not Verified";
+    default:
+      return String(status || "Not Verified");
+  }
+}
+
 function statusToPillClass(status) {
   switch (status) {
     case "Verified":
@@ -66,7 +83,7 @@ function buildHistoryTimeline(history, formatDateTime) {
   if (list.length === 0) {
     const empty = document.createElement("p");
     empty.className = "admin-muted-copy";
-    empty.textContent = "No verification history recorded yet.";
+    empty.textContent = "No review history recorded yet.";
     return empty;
   }
 
@@ -79,7 +96,9 @@ function buildHistoryTimeline(history, formatDateTime) {
     const top = document.createElement("div");
     top.className = "admin-verification-history-top";
     const transition = document.createElement("strong");
-    transition.textContent = `${entry.previousStatus || "Not Verified"} → ${entry.newStatus || "Updated"}`;
+    const prevText = formatVerificationStatusLabel(entry.previousStatus || "Not Verified");
+    const newText = formatVerificationStatusLabel(entry.newStatus || "Updated");
+    transition.textContent = `${prevText} → ${newText}`;
     const when = document.createElement("span");
     when.className = "admin-verification-history-time";
     when.textContent = formatDateTime(entry.actionAt);
@@ -87,7 +106,7 @@ function buildHistoryTimeline(history, formatDateTime) {
 
     const by = document.createElement("div");
     by.className = "admin-verification-history-meta";
-    by.textContent = `Admin UID: ${entry.actionBy || "system"}`;
+    by.textContent = `Reviewed by: ${entry.actionBy || "system"}`;
 
     li.append(top, by);
     if (entry.reason || entry.note) {
@@ -143,9 +162,9 @@ export async function renderCustomerVerificationView(container, ctx) {
   const privacyNotice = document.createElement("div");
   privacyNotice.className = "admin-info-banner";
   const privacyStrong = document.createElement("strong");
-  privacyStrong.textContent = "Privacy & Manual Review Policy: ";
+  privacyStrong.textContent = "Privacy & Review Guidelines: ";
   const privacyText = document.createElement("span");
-  privacyText.textContent = "Review existing account details only (name, email, phone, district, account standing). Never request or store government ID numbers or document images in Firestore.";
+  privacyText.textContent = "Review profile details only (name, email, phone, district, and account status). Never ask for or store ID cards, government numbers, or personal documents.";
   privacyNotice.append(privacyStrong, privacyText);
   container.appendChild(privacyNotice);
 
@@ -170,9 +189,9 @@ export async function renderCustomerVerificationView(container, ctx) {
     const items = [
       { label: "Total Customers", value: counts.total, note: "All customer accounts" },
       { label: "Verified Customers", value: counts.Verified, note: "Active Verified Customer badge" },
-      { label: "Pending Review", value: counts.Pending, note: "Marked pending verification" },
-      { label: "Not Verified", value: counts["Not Verified"], note: "Default unverified status" },
-      { label: "Rejected / Revoked", value: counts.Rejected + counts.Revoked, note: "Declined or revoked badges" }
+      { label: "Waiting for Review", value: counts.Pending, note: "Accounts waiting for review" },
+      { label: "Not Verified", value: counts["Not Verified"], note: "Accounts not yet reviewed" },
+      { label: "Declined or Removed", value: counts.Rejected + counts.Revoked, note: "Applications declined or badges removed" }
     ];
     metricsWrap.replaceChildren(
       ...items.map((m) => {
@@ -203,7 +222,7 @@ export async function renderCustomerVerificationView(container, ctx) {
   searchInput.type = "search";
   searchInput.id = "adminCustomerVerifSearch";
   searchInput.className = "admin-search-input";
-  searchInput.placeholder = "Search customer by name, email, or UID...";
+  searchInput.placeholder = "Search by name, email, or ID...";
   searchBox.appendChild(searchInput);
 
   const filtersBox = document.createElement("div");
@@ -213,8 +232,8 @@ export async function renderCustomerVerificationView(container, ctx) {
   statusSelect.id = "adminCustomerVerifStatusFilter";
   statusSelect.className = "admin-select-input";
   const statusOptions = [
-    { val: "all", label: "All Verification States" },
-    ...VERIFICATION_STATUSES.map((s) => ({ val: s, label: s }))
+    { val: "all", label: "All Verification Statuses" },
+    ...VERIFICATION_STATUSES.map((s) => ({ val: s, label: formatVerificationStatusLabel(s) }))
   ];
   for (const opt of statusOptions) {
     const o = document.createElement("option");
@@ -247,25 +266,25 @@ export async function renderCustomerVerificationView(container, ctx) {
 
     const badgePreview = cv.status === "Verified"
       ? createVerifiedCustomerBadge({ fullName: true })
-      : "No badge displayed (Unverified)";
+      : "No badge displayed (Not Verified)";
 
     grid.append(
-      createDetailRow("Customer UID", uid, true),
+      createDetailRow("Customer ID", uid, true),
       createDetailRow("Full Name", customer.name || "Customer"),
-      createDetailRow("Official Badge Preview", badgePreview),
-      createDetailRow("Email Address", customer.email || "Not provided"),
-      createDetailRow("Email Verified", customer.emailVerified ? "Yes" : "No"),
-      createDetailRow("Phone Number", customer.phone || "Not provided"),
+      createDetailRow("Badge Preview", badgePreview),
+      createDetailRow("Email", customer.email || "Not provided"),
+      createDetailRow("Email Confirmed", customer.emailVerified ? "Yes (Confirmed)" : "No (Unconfirmed)"),
+      createDetailRow("Phone", customer.phone || "Not provided"),
       createDetailRow("District", customer.district || "—"),
-      createDetailRow("Account Standing", customer.status === "suspended" ? "Suspended" : "Active"),
-      createDetailRow("Verification Status", cv.status),
-      createDetailRow("Registered On", formatDateTime(customer.createdAt)),
-      createDetailRow("Verified At", cv.verifiedAt ? formatDateTime(cv.verifiedAt) : "—"),
-      createDetailRow("Verified By (Admin UID)", cv.verifiedBy || "—")
+      createDetailRow("Account Status", customer.status === "suspended" ? "Suspended" : "Active"),
+      createDetailRow("Verification", formatVerificationStatusLabel(cv.status)),
+      createDetailRow("Joined Date", formatDateTime(customer.createdAt)),
+      createDetailRow("Verified On", cv.verifiedAt ? formatDateTime(cv.verifiedAt) : "—"),
+      createDetailRow("Verified By (Admin ID)", cv.verifiedBy || "—")
     );
 
     if (cv.rejectionReason) {
-      grid.appendChild(createDetailRow("Rejection Reason (Internal)", cv.rejectionReason, true));
+      grid.appendChild(createDetailRow("Reason for Declining (Staff Only)", cv.rejectionReason, true));
     }
 
     // Internal note editor
@@ -274,13 +293,13 @@ export async function renderCustomerVerificationView(container, ctx) {
     const noteLbl = document.createElement("label");
     noteLbl.className = "admin-detail-label";
     noteLbl.htmlFor = "adminCustVerifInternalNote";
-    noteLbl.textContent = "Internal Verification Notes (Admin-only, never public)";
+    noteLbl.textContent = "Staff Notes (Private — not visible to customers)";
     const noteArea = document.createElement("textarea");
     noteArea.id = "adminCustVerifInternalNote";
     noteArea.className = "admin-textarea";
     noteArea.rows = 3;
     noteArea.maxLength = 500;
-    noteArea.placeholder = "Add internal review notes...";
+    noteArea.placeholder = "Write review notes for your team...";
     noteArea.value = cv.internalNote || "";
     noteSection.append(noteLbl, noteArea);
     grid.appendChild(noteSection);
@@ -290,7 +309,7 @@ export async function renderCustomerVerificationView(container, ctx) {
     actionsRow.className = "admin-detail-item full-width";
     const actionsLabel = document.createElement("div");
     actionsLabel.className = "admin-detail-label";
-    actionsLabel.textContent = "Manual Verification Actions";
+    actionsLabel.textContent = "Review Actions";
     const btns = document.createElement("div");
     btns.className = "admin-table-actions";
     btns.style.marginTop = "8px";
@@ -303,7 +322,7 @@ export async function renderCustomerVerificationView(container, ctx) {
       if (res.success) {
         customer.customerVerification = res.customerVerification;
         customer.isVerified = newStatus === "Verified";
-        showToast(`Customer verification updated to ${newStatus}.`);
+        showToast(`Customer verification updated to ${formatVerificationStatusLabel(newStatus)}.`);
         const modalBackdrop = document.getElementById("adminActionModal");
         if (modalBackdrop) modalBackdrop.hidden = true;
         renderMetrics();
@@ -317,11 +336,11 @@ export async function renderCustomerVerificationView(container, ctx) {
       const approveBtn = document.createElement("button");
       approveBtn.type = "button";
       approveBtn.className = "admin-table-btn approve";
-      approveBtn.textContent = "✓ Approve & Grant Badge";
+      approveBtn.textContent = "✓ Approve & Give Badge";
       approveBtn.onclick = () => {
         showConfirmModal({
-          title: `Verify Customer: ${customer.name || "Customer"}`,
-          body: `Grant the official JKFixHub Verified Customer badge to ${customer.name || uid}? This will display the badge on their profile, reviews, requests, and chat.`,
+          title: `Approve Customer: ${customer.name || "Customer"}`,
+          body: `Give the official JKFixHub Verified Customer badge to ${customer.name || uid}? This will display the badge on their profile, reviews, requests, and chat.`,
           confirmText: "Approve Customer",
           onConfirm: () => runUpdate("Verified")
         });
@@ -333,7 +352,7 @@ export async function renderCustomerVerificationView(container, ctx) {
       const pendBtn = document.createElement("button");
       pendBtn.type = "button";
       pendBtn.className = "admin-table-btn";
-      pendBtn.textContent = "Mark Pending";
+      pendBtn.textContent = "Mark Waiting for Review";
       pendBtn.onclick = () => runUpdate("Pending");
       btns.appendChild(pendBtn);
     }
@@ -342,15 +361,15 @@ export async function renderCustomerVerificationView(container, ctx) {
       const rejectBtn = document.createElement("button");
       rejectBtn.type = "button";
       rejectBtn.className = "admin-table-btn suspend";
-      rejectBtn.textContent = "✕ Reject";
+      rejectBtn.textContent = "✕ Decline";
       rejectBtn.onclick = () => {
         showReasonConfirmModal({
-          title: `Reject Customer Verification: ${customer.name || "Customer"}`,
-          description: "Provide an internal reason for rejecting verification. This is logged in the immutable audit trail.",
-          reasonLabel: "Internal Rejection Reason (required)",
+          title: `Decline Customer Verification: ${customer.name || "Customer"}`,
+          description: "Provide an internal reason for declining verification. This is saved in the record history.",
+          reasonLabel: "Reason for Declining (required)",
           placeholder: "e.g., Incomplete profile information or unverified contact details...",
           required: true,
-          confirmText: "Reject Verification",
+          confirmText: "Decline Verification",
           onConfirm: (reason) => runUpdate("Rejected", { rejectionReason: reason })
         });
       };
@@ -361,15 +380,15 @@ export async function renderCustomerVerificationView(container, ctx) {
       const revokeBtn = document.createElement("button");
       revokeBtn.type = "button";
       revokeBtn.className = "admin-table-btn suspend";
-      revokeBtn.textContent = "⊘ Revoke Badge";
+      revokeBtn.textContent = "⊘ Remove Badge";
       revokeBtn.onclick = () => {
         showReasonConfirmModal({
-          title: `Revoke Verified Customer Badge: ${customer.name || "Customer"}`,
-          description: "Revoking immediately removes the JKFixHub Verified Customer badge across the entire application.",
-          reasonLabel: "Internal Reason for Revocation (recorded in audit log)",
+          title: `Remove Verified Customer Badge: ${customer.name || "Customer"}`,
+          description: "Removing this badge takes it away immediately from the customer's profile, reviews, and requests across the website.",
+          reasonLabel: "Reason for Removal (optional)",
           placeholder: "e.g., Account review or policy concern...",
           required: false,
-          confirmText: "Revoke Badge",
+          confirmText: "Remove Badge",
           onConfirm: (reason) => runUpdate("Revoked", { internalNote: reason || noteArea.value.trim() })
         });
       };
@@ -379,7 +398,7 @@ export async function renderCustomerVerificationView(container, ctx) {
     const saveNoteBtn = document.createElement("button");
     saveNoteBtn.type = "button";
     saveNoteBtn.className = "admin-table-btn";
-    saveNoteBtn.textContent = "Save Internal Note";
+    saveNoteBtn.textContent = "Save Note";
     saveNoteBtn.onclick = () => runUpdate(cv.status);
     btns.appendChild(saveNoteBtn);
 
@@ -391,7 +410,7 @@ export async function renderCustomerVerificationView(container, ctx) {
     histWrap.className = "admin-detail-item full-width";
     const histLbl = document.createElement("div");
     histLbl.className = "admin-detail-label";
-    histLbl.textContent = `Verification History (${Array.isArray(cv.history) ? cv.history.length : 0})`;
+    histLbl.textContent = `Review History (${Array.isArray(cv.history) ? cv.history.length : 0})`;
     histWrap.append(histLbl, buildHistoryTimeline(cv.history, formatDateTime));
     grid.appendChild(histWrap);
 
@@ -435,7 +454,7 @@ export async function renderCustomerVerificationView(container, ctx) {
     table.className = "admin-table";
     const thead = document.createElement("thead");
     const hr = document.createElement("tr");
-    ["Customer", "Email & Phone", "District", "Verification Status", "Updated", "Internal Note", "Actions"].forEach((txt) => {
+    ["Customer", "Contact Details", "District", "Verification", "Last Updated", "Admin Notes", "Actions"].forEach((txt) => {
       const th = document.createElement("th");
       th.textContent = txt;
       hr.appendChild(th);
@@ -475,7 +494,7 @@ export async function renderCustomerVerificationView(container, ctx) {
       const tdStatus = document.createElement("td");
       const pill = document.createElement("span");
       pill.className = `admin-status-pill ${statusToPillClass(cv.status)}`;
-      pill.textContent = cv.status;
+      pill.textContent = formatVerificationStatusLabel(cv.status);
       tdStatus.appendChild(pill);
       tr.appendChild(tdStatus);
 
@@ -496,7 +515,7 @@ export async function renderCustomerVerificationView(container, ctx) {
       const reviewBtn = document.createElement("button");
       reviewBtn.type = "button";
       reviewBtn.className = "admin-table-btn";
-      reviewBtn.textContent = "Review";
+      reviewBtn.textContent = "View Details";
       reviewBtn.onclick = () => openCustomerReviewModal(c);
       actBox.appendChild(reviewBtn);
 
@@ -504,11 +523,11 @@ export async function renderCustomerVerificationView(container, ctx) {
         const quickApprove = document.createElement("button");
         quickApprove.type = "button";
         quickApprove.className = "admin-table-btn approve";
-        quickApprove.textContent = "Verify";
+        quickApprove.textContent = "Approve";
         quickApprove.onclick = () => {
           showConfirmModal({
             title: `Approve Customer: ${c.name || "Customer"}`,
-            body: `Manually verify ${c.name || uid} and grant the JKFixHub Verified Customer badge?`,
+            body: `Verify ${c.name || uid} and give them the JKFixHub Verified Customer badge?`,
             confirmText: "Approve Customer",
             onConfirm: async () => {
               const res = await updateAdminCustomerVerification(uid, "Verified", currentAdmin.uid, {
@@ -517,7 +536,7 @@ export async function renderCustomerVerificationView(container, ctx) {
               if (res.success) {
                 c.customerVerification = res.customerVerification;
                 c.isVerified = true;
-                showToast(`${c.name || "Customer"} verified.`);
+                showToast(`${c.name || "Customer"} approved.`);
                 renderMetrics();
                 renderTable();
               } else {
@@ -531,15 +550,15 @@ export async function renderCustomerVerificationView(container, ctx) {
         const quickRevoke = document.createElement("button");
         quickRevoke.type = "button";
         quickRevoke.className = "admin-table-btn suspend";
-        quickRevoke.textContent = "Revoke";
+        quickRevoke.textContent = "Remove Badge";
         quickRevoke.onclick = () => {
           showReasonConfirmModal({
-            title: `Revoke Customer Badge: ${c.name || "Customer"}`,
-            description: "Revoking removes the JKFixHub Verified Customer badge immediately.",
-            reasonLabel: "Reason (recorded in audit log)",
-            placeholder: "Optional internal reason...",
+            title: `Remove Customer Badge: ${c.name || "Customer"}`,
+            description: "Removing the badge takes it away immediately across the website.",
+            reasonLabel: "Reason (saved in history)",
+            placeholder: "Optional staff reason...",
             required: false,
-            confirmText: "Revoke Badge",
+            confirmText: "Remove Badge",
             onConfirm: async (reason) => {
               const res = await updateAdminCustomerVerification(uid, "Revoked", currentAdmin.uid, {
                 internalNote: reason || "Revoked via Customer Verification queue"
@@ -547,7 +566,7 @@ export async function renderCustomerVerificationView(container, ctx) {
               if (res.success) {
                 c.customerVerification = res.customerVerification;
                 c.isVerified = false;
-                showToast(`Verified Customer badge revoked for ${c.name || uid}.`);
+                showToast(`Verified Customer badge removed for ${c.name || uid}.`);
                 renderMetrics();
                 renderTable();
               } else {
@@ -675,7 +694,7 @@ export async function renderVerificationBadgesView(container, ctx) {
   const h2 = document.createElement("h2");
   h2.textContent = "Verification & Badges";
   const p = document.createElement("p");
-  p.textContent = "Unified trust badge management for JKFixHub Verified Customers and JKFixHub Verified Professionals with immutable audit logging.";
+  p.textContent = "Manage trust badges for customers and service workers with an automatic record of all changes.";
   titleBox.append(h2, p);
   header.appendChild(titleBox);
   container.appendChild(header);
@@ -687,7 +706,7 @@ export async function renderVerificationBadgesView(container, ctx) {
   const legendCol1 = document.createElement("div");
   legendCol1.className = "admin-badge-legend-col";
   const l1Title = document.createElement("strong");
-  l1Title.textContent = "Official Platform Trust Badges";
+  l1Title.textContent = "Official Verification Badges";
   const badgeShowcase = document.createElement("div");
   badgeShowcase.className = "admin-badge-showcase";
   badgeShowcase.append(
@@ -696,16 +715,16 @@ export async function renderVerificationBadgesView(container, ctx) {
   );
   const l1Desc = document.createElement("p");
   l1Desc.className = "admin-muted-copy";
-  l1Desc.textContent = "Both badges are granted and revoked exclusively by authorized administrators. Unverified or revoked accounts never display badges.";
+  l1Desc.textContent = "Badges are granted and removed only by platform administrators. Accounts that are waiting or not verified never show a badge.";
   legendCol1.append(l1Title, badgeShowcase, l1Desc);
 
   const legendCol2 = document.createElement("div");
   legendCol2.className = "admin-badge-legend-col";
   const l2Title = document.createElement("strong");
-  l2Title.textContent = "Future JKFixHub Pro Separation (Architectural Guarantee)";
+  l2Title.textContent = "Future Pro Membership (Separate from Verification)";
   const l2Desc = document.createElement("p");
   l2Desc.className = "admin-muted-copy";
-  l2Desc.textContent = "Official Verification, Future Paid Membership (Pro — not yet active), and Future Promotional Placement are strictly separated in schema and security rules. Paid plans never grant automatic verification and never alter organic search ranking.";
+  l2Desc.textContent = "Verification is based strictly on quality and identity checks. Future paid plans or subscriptions will never buy a verification badge or alter search rankings.";
   legendCol2.append(l2Title, l2Desc);
 
   legendCard.append(legendCol1, legendCol2);
@@ -721,7 +740,7 @@ export async function renderVerificationBadgesView(container, ctx) {
   searchInput.type = "search";
   searchInput.id = "adminBadgesSearch";
   searchInput.className = "admin-search-input";
-  searchInput.placeholder = "Search any customer or worker by name, email, UID, district, or service...";
+  searchInput.placeholder = "Search by name, email, ID, district, or service...";
   searchBox.appendChild(searchInput);
 
   const filtersBox = document.createElement("div");
@@ -745,8 +764,11 @@ export async function renderVerificationBadgesView(container, ctx) {
   statusSelect.id = "adminBadgesStatusFilter";
   statusSelect.className = "admin-select-input";
   [
-    { val: "all", label: "All Badge States" },
-    ...VERIFICATION_STATUSES.map((s) => ({ val: s, label: s }))
+    { val: "all", label: "All Verification Statuses" },
+    ...VERIFICATION_STATUSES.map((s) => ({
+      val: s,
+      label: s === "Verified" ? "Verified (Badge Active)" : formatVerificationStatusLabel(s)
+    }))
   ].forEach((opt) => {
     const o = document.createElement("option");
     o.value = opt.val;
@@ -764,14 +786,14 @@ export async function renderVerificationBadgesView(container, ctx) {
   backfillBtn.type = "button";
   backfillBtn.id = "adminBackfillWorkerBadgesBtn";
   backfillBtn.className = "admin-btn-subtle";
-  backfillBtn.textContent = "Sync Existing Verified Workers";
-  backfillBtn.title = "Preview and idempotently create missing public /verifiedBadges records for already-verified active workers";
+  backfillBtn.textContent = "Update Existing Accounts";
+  backfillBtn.title = "Check and update badge records for already-approved workers";
   backfillBtn.onclick = async () => {
     backfillBtn.disabled = true;
     try {
       const preview = await backfillAdminVerifiedWorkerBadges(currentAdmin.uid, { dryRun: true });
       if (!preview.success) {
-        showToast(preview.error || "Backfill preview failed.");
+        showToast(preview.error || "Update preview failed.");
         return;
       }
       const totalChanges =
@@ -780,20 +802,20 @@ export async function renderVerificationBadgesView(container, ctx) {
         preview.staleBadgesToDelete.length +
         preview.staleFlagsToRepair.length;
       if (totalChanges === 0) {
-        showToast(`All ${preview.totalWorkersScanned} worker records are already synchronized.`);
+        showToast(`All ${preview.totalWorkersScanned} worker accounts are already up to date.`);
         return;
       }
       ctx.showConfirmModal({
-        title: "Confirm Idempotent Worker Badge Backfill",
-        body: `Dry-run scanned ${preview.totalWorkersScanned} worker(s): ${preview.badgesToCreate.length} public badge(s) to create, ${preview.workerMetaToBackfill.length} legacy verification record(s) to populate, ${preview.staleBadgesToDelete.length} orphaned badge(s) to remove, ${preview.staleFlagsToRepair.length} stale flag(s) to repair. Proceed?`,
-        confirmText: "Run Backfill",
+        title: "Confirm Badge Update for Existing Workers",
+        body: `Checked ${preview.totalWorkersScanned} worker accounts: ${preview.badgesToCreate.length} badge(s) to add, ${preview.workerMetaToBackfill.length} record(s) to update, and ${preview.staleBadgesToDelete.length} outdated badge(s) to clean up. Do you want to proceed?`,
+        confirmText: "Update Accounts",
         onConfirm: async () => {
           const exec = await backfillAdminVerifiedWorkerBadges(currentAdmin.uid, { dryRun: false });
           if (exec.success) {
-            showToast(`Backfill complete: ${exec.badgesToCreate.length} badge(s) created, ${exec.staleBadgesToDelete.length} stale removed.`);
+            showToast(`Done: ${exec.badgesToCreate.length} badge(s) added, ${exec.staleBadgesToDelete.length} outdated badge(s) cleaned up.`);
             await renderVerificationBadgesView(container, ctx);
           } else {
-            showToast(exec.error || "Backfill execution failed.");
+            showToast(exec.error || "Could not complete account update.");
           }
         }
       });
@@ -822,7 +844,7 @@ export async function renderVerificationBadgesView(container, ctx) {
         showToast(
           targetStatus === "Verified"
             ? `Granted JKFixHub Verified Customer badge to ${rec.name}.`
-            : `Revoked Verified Customer badge for ${rec.name}.`
+            : `Removed Verified Customer badge for ${rec.name}.`
         );
         renderTable();
       } else {
@@ -842,7 +864,7 @@ export async function renderVerificationBadgesView(container, ctx) {
         showToast(
           targetStatus === "Verified"
             ? `Granted JKFixHub Verified Professional badge to ${rec.name}.`
-            : `Revoked Verified Professional badge for ${rec.name}.`
+            : `Removed Verified Professional badge for ${rec.name}.`
         );
         renderTable();
       } else {
@@ -860,34 +882,34 @@ export async function renderVerificationBadgesView(container, ctx) {
       ? (rec.role === "customer"
         ? createVerifiedCustomerBadge({ fullName: true })
         : createVerifiedWorkerBadge({ fullName: true }))
-      : "None (Unverified)";
+      : "None (Not Verified)";
 
     grid.append(
-      createDetailRow("Account UID", rec.uid, true),
+      createDetailRow("Account ID", rec.uid, true),
       createDetailRow("Full Name", rec.name),
-      createDetailRow("Account Role", rec.role === "customer" ? "Customer" : "Worker"),
-      createDetailRow("Active Official Badge", badgeNode),
-      createDetailRow("Verification Status", rec.verificationStatus),
-      createDetailRow("Email / Phone", [rec.email, rec.phone].filter(Boolean).join(" · ") || "—"),
+      createDetailRow("Account Role", rec.role === "customer" ? "Customer" : "Service Worker"),
+      createDetailRow("Current Badge", badgeNode),
+      createDetailRow("Verification", formatVerificationStatusLabel(rec.verificationStatus)),
+      createDetailRow("Contact Details", [rec.email, rec.phone].filter(Boolean).join(" · ") || "—"),
       createDetailRow("District", rec.district || "—"),
-      createDetailRow("Membership Tier (Separate)", `${rec.trust.membership.tier} (${rec.trust.membership.status})`),
-      createDetailRow("Promotional Placement (Separate)", rec.trust.promotionalPlacement.enabled ? "Active" : "Disabled (Organic only)"),
-      createDetailRow("Verified At", rec.verifiedAt ? formatDateTime(rec.verifiedAt) : "—"),
-      createDetailRow("Verified By (Admin UID)", rec.verifiedBy || "—"),
-      createDetailRow("Internal Notes", rec.internalNote || "—", true)
+      createDetailRow("Membership Tier (Separate Pro)", `${rec.trust.membership.tier} (${rec.trust.membership.status})`),
+      createDetailRow("Promotional Placement", rec.trust.promotionalPlacement.enabled ? "Active" : "Standard (Organic search)"),
+      createDetailRow("Verified On", rec.verifiedAt ? formatDateTime(rec.verifiedAt) : "—"),
+      createDetailRow("Verified By (Admin ID)", rec.verifiedBy || "—"),
+      createDetailRow("Staff Notes", rec.internalNote || "—", true)
     );
 
     const histWrap = document.createElement("div");
     histWrap.className = "admin-detail-item full-width";
     const histLbl = document.createElement("div");
     histLbl.className = "admin-detail-label";
-    histLbl.textContent = `Badge & Verification History (${rec.history.length})`;
+    histLbl.textContent = `Badge History (${rec.history.length})`;
     histWrap.append(histLbl, buildHistoryTimeline(rec.history, formatDateTime));
     grid.appendChild(histWrap);
 
     modalContent.appendChild(grid);
     showDetailModal({
-      title: `Badge Inspection: ${rec.name}`,
+      title: `Account Badge Details: ${rec.name}`,
       contentNode: modalContent,
       isWide: true
     });
@@ -923,7 +945,7 @@ export async function renderVerificationBadgesView(container, ctx) {
     table.className = "admin-table";
     const thead = document.createElement("thead");
     const hr = document.createElement("tr");
-    ["Account & Badge", "Role", "District / Service", "Verification Status", "Last Granted / Updated", "Actions"].forEach((txt) => {
+    ["Account & Badge", "Role", "District & Service", "Verification", "Last Updated", "Actions"].forEach((txt) => {
       const th = document.createElement("th");
       th.textContent = txt;
       hr.appendChild(th);
@@ -965,7 +987,7 @@ export async function renderVerificationBadgesView(container, ctx) {
       const tdStatus = document.createElement("td");
       const pill = document.createElement("span");
       pill.className = `admin-status-pill ${statusToPillClass(rec.verificationStatus)}`;
-      pill.textContent = rec.verificationStatus;
+      pill.textContent = formatVerificationStatusLabel(rec.verificationStatus);
       tdStatus.appendChild(pill);
       tr.appendChild(tdStatus);
 
@@ -983,27 +1005,27 @@ export async function renderVerificationBadgesView(container, ctx) {
       const inspectBtn = document.createElement("button");
       inspectBtn.type = "button";
       inspectBtn.className = "admin-table-btn";
-      inspectBtn.textContent = "Inspect";
+      inspectBtn.textContent = "View Details";
       inspectBtn.onclick = () => openBadgeInspectModal(rec);
       box.appendChild(inspectBtn);
 
       const badgeLabel = rec.role === "customer"
-        ? "JKFixHub Verified Customer"
-        : "JKFixHub Verified Professional";
+        ? "Verified Customer"
+        : "Verified Professional";
 
       if (!rec.isVerified) {
         const grantBtn = document.createElement("button");
         grantBtn.type = "button";
         grantBtn.className = "admin-table-btn approve";
-        grantBtn.textContent = "Grant Badge";
+        grantBtn.textContent = "Give Badge";
         grantBtn.onclick = () => {
           showReasonConfirmModal({
-            title: `Grant ${badgeLabel}`,
-            description: `Grant the official ${badgeLabel} badge to ${rec.name} (${rec.uid})? This action is recorded in verification history and audit logs.`,
-            reasonLabel: "Internal Verification Note (optional)",
-            placeholder: "e.g., Manual profile review completed...",
+            title: `Give ${badgeLabel} Badge`,
+            description: `Give the official ${badgeLabel} badge to ${rec.name} (${rec.uid})? This badge will appear on their public profile, reviews, and service listings.`,
+            reasonLabel: "Staff Note (optional)",
+            placeholder: "e.g., Profile review completed...",
             required: false,
-            confirmText: "Grant Official Badge",
+            confirmText: "Give Badge",
             onConfirm: (note) => applyGrantOrRevoke(rec, "Verified", note || "Granted via Verification & Badges")
           });
         };
@@ -1012,15 +1034,15 @@ export async function renderVerificationBadgesView(container, ctx) {
         const revokeBtn = document.createElement("button");
         revokeBtn.type = "button";
         revokeBtn.className = "admin-table-btn suspend";
-        revokeBtn.textContent = "Revoke Badge";
+        revokeBtn.textContent = "Remove Badge";
         revokeBtn.onclick = () => {
           showReasonConfirmModal({
-            title: `Revoke ${badgeLabel}`,
-            description: `Immediately revoke the ${badgeLabel} badge from ${rec.name} (${rec.uid})? The badge will disappear across the entire platform.`,
-            reasonLabel: "Internal Reason for Revocation (recorded in audit log)",
-            placeholder: "e.g., Policy review or revoked verification...",
+            title: `Remove ${badgeLabel} Badge`,
+            description: `Remove the ${badgeLabel} badge from ${rec.name} (${rec.uid})? The badge will immediately disappear across the entire website.`,
+            reasonLabel: "Reason for removal (optional)",
+            placeholder: "e.g., Account review or policy issue...",
             required: false,
-            confirmText: "Revoke Official Badge",
+            confirmText: "Remove Badge",
             onConfirm: (note) => applyGrantOrRevoke(rec, "Revoked", note || "Revoked via Verification & Badges")
           });
         };

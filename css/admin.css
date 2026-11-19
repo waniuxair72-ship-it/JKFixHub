@@ -2302,12 +2302,25 @@
   line-height: 1.15;
   white-space: nowrap;
   vertical-align: middle;
+  user-select: none;
+  cursor: default;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s ease, filter 0.18s ease, border-color 0.18s ease;
+}
+
+.jk-verified-badge:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.04);
+}
+
+.jk-verified-badge:active {
+  transform: translateY(0);
 }
 
 .jk-verified-badge.is-compact {
-  padding: 2px 7px 2px 5px;
+  padding: 2px;
+  border-radius: 999px;
+  gap: 0;
   font-size: 0.68rem;
-  gap: 4px;
 }
 
 .jk-badge-svg {
@@ -2315,6 +2328,11 @@
   height: 15px;
   flex-shrink: 0;
   display: block;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.jk-verified-badge:hover .jk-badge-svg {
+  transform: scale(1.08);
 }
 
 .jk-verified-badge.is-compact .jk-badge-svg {
@@ -2323,27 +2341,61 @@
 }
 
 .jk-badge-customer {
-  background: rgba(37, 99, 235, 0.12);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.10) 0%, rgba(2, 132, 199, 0.08) 100%);
   color: #1d4ed8;
-  border: 1px solid rgba(37, 99, 235, 0.28);
+  border: 1px solid rgba(37, 99, 235, 0.30);
+  box-shadow: 0 1px 2px rgba(29, 78, 216, 0.06);
+}
+
+.jk-badge-customer:hover {
+  box-shadow: 0 3px 8px rgba(37, 99, 235, 0.16);
+  border-color: rgba(37, 99, 235, 0.45);
 }
 
 [data-theme="dark"] .jk-badge-customer {
-  background: rgba(59, 130, 246, 0.22);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.22) 0%, rgba(14, 165, 233, 0.14) 100%);
   color: #93c5fd;
-  border-color: rgba(96, 165, 250, 0.38);
+  border: 1px solid rgba(96, 165, 250, 0.45);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 8px rgba(96, 165, 250, 0.16);
+}
+
+[data-theme="dark"] .jk-badge-customer:hover {
+  box-shadow: 0 3px 12px rgba(96, 165, 250, 0.28);
+  border-color: rgba(147, 197, 253, 0.65);
 }
 
 .jk-badge-worker {
-  background: rgba(13, 148, 136, 0.13);
-  color: #0f766e;
-  border: 1px solid rgba(13, 148, 136, 0.30);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(13, 148, 136, 0.08) 100%);
+  color: #047857;
+  border: 1px solid rgba(16, 185, 129, 0.32);
+  box-shadow: 0 1px 2px rgba(4, 120, 87, 0.06);
+}
+
+.jk-badge-worker:hover {
+  box-shadow: 0 3px 8px rgba(16, 185, 129, 0.18);
+  border-color: rgba(16, 185, 129, 0.48);
 }
 
 [data-theme="dark"] .jk-badge-worker {
-  background: rgba(20, 184, 166, 0.22);
-  color: #5eead4;
-  border-color: rgba(45, 212, 191, 0.38);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.22) 0%, rgba(20, 184, 166, 0.14) 100%);
+  color: #6ee7b7;
+  border: 1px solid rgba(52, 211, 153, 0.45);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 8px rgba(52, 211, 153, 0.18);
+}
+
+[data-theme="dark"] .jk-badge-worker:hover {
+  box-shadow: 0 3px 12px rgba(52, 211, 153, 0.30);
+  border-color: rgba(110, 231, 183, 0.65);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jk-verified-badge,
+  .jk-verified-badge:hover,
+  .jk-badge-svg,
+  .jk-verified-badge:hover .jk-badge-svg {
+    transition: none !important;
+    transform: none !important;
+  }
 }
 
 @media (max-width: 768px) {

@@ -795,7 +795,7 @@ async function renderOverviewView(container) {
   const metrics = [
     { label: "Total Customers", value: stats.totalCustomers, note: "Registered customer accounts" },
     { label: "Total Workers", value: stats.totalWorkers, note: "Directory service professionals" },
-    { label: "Pending Verification", value: stats.pendingWorkerVerification, note: "Awaiting administrative review" },
+    { label: "Waiting for Review", value: stats.pendingWorkerVerification, note: "Worker profiles waiting for review" },
     { label: "Active Requests", value: stats.activeRequests, note: "Pending or Accepted status" },
     { label: "Completed Requests", value: stats.completedRequests, note: "Successfully fulfilled" },
     { label: "Open Reports", value: stats.openReports, note: "Trust & Safety inquiries" },
@@ -847,12 +847,12 @@ async function renderOverviewView(container) {
   workerHead.className = "admin-attention-header";
   const workerTitle = document.createElement("span");
   workerTitle.className = "admin-attention-title";
-  workerTitle.textContent = "Worker Verifications";
+  workerTitle.textContent = "Workers Waiting for Review";
   workerHead.appendChild(workerTitle);
   const workerDesc = document.createElement("div");
   workerDesc.className = "admin-attention-desc";
   workerDesc.textContent = stats.pendingWorkerVerification > 0
-    ? `${stats.pendingWorkerVerification} worker profile(s) awaiting identity review and discovery approval.`
+    ? `${stats.pendingWorkerVerification} worker profile(s) waiting for review before appearing on the website.`
     : "All registered workers are currently verified or reviewed.";
   const workerFooter = document.createElement("div");
   workerFooter.className = "admin-attention-footer";
@@ -1094,9 +1094,9 @@ async function renderWorkersView(container) {
   const titleBox = document.createElement("div");
   titleBox.className = "admin-view-title";
   const h2 = document.createElement("h2");
-  h2.textContent = "Worker Management & Credentials";
+  h2.textContent = "Service Workers";
   const p = document.createElement("p");
-  p.textContent = "Moderate worker onboarding, credentials, public discovery verification, and suspension status.";
+  p.textContent = "Review and manage service workers, approve new profiles, and manage account statuses.";
   titleBox.appendChild(h2);
   titleBox.appendChild(p);
   header.appendChild(titleBox);
@@ -1122,9 +1122,9 @@ async function renderWorkersView(container) {
   const verSelect = document.createElement("select");
   verSelect.className = "admin-select-input";
   [
-    { val: "all", label: "All Verifications" },
+    { val: "all", label: "All Verification Statuses" },
     { val: "verified", label: "Verified Only" },
-    { val: "pending", label: "Pending Verification" }
+    { val: "pending", label: "Waiting for Review" }
   ].forEach((opt) => {
     const o = document.createElement("option");
     o.value = opt.val;
@@ -1137,11 +1137,11 @@ async function renderWorkersView(container) {
   const stSelect = document.createElement("select");
   stSelect.className = "admin-select-input";
   [
-    { val: "all", label: "All Statuses" },
-    { val: "pending", label: "Pending" },
+    { val: "all", label: "All Account Statuses" },
+    { val: "pending", label: "Waiting for Review" },
     { val: "active", label: "Active" },
     { val: "suspended", label: "Suspended" },
-    { val: "rejected", label: "Rejected" }
+    { val: "rejected", label: "Declined" }
   ].forEach((opt) => {
     const o = document.createElement("option");
     o.value = opt.val;
@@ -1232,7 +1232,7 @@ async function renderWorkersView(container) {
 
     const thead = document.createElement("thead");
     const headRow = document.createElement("tr");
-    ["ID", "Name", "Service", "District", "Rating", "Status", "Verification", "Actions"].forEach((txt) => {
+    ["ID", "Name", "Service", "District", "Rating", "Account Status", "Verification", "Actions"].forEach((txt) => {
       const th = document.createElement("th");
       th.textContent = txt;
       headRow.appendChild(th);
@@ -1286,14 +1286,20 @@ async function renderWorkersView(container) {
       const tdStatus = document.createElement("td");
       const statusPill = document.createElement("span");
       statusPill.className = `admin-status-pill ${w.status || "pending"}`;
-      statusPill.textContent = String(w.status || "pending");
+      const statusTextMap = {
+        pending: "Waiting for Review",
+        active: "Active",
+        suspended: "Suspended",
+        rejected: "Declined"
+      };
+      statusPill.textContent = statusTextMap[w.status] || String(w.status || "Waiting for Review");
       tdStatus.appendChild(statusPill);
       row.appendChild(tdStatus);
 
       const tdVer = document.createElement("td");
       const verPill = document.createElement("span");
       verPill.className = `admin-status-pill ${wVerified ? "verified" : "pending"}`;
-      verPill.textContent = wVerified ? "Verified" : (w.workerVerification?.status || "Pending");
+      verPill.textContent = wVerified ? "Verified" : (w.workerVerification?.status === "Rejected" ? "Declined" : "Waiting for Review");
       tdVer.appendChild(verPill);
       row.appendChild(tdVer);
 
@@ -1305,7 +1311,7 @@ async function renderWorkersView(container) {
       const inspectBtn = document.createElement("button");
       inspectBtn.type = "button";
       inspectBtn.className = "admin-table-btn";
-      inspectBtn.textContent = "Inspect";
+      inspectBtn.textContent = "View Details";
       inspectBtn.onclick = async () => {
         const [allRequests, allReports] = await Promise.all([
           getAdminRequests(),
@@ -1328,23 +1334,23 @@ async function renderWorkersView(container) {
 
         grid.appendChild(createDetailItem("Worker ID", w.id, true));
         grid.appendChild(createDetailItem("Full Name", w.name));
-        grid.appendChild(createDetailItem("Service Category", Array.isArray(w.services) && w.services.length ? w.services.join(", ") : (w.service || "—")));
-        grid.appendChild(createDetailItem("District Coverage", w.district || "—"));
+        grid.appendChild(createDetailItem("Service", Array.isArray(w.services) && w.services.length ? w.services.join(", ") : (w.service || "—")));
+        grid.appendChild(createDetailItem("District", w.district || "—"));
         grid.appendChild(createDetailItem("Rating & Reviews", hasValidWorkerRating ? `★ ${wRatingNum.toFixed(1)} (${wRevCount} ${wRevCount === 1 ? "review" : "reviews"})` : "New Worker · No ratings yet"));
-        grid.appendChild(createDetailItem("Moderation Status", w.status || "pending"));
-        grid.appendChild(createDetailItem("Verification", w.isVerified ? "Verified" : "Pending Verification"));
-        grid.appendChild(createDetailItem("Service Requests", `${workerReqs.length} total (${completedCount} completed · ${acceptedCount} active · ${pendingCount} pending · ${rejectedCount} rejected)`, true));
-        grid.appendChild(createDetailItem("Complaints / Reports", workerComplaints.length > 0 ? `${workerComplaints.length} report(s): ${workerComplaints.slice(0, 3).map((r) => `${r.reason || "Safety"} (${r.status || "open"})`).join("; ")}` : "No complaints filed", true));
+        grid.appendChild(createDetailItem("Account Status", statusTextMap[w.status] || String(w.status || "Waiting for Review")));
+        grid.appendChild(createDetailItem("Verification", wVerified ? "Verified" : "Waiting for Review"));
+        grid.appendChild(createDetailItem("Service Requests", `${workerReqs.length} total (${completedCount} done · ${acceptedCount} in progress · ${pendingCount} waiting · ${rejectedCount} declined)`, true));
+        grid.appendChild(createDetailItem("Complaints / Reports", workerComplaints.length > 0 ? `${workerComplaints.length} report(s): ${workerComplaints.slice(0, 3).map((r) => `${r.reason || "Safety"} (${r.status || "open"})`).join("; ")}` : "No complaints reported", true));
         const expDisplay = w.experience ? (String(w.experience).toLowerCase().includes("year") ? w.experience : `${w.experience} years`) : "—";
         grid.appendChild(createDetailItem("Experience", expDisplay));
-        grid.appendChild(createDetailItem("Contact Email", w.email || "—"));
-        grid.appendChild(createDetailItem("Contact Phone", w.phone || "—"));
-        if (w.createdAt) grid.appendChild(createDetailItem("Registered Date", formatDateTime(w.createdAt)));
-        if (w.adminNotes) grid.appendChild(createDetailItem("Latest Admin Note", w.adminNotes, true));
-        if (w.bio) grid.appendChild(createDetailItem("Professional Bio", w.bio, true));
+        grid.appendChild(createDetailItem("Email", w.email || "—"));
+        grid.appendChild(createDetailItem("Phone", w.phone || "—"));
+        if (w.createdAt) grid.appendChild(createDetailItem("Joined Date", formatDateTime(w.createdAt)));
+        if (w.adminNotes) grid.appendChild(createDetailItem("Staff Note", w.adminNotes, true));
+        if (w.bio) grid.appendChild(createDetailItem("About Worker", w.bio, true));
         grid.appendChild(createDetailItem(
-          "Privacy & Historical Record Protection",
-          "Worker contact info is stored privately in /users/{uid}. Suspending a worker removes them from public discovery while preserving all historical service requests and reviews.",
+          "Privacy Notice",
+          "Worker contact details are kept private. Suspending a worker hides them from search results while preserving all past service requests and customer reviews.",
           true
         ));
 
@@ -1353,7 +1359,7 @@ async function renderWorkersView(container) {
         modWrap.className = "admin-detail-item full-width";
         const modLbl = document.createElement("div");
         modLbl.className = "admin-detail-label";
-        modLbl.textContent = "Administrative Moderation Actions";
+        modLbl.textContent = "Account Actions";
         modWrap.appendChild(modLbl);
 
         const modButtons = document.createElement("div");
@@ -1364,7 +1370,7 @@ async function renderWorkersView(container) {
           const mApprove = document.createElement("button");
           mApprove.type = "button";
           mApprove.className = "admin-table-btn approve";
-          mApprove.textContent = "✓ Approve & Publish";
+          mApprove.textContent = "✓ Approve & Show on Website";
           mApprove.onclick = async () => {
             const res = await updateAdminWorkerStatus(w.id, { isVerified: true, status: "active" }, currentAdmin.uid, { reason: "Moderator approved from detail inspection" });
             if (res.success) {
@@ -1384,11 +1390,11 @@ async function renderWorkersView(container) {
           const mReject = document.createElement("button");
           mReject.type = "button";
           mReject.className = "admin-table-btn suspend";
-          mReject.textContent = "✕ Reject Application";
+          mReject.textContent = "✕ Decline Application";
           mReject.onclick = async () => {
             const res = await updateAdminWorkerStatus(w.id, { isVerified: false, status: "rejected" }, currentAdmin.uid, { reason: "Moderator rejected from detail inspection" });
             if (res.success) {
-              showToast(`Worker ${w.name} application rejected.`);
+              showToast(`Worker ${w.name} application declined.`);
               w.isVerified = false;
               w.status = "rejected";
               if (res.workerVerification) w.workerVerification = res.workerVerification;
@@ -1396,7 +1402,7 @@ async function renderWorkersView(container) {
               if (modalBackdrop) modalBackdrop.hidden = true;
               renderTable();
             } else {
-              showToast(res.error || "Failed to reject worker application.");
+              showToast(res.error || "Failed to decline worker application.");
             }
           };
           modButtons.appendChild(mReject);
@@ -1404,11 +1410,11 @@ async function renderWorkersView(container) {
           const mSuspend = document.createElement("button");
           mSuspend.type = "button";
           mSuspend.className = "admin-table-btn suspend";
-          mSuspend.textContent = "✕ Suspend Worker Account";
+          mSuspend.textContent = "✕ Suspend Account";
           mSuspend.onclick = async () => {
             const res = await updateAdminWorkerStatus(w.id, { status: "suspended" }, currentAdmin.uid, { reason: "Moderator suspended from detail inspection" });
             if (res.success) {
-              showToast(`Worker ${w.name} suspended from public discovery.`);
+              showToast(`Worker ${w.name} suspended from search results.`);
               w.status = "suspended";
               const modalBackdrop = document.getElementById("adminActionModal");
               if (modalBackdrop) modalBackdrop.hidden = true;
@@ -1422,7 +1428,7 @@ async function renderWorkersView(container) {
           const mRestore = document.createElement("button");
           mRestore.type = "button";
           mRestore.className = "admin-table-btn approve";
-          mRestore.textContent = "↺ Restore Worker Account";
+          mRestore.textContent = "↺ Restore Account";
           mRestore.onclick = async () => {
             const res = await updateAdminWorkerStatus(w.id, { status: "active" }, currentAdmin.uid, { reason: "Moderator restored from detail inspection" });
             if (res.success) {
@@ -1440,11 +1446,11 @@ async function renderWorkersView(container) {
           const mReopen = document.createElement("button");
           mReopen.type = "button";
           mReopen.className = "admin-table-btn approve";
-          mReopen.textContent = "↺ Reopen Application";
+          mReopen.textContent = "↺ Reopen for Review";
           mReopen.onclick = async () => {
             const res = await updateAdminWorkerStatus(w.id, { isVerified: false, status: "pending" }, currentAdmin.uid, { reason: "Moderator reopened application" });
             if (res.success) {
-              showToast(`Worker ${w.name} application reopened as Pending.`);
+              showToast(`Worker ${w.name} application reopened for review.`);
               w.isVerified = false;
               w.status = "pending";
               const modalBackdrop = document.getElementById("adminActionModal");
@@ -1476,11 +1482,11 @@ async function renderWorkersView(container) {
         approveBtn.type = "button";
         approveBtn.className = "admin-table-btn approve";
         approveBtn.textContent = "Approve";
-        approveBtn.title = "Approve verification and publish to public discovery";
+        approveBtn.title = "Approve profile and publish on website";
         approveBtn.onclick = () => {
           showConfirmModal({
-            title: "Approve Worker Verification",
-            body: `Approve and verify ${w.name} (#${w.id}) for public service discovery? Their profile will immediately appear on the public website.`,
+            title: "Approve Worker Profile",
+            body: `Approve ${w.name} (#${w.id})? Their profile and services will immediately appear in search results on the website.`,
             confirmText: "Approve Worker",
             onConfirm: async () => {
               const res = await updateAdminWorkerStatus(w.id, { isVerified: true, status: "active" }, currentAdmin.uid, { reason: "Admin approved verification" });
@@ -1501,23 +1507,23 @@ async function renderWorkersView(container) {
         const rejectBtn = document.createElement("button");
         rejectBtn.type = "button";
         rejectBtn.className = "admin-table-btn suspend";
-        rejectBtn.textContent = "Reject";
-        rejectBtn.title = "Reject application";
+        rejectBtn.textContent = "Decline";
+        rejectBtn.title = "Decline application";
         rejectBtn.onclick = () => {
           showConfirmModal({
-            title: "Reject Worker Application",
-            body: `Reject application for ${w.name} (#${w.id})? They will remain hidden from public discovery.`,
-            confirmText: "Reject Application",
+            title: "Decline Worker Application",
+            body: `Decline application for ${w.name} (#${w.id})? They will remain hidden from the website.`,
+            confirmText: "Decline Application",
             onConfirm: async () => {
               const res = await updateAdminWorkerStatus(w.id, { isVerified: false, status: "rejected" }, currentAdmin.uid, { reason: "Admin rejected application" });
               if (res.success) {
-                showToast(`Worker ${w.name} application rejected.`);
+                showToast(`Worker ${w.name} application declined.`);
                 w.isVerified = false;
                 w.status = "rejected";
                 if (res.workerVerification) w.workerVerification = res.workerVerification;
                 renderTable();
               } else {
-                showToast(res.error || "Failed to reject application.");
+                showToast(res.error || "Failed to decline application.");
               }
             }
           });
@@ -1528,11 +1534,11 @@ async function renderWorkersView(container) {
         suspendBtn.type = "button";
         suspendBtn.className = "admin-table-btn suspend";
         suspendBtn.textContent = "Suspend";
-        suspendBtn.title = "Suspend account and remove from public discovery";
+        suspendBtn.title = "Suspend account and hide from website";
         suspendBtn.onclick = () => {
           showConfirmModal({
             title: "Suspend Worker Account",
-            body: `Suspend ${w.name} (#${w.id})? They will be immediately hidden from public discovery while preserving their account and private records.`,
+            body: `Suspend ${w.name} (#${w.id})? They will be hidden from search results immediately while preserving their past records.`,
             confirmText: "Suspend Worker",
             onConfirm: async () => {
               const res = await updateAdminWorkerStatus(w.id, { status: "suspended" }, currentAdmin.uid, { reason: "Admin suspended account" });
@@ -1552,11 +1558,11 @@ async function renderWorkersView(container) {
         restoreBtn.type = "button";
         restoreBtn.className = "admin-table-btn approve";
         restoreBtn.textContent = "Restore";
-        restoreBtn.title = "Restore account to active status in public discovery";
+        restoreBtn.title = "Restore account to active on website";
         restoreBtn.onclick = () => {
           showConfirmModal({
             title: "Restore Worker Account",
-            body: `Restore ${w.name} (#${w.id}) to active status? They will reappear in public discovery.`,
+            body: `Restore ${w.name} (#${w.id}) to active? Their profile will appear in search results again.`,
             confirmText: "Restore Worker",
             onConfirm: async () => {
               const res = await updateAdminWorkerStatus(w.id, { status: "active" }, currentAdmin.uid, { reason: "Admin restored account" });
@@ -1580,7 +1586,7 @@ async function renderWorkersView(container) {
         reopenBtn.onclick = () => {
           showConfirmModal({
             title: "Reopen Worker Application",
-            body: `Reopen application for ${w.name} (#${w.id}) as Pending for review?`,
+            body: `Reopen application for ${w.name} (#${w.id}) so it can be reviewed again?`,
             confirmText: "Reopen Application",
             onConfirm: async () => {
               const res = await updateAdminWorkerStatus(w.id, { isVerified: false, status: "pending" }, currentAdmin.uid, { reason: "Admin reopened application" });
@@ -1657,7 +1663,7 @@ async function renderCustomersView(container) {
   const h2 = document.createElement("h2");
   h2.textContent = "Customer Accounts";
   const p = document.createElement("p");
-  p.textContent = "Manage registered customer identities, contact numbers, email verification status, and district associations.";
+  p.textContent = "View customer accounts, contact details, email verification, and account status.";
   titleBox.appendChild(h2);
   titleBox.appendChild(p);
   header.appendChild(titleBox);
@@ -1697,9 +1703,9 @@ async function renderCustomersView(container) {
   const verSelect = document.createElement("select");
   verSelect.className = "admin-select-input";
   [
-    { val: "all", label: "All Email Verifications" },
-    { val: "verified", label: "Verified Only" },
-    { val: "unverified", label: "Unverified Only" }
+    { val: "all", label: "All Email Statuses" },
+    { val: "verified", label: "Email Confirmed" },
+    { val: "unverified", label: "Email Unconfirmed" }
   ].forEach((opt) => {
     const o = document.createElement("option");
     o.value = opt.val;
@@ -1783,7 +1789,7 @@ async function renderCustomersView(container) {
 
     const thead = document.createElement("thead");
     const headRow = document.createElement("tr");
-    ["Name", "Contact", "District", "Status", "Email Verified", "Registered", "Actions"].forEach((txt) => {
+    ["Customer", "Contact Details", "District", "Account Status", "Email Confirmed", "Joined Date", "Actions"].forEach((txt) => {
       const th = document.createElement("th");
       th.textContent = txt;
       headRow.appendChild(th);
@@ -1828,7 +1834,7 @@ async function renderCustomersView(container) {
       const tdVer = document.createElement("td");
       const verPill = document.createElement("span");
       verPill.className = `admin-status-pill ${c.emailVerified ? "verified" : "pending"}`;
-      verPill.textContent = c.emailVerified ? "Verified" : "Unverified";
+      verPill.textContent = c.emailVerified ? "Confirmed" : "Unconfirmed";
       tdVer.appendChild(verPill);
       row.appendChild(tdVer);
 
@@ -1843,7 +1849,7 @@ async function renderCustomersView(container) {
       const inspectBtn = document.createElement("button");
       inspectBtn.type = "button";
       inspectBtn.className = "admin-table-btn";
-      inspectBtn.textContent = "Inspect";
+      inspectBtn.textContent = "View Details";
       inspectBtn.onclick = async () => {
         const [allRequests, allReports] = await Promise.all([
           getAdminRequests(),
@@ -1859,19 +1865,19 @@ async function renderCustomersView(container) {
         const grid = document.createElement("div");
         grid.className = "admin-detail-grid";
 
-        grid.appendChild(createDetailItem("Firebase UID", custUid, true));
-        grid.appendChild(createDetailItem("Customer Name", c.name));
+        grid.appendChild(createDetailItem("Customer ID", custUid, true));
+        grid.appendChild(createDetailItem("Name", c.name));
         grid.appendChild(createDetailItem("Account Status", accStatus === "suspended" ? "Suspended" : "Active"));
-        grid.appendChild(createDetailItem("Phone Number", c.phone || "Not provided"));
-        grid.appendChild(createDetailItem("Email Address", c.email || "Not provided"));
-        grid.appendChild(createDetailItem("Email Verified", c.emailVerified ? "Yes (Verified)" : "No (Pending)"));
-        grid.appendChild(createDetailItem("Customer Verification Badge", normalizeCustomerVerification(c).status));
+        grid.appendChild(createDetailItem("Phone", c.phone || "Not provided"));
+        grid.appendChild(createDetailItem("Email", c.email || "Not provided"));
+        grid.appendChild(createDetailItem("Email Confirmed", c.emailVerified ? "Yes (Confirmed)" : "No (Unconfirmed)"));
+        grid.appendChild(createDetailItem("Identity Verification", formatVerificationStatusLabel(normalizeCustomerVerification(c).status)));
         grid.appendChild(createDetailItem("District", c.district || "—"));
-        grid.appendChild(createDetailItem("Account Created", formatDateTime(c.createdAt)));
+        grid.appendChild(createDetailItem("Joined Date", formatDateTime(c.createdAt)));
         if (accStatus === "suspended") {
-          grid.appendChild(createDetailItem("Suspension Reason", c.suspensionReason || "Administrative restriction", true));
-          if (c.suspendedAt) grid.appendChild(createDetailItem("Suspended At", formatDateTime(c.suspendedAt)));
-          if (c.suspendedBy) grid.appendChild(createDetailItem("Suspended By (Admin UID)", c.suspendedBy));
+          grid.appendChild(createDetailItem("Reason for Suspension", c.suspensionReason || "Administrative restriction", true));
+          if (c.suspendedAt) grid.appendChild(createDetailItem("Suspended On", formatDateTime(c.suspendedAt)));
+          if (c.suspendedBy) grid.appendChild(createDetailItem("Suspended By (Admin ID)", c.suspendedBy));
         }
 
         const reqSummary = custRequests.length > 0
@@ -1887,8 +1893,8 @@ async function renderCustomersView(container) {
         grid.appendChild(createDetailItem("Relevant Safety Reports", repSummary, true));
 
         grid.appendChild(createDetailItem(
-          "Suspension & Deletion Policy",
-          "Suspending an account blocks prohibited new activity while preserving all historical records. Permanent account deletion remains a separate user-initiated lifecycle.",
+          "Account Safety Policy",
+          "Suspending an account prevents new requests or logins while keeping past records intact. Account deletion is managed separately by customer request.",
           true
         ));
 

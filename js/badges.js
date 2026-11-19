@@ -112,8 +112,8 @@ function createSvgElement(tag, attrs = {}) {
 }
 
 /**
- * Builds the original Octagonal Identity Emblem SVG for JKFixHub Verified Customer.
- * Silhouette: Faceted octagon with customer identity profile + check accent (distinct royal blue).
+ * Builds the upgraded Octagonal Identity Emblem SVG for JKFixHub Verified Customer.
+ * Silhouette: 8-point faceted identity medallion with concentric inner rim and bold verification checkmark.
  */
 function buildCustomerBadgeSvg(size = 16) {
   const svg = createSvgElement("svg", {
@@ -123,36 +123,31 @@ function buildCustomerBadgeSvg(size = 16) {
     "aria-hidden": "true",
     class: "jk-badge-svg jk-badge-svg-customer"
   });
-  // Faceted octagonal seal
+  // Faceted octagonal identity medallion
   svg.appendChild(createSvgElement("polygon", {
-    points: "7.5,2 16.5,2 22,7.5 22,16.5 16.5,22 7.5,22 2,16.5 2,7.5",
+    points: "7,2 17,2 22,7 22,17 17,22 7,22 2,17 2,7",
     fill: "currentColor",
-    opacity: "0.14",
+    "fill-opacity": "0.16",
     stroke: "currentColor",
     "stroke-width": "1.8",
     "stroke-linejoin": "round"
   }));
-  // Customer identity head + shoulders + precision verification check
+  // Subtle concentric inner rim
   svg.appendChild(createSvgElement("circle", {
-    cx: "10.5",
-    cy: "9",
-    r: "2.6",
+    cx: "12",
+    cy: "12",
+    r: "7.2",
     fill: "none",
     stroke: "currentColor",
-    "stroke-width": "1.8"
+    "stroke-width": "1.1",
+    opacity: "0.25"
   }));
+  // Bold, crisp, centered verification checkmark
   svg.appendChild(createSvgElement("path", {
-    d: "M6.5 16.8c.6-2.2 2.2-3.3 4-3.3 1.2 0 2.2.4 2.9 1.2",
+    d: "M7.8 12.3l2.9 2.9 5.8-6.2",
     fill: "none",
     stroke: "currentColor",
-    "stroke-width": "1.8",
-    "stroke-linecap": "round"
-  }));
-  svg.appendChild(createSvgElement("path", {
-    d: "M14.2 14.8l1.6 1.6 3.1-3.4",
-    fill: "none",
-    stroke: "currentColor",
-    "stroke-width": "2",
+    "stroke-width": "2.3",
     "stroke-linecap": "round",
     "stroke-linejoin": "round"
   }));
@@ -160,8 +155,8 @@ function buildCustomerBadgeSvg(size = 16) {
 }
 
 /**
- * Builds the original Pointed Craftsman Shield SVG for JKFixHub Verified Professional.
- * Silhouette: Pointed artisan shield with inner craft emblem & checkmark (distinct emerald teal).
+ * Builds the upgraded Pointed Craftsman Shield SVG for JKFixHub Verified Professional.
+ * Silhouette: Pointed artisan shield with inner crest contour, top pip & bold verification checkmark.
  */
 function buildWorkerBadgeSvg(size = 16) {
   const svg = createSvgElement("svg", {
@@ -171,29 +166,38 @@ function buildWorkerBadgeSvg(size = 16) {
     "aria-hidden": "true",
     class: "jk-badge-svg jk-badge-svg-worker"
   });
-  // Pointed professional shield silhouette
+  // Pointed craftsman artisan shield
   svg.appendChild(createSvgElement("path", {
-    d: "M12 2.2L4.2 5.4v5.8c0 5.1 3.3 9.4 7.8 10.8 4.5-1.4 7.8-5.7 7.8-10.8V5.4L12 2.2z",
+    d: "M12 2L4 5.2v6.2c0 5.1 3.4 9.7 8 10.8 4.6-1.1 8-5.7 8-10.8V5.2L12 2z",
     fill: "currentColor",
-    opacity: "0.15",
+    "fill-opacity": "0.16",
     stroke: "currentColor",
     "stroke-width": "1.8",
     "stroke-linejoin": "round"
   }));
-  // Inner precision craft diamond + check
+  // Inner craftsman shield contour
   svg.appendChild(createSvgElement("path", {
-    d: "M8.8 12.1l2.2 2.2 4.5-4.7",
+    d: "M12 4.4L6 6.9v4.4c0 4 2.5 7.5 6 8.4 3.5-0.9 6-4.4 6-8.4V6.9L12 4.4z",
     fill: "none",
     stroke: "currentColor",
-    "stroke-width": "2.1",
-    "stroke-linecap": "round",
-    "stroke-linejoin": "round"
+    "stroke-width": "1",
+    opacity: "0.25"
   }));
+  // Top crest pip
   svg.appendChild(createSvgElement("circle", {
     cx: "12",
     cy: "6.4",
-    r: "1",
+    r: "1.1",
     fill: "currentColor"
+  }));
+  // Bold, crisp, centered verification checkmark
+  svg.appendChild(createSvgElement("path", {
+    d: "M8 12.3l2.8 2.8 5.4-5.6",
+    fill: "none",
+    stroke: "currentColor",
+    "stroke-width": "2.3",
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round"
   }));
   return svg;
 }
@@ -213,7 +217,7 @@ export function createVerifiedCustomerBadge({ compact = false, fullName = false 
   el.setAttribute("aria-label", meta.tooltip);
   el.setAttribute("data-badge-type", meta.id);
 
-  el.appendChild(buildCustomerBadgeSvg(compact ? 15 : 16));
+  el.appendChild(buildCustomerBadgeSvg(compact ? 14 : 16));
   if (!compact) {
     const label = document.createElement("span");
     label.className = "jk-badge-label";
@@ -238,7 +242,7 @@ export function createVerifiedWorkerBadge({ compact = false, fullName = false } 
   el.setAttribute("aria-label", meta.tooltip);
   el.setAttribute("data-badge-type", meta.id);
 
-  el.appendChild(buildWorkerBadgeSvg(compact ? 15 : 16));
+  el.appendChild(buildWorkerBadgeSvg(compact ? 14 : 16));
   if (!compact) {
     const label = document.createElement("span");
     label.className = "jk-badge-label";
